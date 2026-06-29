@@ -1,0 +1,12 @@
+version: 1
+modules:
+  calculate_tax:
+    type: function
+    state: validated
+    dependencies: []
+    input:
+      amount: float
+      country: string
+    output:
+      tax: float
+    description: 計算各國稅金的最簡原子函數

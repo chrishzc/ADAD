@@ -1,0 +1,13 @@
+# Python 暫存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 打包與壓縮檔
+*.zip
+*.tar.gz
+
+# 系統檔案
+.DS_Store
+Thumbs.db
