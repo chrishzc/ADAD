@@ -19,6 +19,8 @@ modules:
     output:
       result: object
     description: 執行 Rule of Two 邊界檢查，防範重複設計的工具
+    invariants:
+      - "deny_imports: [pymysql]"
 
   analyze_cascade:
     type: tool
@@ -40,4 +42,3 @@ modules:
     output:
       result: object
     description: 推進或變更模組生命週期狀態的狀態機工具
-
