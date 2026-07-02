@@ -56,32 +56,47 @@ programming_design/
 ```
 
 ---
-## 🚀 快速上手（即插即用）
+## 🚀 快速上手
 
-只要在 Windows 上執行以下三步，即可在任何 Antigravity 專案中使用本 ADAD skill：
+### 方式一：全域安裝至 Antigravity（讓所有專案共用 ADAD Skills）
 
-1. 下載程式碼
+1. 下載本 repo：
    ```bat
-   git clone <repo‑url>
+   git clone <repo-url>
    cd programming_design
    ```
-2. 執行一次性安裝腳本（會自動建立 venv、安裝依賴、編譯 system_map）
+2. 執行全域安裝（將 `adad-workflow` Skills 複製到所有已知 Antigravity 全域路徑，並將 ADAD 規則寫入 `~/.gemini/GEMINI.md`）：
    ```bat
-   run_cli.bat
+   python install.py global
    ```
-3. 完成後即可直接呼叫 ADAD CLI，例如：
+
+完成後，在 Antigravity IDE 中開啟的所有專案皆可使用 ADAD Skills，無需重複安裝。
+
+### 方式二：在目標專案中初始化 ADAD
+
+1. 在**目標專案根目錄**執行初始化（建立 `checkpoints/`、`venv/`、`system_map.md`、pre-commit hook）：
+   ```bat
+   python install.py init
+   ```
+2. 安裝 Python 依賴：
+   ```bat
+   venv\Scripts\pip install -r requirements.txt
+   ```
+3. 編譯架構源檔案，產生 `system_map.yaml`：
+   ```bat
+   venv\Scripts\python .agents\skills\adad-workflow\scripts\compile_map.py
+   ```
+4. 完成後即可呼叫 ADAD CLI，例如：
    ```bat
    venv\Scripts\python .agents\skills\adad-workflow\scripts\read_context.py <node_name>
    ```
-
-此流程會在專案根目錄下產生 `venv/`、`requirements.txt`、`system_map.yaml`，且不會改變 `system_map.md` 的內容，符合 ADAD 「先架構後程式」的原則。
 
 ## 🛡️ 核心開發憲法 (Global Rules)
 
 不論 Agent 執行哪一個階段的任務，都必須強制遵循以下元規則（Meta-Rules）：
 
 > *   **[RULE-01] SSOT 唯一性** 🔒 **機器強制**：你唯一的記憶與事實來源為 `system_map.yaml` (自 `system_map.md` 編譯而來)。**嚴禁自行在代碼中衍生或假設未記載於該檔案的介面、路由或規格。** Pre-commit hook 自動阻斷過期的 `system_map.yaml`。
-> *   **[RULE-02] 先架構後程式 (拒絕 Code-First)** 🔒 **機器強制**：嚴禁 Code-First 開發。只有在目標節點於 `system_map.yaml` 中的狀態為 `planned`、`dirty`、`validated` 或 `draft`，且已通過人類的 Checkpoint 審核時，你才被允許生成或修改該節點的商業邏輯代碼。Pre-commit hook 比對 staged 檔案與模組狀態。
+> *   **[RULE-02] 先架構後程式 (拒絕 Code-First)** 🔒 **機器強制**：嚴禁 Code-First 開發。只有在目標節點於 `system_map.yaml` 中的狀態為 `planned`、`dirty`、`validated`、`draft` 或 `pending_review`，且已通過人類的 Checkpoint 審核時，你才被允許生成或修改該節點的商業邏輯代碼。Pre-commit hook 比對 staged 檔案與模組狀態。
 > *   **[RULE-03] 原子化操作 (Atomic Scope)** ⚠️ **機器警告**：你每次的輸出（程式碼修改）**只能影響單一節點（單一函數、API 或組件）**。嚴禁進行跨模組、跨檔案的大規模 Patch 程式碼。Pre-commit hook 偵測跨模組修改時發出 WARNING。
 > *   **[RULE-04] 遇錯即停 (Fail-Fast)** 📝 **Agent 行為規則**：在 Phase 2（實作期）若發現架構規格無法滿足邏輯需求（例如：發現少傳引數、需要多回傳欄位等），**你必須立即中斷程式碼生成**，改為輸出 `Schema Update Request` 格式，並等待人類審核。
 
@@ -475,12 +490,19 @@ checkpoint_payload:
     | 檢查項目 | 對應規則 | 失敗行為 |
     |---------|---------|----------|
     | Staleness 阻斷 | RULE-01 SSOT | ❌ 阻斷 commit |
-    | 狀態門禁 | RULE-02 先架構後程式 | ❌ 阻斷 commit |
+    | 狀態門禁（含刪除檔案） | RULE-02 先架構後程式 | ❌ 阻斷 commit |
     | 原子範圍 | RULE-03 原子化操作 | ⚠️ 警告（不阻斷） |
     | Invariants (deny_imports) | 架構邊界 | ❌ 阻斷 commit |
     | Verification (must_have_assertions) | 實作品質 | ❌ 阻斷 commit |
+    | 跨 Domain 依賴邊界 | 架構邊界 | ❌ 阻斷 commit |
 
     核心保證由機器全程強制，分級只影響「需不需要人類額外審查文件」，不影響「會不會真的改A壞B」這個底線。
+
+    **2026-07 安全強化**：所有檢查項目已改為讀取 `git show :0:<path>`（暫存區 staged blob）而非磁碟工作目錄，防止「先 git add 違規版本 → 改乾淨但忘記重新 add」的繞過攻擊向量。額外修正：
+    - 相對 import（`from . import x`）漏檢問題（`deny_imports` 現可攔截所有 import 形式）
+    - `check_invariants` / `verify_implementation` 未讀取節點 `source` 欄位路徑的問題
+    - git 執行失敗時靜默放行的問題（現改為阻斷 commit）
+    - 刪除（D）檔案不受 RULE-02 狀態門禁管轄的問題
 
 ### 9. 狀態轉移硬化
 *   **改善邏輯**：`transit_state()` 從原本的 WARNING（允許非法轉移）改為 ERROR + 阻斷。非法的狀態轉移會直接返回錯誤，不再允許執行，確保狀態機的完整性。

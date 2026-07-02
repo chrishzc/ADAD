@@ -8,6 +8,7 @@ import sys
 import json
 import ast
 import re
+import shutil
 
 # 自動安裝 PyYAML 依賴以確保跨裝置開箱即用
 try:
@@ -25,29 +26,204 @@ except ImportError:
 
 MAP_FILE = "system_map.yaml"
 
+# ponytail-fix: 原正則 [^\s-]+ 會排除連字號，導致 "user-service.md"、
+# "adad-workflow/sub.md" 這類含 '-' 的路徑完全比對失敗、被靜默忽略。
+# 改為非貪婪比對到副檔名結尾，且不再排除任何合法路徑字元。
+INCLUDE_PATTERN = re.compile(r'<!--\s*include:?\s*(\S+?\.(?:md|yaml|txt))\s*-->')
+
+
+def get_all_included_files(filepath, found=None):
+    if found is None:
+        found = set()
+    if not os.path.exists(filepath):
+        return found
+    abs_path = os.path.abspath(filepath)
+    if abs_path in found:
+        return found
+    found.add(abs_path)
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception:
+        return found
+    for match in INCLUDE_PATTERN.finditer(content):
+        include_path = match.group(1).strip()
+        base_dir = os.path.dirname(filepath)
+        target_path = os.path.join(base_dir, include_path)
+        get_all_included_files(target_path, found)
+    return found
+
+def get_max_mtime(root_md_path):
+    if not os.path.exists(root_md_path):
+        return 0
+    all_files = get_all_included_files(root_md_path)
+    if not all_files:
+        return os.path.getmtime(root_md_path)
+    return max(os.path.getmtime(f) for f in all_files)
+
+
+def find_orphan_maps(root_md_path):
+    """
+    孤兒子地圖偵測。
+
+    只在「已經被拿來拆分子地圖」的目錄底下找孤兒檔案：
+    對每一個被 include 鏈引用到的子地圖檔案（不含 root 本身），
+    掃描它所在的目錄，找出同樣是 .md 但沒有被任何 include 鏈引用到的檔案。
+
+    刻意不做「全專案掃描所有 .md」，因為 docs/adr、docs/patterns 等目錄
+    存放的是 ADR / 設計模式文件，本來就不該被當成子地圖，全域掃描會製造
+    大量假警報。只掃描「已經在用 include 機制的目錄」，才能準確反映
+    「這裡本來就該被串起來，但漏掉了」的情境。
+
+    回傳：排序後的孤兒檔案相對路徑清單（可能為空）。
+    """
+    included = get_all_included_files(root_md_path)
+    if not included:
+        return []
+
+    root_abs = os.path.abspath(root_md_path)
+    candidate_dirs = set()
+    for f in included:
+        if f == root_abs:
+            continue
+        candidate_dirs.add(os.path.dirname(f))
+
+    orphans = set()
+    for d in candidate_dirs:
+        try:
+            entries = os.listdir(d)
+        except OSError:
+            continue
+        for fname in entries:
+            if not fname.endswith(".md"):
+                continue
+            fpath = os.path.abspath(os.path.join(d, fname))
+            if fpath not in included:
+                orphans.add(os.path.relpath(fpath))
+
+    return sorted(orphans)
+
+def resolve_includes(filepath, ancestors=None, resolved_cache=None):
+    """
+    展開 include 鏈。
+    ancestors：目前這條 DFS 路徑上「尚未展開完」的檔案，用來偵測真循環 (A->B->A)。
+    resolved_cache：全域已展開完成的檔案內容快取，用來處理「鑽石型 include」
+                     (A include B、C，B、C 都 include D) —— D 只展開一次，
+                     避免內容重複、模組定義被解析兩次互相覆蓋。
+    """
+    if ancestors is None:
+        ancestors = set()
+    if resolved_cache is None:
+        resolved_cache = {}
+
+    abs_path = os.path.abspath(filepath)
+
+    if abs_path in ancestors:
+        raise ValueError(f"偵測到循環 include: {filepath}")
+
+    if abs_path in resolved_cache:
+        # 已經在其他分支展開過，直接重用快取結果，不重複展開內容
+        return resolved_cache[abs_path]
+
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"找不到被 include 的檔案: {filepath}")
+
+    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    # ponytail-fix: 插入來源標記，讓 parse_markdown 之後能還原
+    # 「這個模組是從哪個實體 md 檔案來的」，支援重複模組名偵測與反查。
+    rel_marker = f"\n<!-- __ADAD_SOURCE_FILE__: {os.path.relpath(abs_path)} -->\n"
+
+    new_ancestors = ancestors | {abs_path}
+
+    def replace_match(match):
+        include_path = match.group(1).strip()
+        base_dir = os.path.dirname(filepath)
+        target_path = os.path.join(base_dir, include_path)
+        return resolve_includes(target_path, new_ancestors, resolved_cache)
+
+    expanded = INCLUDE_PATTERN.sub(replace_match, content)
+    result = rel_marker + expanded
+    resolved_cache[abs_path] = result
+    return result
+
 def parse_markdown(md_content):
     lines = md_content.splitlines()
-    data = {"version": 1, "modules": {}}
-    
+    data = {"version": 1, "modules": {}, "domains": {}}
+
     current_module = None
     current_section = None
-    
-    module_regex = re.compile(r'^#####\s+Module:\s*(\w+)')
+    current_domain = None
+    current_subsystem = None
+    current_source_file = "system_map.md"
+
+    source_marker_regex = re.compile(r'^<!--\s*__ADAD_SOURCE_FILE__:\s*(.+?)\s*-->$')
+    domain_regex = re.compile(r'^###\s+Domain:\s*(.+)')
+    subsystem_regex = re.compile(r'^####\s+Subsystem:\s*(.+)')
+    # ponytail-fix: 原本 (\w+) 不含連字號 '-'，導致 "my-tax-calc" 這類模組名稱
+    # 只會比對到 "my" 就停止——正則仍然「成功比對」（re.match 不要求比對到行尾），
+    # 於是靜默建立了一個名稱被截斷的錯誤模組，沒有任何錯誤或警告。
+    # 改為 [\w-]+ 允許連字號，並在下面用 \s*$ 錨定比對到行尾，若模組名稱包含
+    # 其他不合法字元（如空白、冒號），會直接比對失敗而不是靜默截斷。
+    module_regex = re.compile(r'^#####\s+Module:\s*([\w-]+)\s*$')
     field_regex = re.compile(r'^\s*-\s*([A-Za-z\s]+):\s*(.*)')
     list_header_regex = re.compile(r'^\s*-\s*([A-Za-z\s]+):$')
-    
+
     for line in lines:
         line_strip = line.strip()
         if not line_strip:
             continue
-            
+
+        # ponytail-fix: 追蹤目前內容實際來自哪個實體 md 檔（含 include 展開）
+        src_match = source_marker_regex.match(line_strip)
+        if src_match:
+            current_source_file = src_match.group(1).strip()
+            continue
+
+        # ponytail-fix: Domain / Subsystem 標題不再被忽略——
+        # (1) 記錄下來，供之後架構邊界檢查使用
+        # (2) 一律重置 current_module / current_section，避免其後的
+        #     "- Description: ..." 之類欄位被誤植到「上一個模組」身上
+        d_match = domain_regex.match(line_strip)
+        if d_match:
+            current_domain = d_match.group(1).strip()
+            data["domains"].setdefault(
+                current_domain, {"description": "", "allowed_dependencies": [], "subsystems": {}}
+            )
+            current_subsystem = None
+            current_module = None
+            current_section = None
+            continue
+
+        s_match = subsystem_regex.match(line_strip)
+        if s_match:
+            current_subsystem = s_match.group(1).strip()
+            if current_domain:
+                data["domains"][current_domain]["subsystems"].setdefault(
+                    current_subsystem, {"description": ""}
+                )
+            current_module = None
+            current_section = None
+            continue
+
         m_match = module_regex.match(line_strip)
         if m_match:
             current_module = m_match.group(1)
+            if current_module in data["modules"]:
+                prev_src = data["modules"][current_module].get("map_file", "system_map.md")
+                raise ValueError(
+                    f"編譯失敗：模組名稱重複 '{current_module}'。"
+                    f"已在 [{prev_src}] 定義過一次，又在 [{current_source_file}] 重複定義。"
+                    f"模組名稱是全域唯一命名空間，請改名或合併。"
+                )
             data["modules"][current_module] = {
                 "type": "",
                 "description": "",
                 "source": "",
+                "domain": current_domain,
+                "subsystem": current_subsystem,
+                "map_file": current_source_file,
                 "dependencies": [],
                 "input": {},
                 "output": {},
@@ -60,13 +236,28 @@ def parse_markdown(md_content):
             }
             current_section = None
             continue
-            
+
         if current_module is None:
             if line_strip.startswith("- Version:"):
                 try:
                     data["version"] = int(line_strip.split(":", 1)[1].strip())
                 except:
                     pass
+            elif current_domain and not current_subsystem:
+                fd_match = field_regex.match(line_strip)
+                if fd_match:
+                    fkey = fd_match.group(1).strip().lower()
+                    fval = fd_match.group(2).strip()
+                    if fkey == "description":
+                        data["domains"][current_domain]["description"] = fval
+                    elif fkey == "allowed_dependencies" or fkey == "allowed dependencies":
+                        if fval.startswith("[") and fval.endswith("]"):
+                            items = [x.strip() for x in fval[1:-1].split(",") if x.strip()]
+                            data["domains"][current_domain]["allowed_dependencies"] = items
+            elif current_domain and current_subsystem:
+                fd_match = field_regex.match(line_strip)
+                if fd_match and fd_match.group(1).strip().lower() == "description":
+                    data["domains"][current_domain]["subsystems"][current_subsystem]["description"] = fd_match.group(2).strip()
             continue
             
         indent_match = re.match(r'^(\s+)-\s*(.*)', line)
@@ -135,14 +326,14 @@ class ADADCore:
                     "error": f"找不到架構 IR 檔案 ({yaml_path})。請先執行編譯指令：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
             
-            md_mtime = os.path.getmtime(md_path)
+            md_mtime = get_max_mtime(md_path)
             yaml_mtime = os.path.getmtime(yaml_path)
             
             # 給予 1 秒的緩衝時間防範不同檔案系統時間戳記微幅飄移
             if md_mtime > yaml_mtime + 1:
                 return {
                     "valid": False,
-                    "error": f"架構源檔案 ({md_path}) 已更新，但 IR ({yaml_path}) 已過期。請重新執行編譯：python .agents/skills/adad-workflow/scripts/compile_map.py"
+                    "error": f"架構源檔案 ({md_path} 或其包含的子檔案) 已更新，但 IR ({yaml_path}) 已過期。請重新執行編譯：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
                 
         return {"valid": True}
@@ -388,6 +579,55 @@ class ADADCore:
             
         return {"passed": True, "duplicates": []}
 
+    def check_domain_boundary(self):
+        """
+        跨 Domain 依賴邊界檢查。
+
+        規則：
+        - 模組只能依賴同一個 Domain 內的模組，除非它所屬的 Domain 在
+          system_map.md 用 `Allowed Dependencies: [OtherDomain, ...]` 明確
+          宣告允許依賴該 Domain。
+        - 沒有 domain 資訊的模組（例如尚未走三層架構、或舊專案還沒補標記）
+          會被跳過，不視為違規，避免破壞既有專案。
+        - 依賴到 system_map.yaml 裡不存在的模組，交給其他檢查處理，這裡跳過。
+
+        回傳：{"passed": bool, "violations": [...]}
+        """
+        modules = self.data.get("modules", {})
+        domains = self.data.get("domains", {})
+
+        violations = []
+        for name, info in modules.items():
+            mod_domain = info.get("domain")
+            if not mod_domain:
+                continue
+
+            for dep in info.get("dependencies", []):
+                dep_info = modules.get(dep)
+                if not dep_info:
+                    continue
+
+                dep_domain = dep_info.get("domain")
+                if not dep_domain or dep_domain == mod_domain:
+                    continue
+
+                allowed = domains.get(mod_domain, {}).get("allowed_dependencies", [])
+                if dep_domain not in allowed:
+                    violations.append({
+                        "module": name,
+                        "module_domain": mod_domain,
+                        "depends_on": dep,
+                        "depends_on_domain": dep_domain,
+                        "reason": (
+                            f"模組 '{name}' 屬於 Domain '{mod_domain}'，"
+                            f"卻依賴 Domain '{dep_domain}' 底下的 '{dep}'，"
+                            f"但 Domain '{mod_domain}' 並未在 system_map.md 宣告 "
+                            f"Allowed Dependencies 允許依賴 '{dep_domain}'。"
+                        )
+                    })
+
+        return {"passed": len(violations) == 0, "violations": violations}
+
     def analyze_dirty_cascade(self, target_node):
         """智慧髒點依賴分析 (DAG 逆向遞迴追蹤)"""
         modules = self.data.get("modules", {})
@@ -510,9 +750,8 @@ class ADADCore:
         if not invariants:
             return {"success": True, "message": "此節點未定義 invariants，無須檢查。"}
 
-        # 預設路徑為當前目錄下的 <node_name>.py
-        if not file_path:
-            file_path = f"{node_name}.py"
+        # 優先使用 system_map.yaml 的 source 欄位，最後才猜 <node_name>.py
+        file_path = file_path or node.get("source") or f"{node_name}.py"
 
         if not os.path.exists(file_path):
             return {"success": False, "error": f"找不到實作檔案: {file_path}"}
@@ -549,14 +788,21 @@ class ADADCore:
                 self.generic_visit(node_visitor)
 
             def visit_ImportFrom(self, node_visitor):
-                if node_visitor.module:
+                is_relative = (node_visitor.level or 0) > 0
+                # alias.name 一律記錄：from . import db_connector / from pkg import db_connector
+                # 都需要比對 deny_imports 清單中的頂層名稱
+                for alias in node_visitor.names:
+                    self.imports.append((alias.name, node_visitor.lineno))
+
+                # module 字串只在絕對 import（level==0）時才記錄，避免相對路徑
+                # 後綴（e.g. from .utils import x 的 "utils"）被誤判為頂層套件
+                if node_visitor.module and not is_relative:
                     self.imports.append((node_visitor.module, node_visitor.lineno))
                     parts = node_visitor.module.split('.')
                     if len(parts) > 1:
                         self.imports.append((parts[0], node_visitor.lineno))
                     for alias in node_visitor.names:
                         self.imports.append((f"{node_visitor.module}.{alias.name}", node_visitor.lineno))
-                        self.imports.append((alias.name, node_visitor.lineno))
                 self.generic_visit(node_visitor)
 
         visitor = ImportVisitor()
@@ -595,8 +841,7 @@ class ADADCore:
         if not verification:
             return {"success": True, "message": "此節點未定義 verification 驗證條件，無須檢查。"}
 
-        if not file_path:
-            file_path = f"{node_name}.py"
+        file_path = file_path or node.get("source") or f"{node_name}.py"
 
         if not os.path.exists(file_path):
             return {"success": False, "error": f"找不到實作檔案: {file_path}"}
@@ -867,11 +1112,137 @@ Approved
         assert len(mod["checkpoint"]) == 1 and "CP-1-001" in mod["checkpoint"][0]
         print("  - 測試 8: Markdown 解析 (parse_markdown) 成功")
 
+        # 9. 測試模組名稱可正確保留連字號（module_regex 修正的回歸測試）
+        # 修正前：\w+ 不含 '-'，"my-tax-calc" 會被靜默截斷成 "my"，且不報錯。
+        test_hyphen_md = """# Title
+## Metadata
+- Version: 1
+
+##### Module: user_service
+- Type: service
+- Description: 第一個模組
+- Dependencies: []
+
+##### Module: my-tax-calc
+- Type: function
+- Description: 名稱含連字號的模組，不應被截斷
+- Dependencies: []
+"""
+        parsed_hyphen = parse_markdown(test_hyphen_md)
+        assert "my-tax-calc" in parsed_hyphen["modules"], \
+            f"連字號模組名稱被截斷，實際解析出的模組: {list(parsed_hyphen['modules'].keys())}"
+        assert "my" not in parsed_hyphen["modules"], "不應該出現被截斷的 'my' 模組"
+        assert parsed_hyphen["modules"]["my-tax-calc"]["description"] == "名稱含連字號的模組，不應被截斷"
+        # 確保第一個模組的欄位沒有被第二個模組的內容污染（截斷 bug 的典型症狀）
+        assert parsed_hyphen["modules"]["user_service"]["description"] == "第一個模組"
+        print("  - 測試 9: 連字號模組名稱解析（module_regex 回歸測試）成功")
+
+        # 10. 測試跨 Domain 依賴邊界檢查 (check_domain_boundary)
+        core.data["domains"] = {
+            "Domain_A": {"allowed_dependencies": ["Domain_B"]},
+            "Domain_B": {"allowed_dependencies": []},
+            "Domain_C": {"allowed_dependencies": []},
+        }
+        core.data["modules"]["mod_a"] = {
+            "type": "tool", "state": "deployed", "domain": "Domain_A",
+            "dependencies": ["mod_b", "mod_c"], "input": {}, "output": {},
+        }
+        core.data["modules"]["mod_b"] = {
+            "type": "tool", "state": "deployed", "domain": "Domain_B",
+            "dependencies": [], "input": {}, "output": {},
+        }
+        core.data["modules"]["mod_c"] = {
+            "type": "tool", "state": "deployed", "domain": "Domain_C",
+            "dependencies": [], "input": {}, "output": {},
+        }
+        boundary_res = core.check_domain_boundary()
+        assert boundary_res["passed"] is False, "mod_a 依賴未宣告允許的 Domain_C，應被判定違規"
+        assert len(boundary_res["violations"]) == 1
+        v = boundary_res["violations"][0]
+        assert v["module"] == "mod_a" and v["depends_on"] == "mod_c"
+        # 移除違規依賴後應該通過（mod_a -> mod_b 屬於已宣告允許的依賴）
+        core.data["modules"]["mod_a"]["dependencies"] = ["mod_b"]
+        boundary_res_ok = core.check_domain_boundary()
+        assert boundary_res_ok["passed"] is True
+        print("  - 測試 10: 跨 Domain 依賴邊界檢查 (check_domain_boundary) 成功")
+
         print("[ADAD Test] 所有測試順利通過！")
-        
+
     finally:
         if os.path.exists(test_file):
             os.remove(test_file)
+
+    # 11. 測試 include 展開機制：多檔案合併、循環 include 偵測、
+    #     孤兒子地圖偵測、重複模組名稱阻斷 (resolve_includes / find_orphan_maps)
+    print("[ADAD Test] 啟動 Include 機制測試...")
+    test_dir = "test_adad_include_dir"
+    root_map = os.path.join(test_dir, "root.md")
+    sub_map = os.path.join(test_dir, "sub.md")
+    orphan_map = os.path.join(test_dir, "orphan.md")
+    circular_a = os.path.join(test_dir, "circular_a.md")
+    circular_b = os.path.join(test_dir, "circular_b.md")
+    dup_root = os.path.join(test_dir, "dup_root.md")
+    dup_sub = os.path.join(test_dir, "dup_sub.md")
+
+    try:
+        os.makedirs(test_dir, exist_ok=True)
+
+        # 11.1 正常展開：root include sub，模組應合併且標記正確的 map_file
+        with open(root_map, "w", encoding="utf-8") as f:
+            f.write("# Root\n## Metadata\n- Version: 1\n\n"
+                    "##### Module: root_mod\n- Type: tool\n- Description: root\n\n"
+                    "<!-- include: sub.md -->\n")
+        with open(sub_map, "w", encoding="utf-8") as f:
+            f.write("##### Module: sub_mod\n- Type: tool\n- Description: sub\n")
+
+        expanded = resolve_includes(root_map)
+        parsed_expand = parse_markdown(expanded)
+        assert "root_mod" in parsed_expand["modules"]
+        assert "sub_mod" in parsed_expand["modules"]
+        print("  - 測試 11.1: include 正常展開、跨檔案模組合併成功")
+
+        # 11.2 孤兒子地圖偵測：sub.md 未被任何檔案 include 時應被列出
+        with open(orphan_map, "w", encoding="utf-8") as f:
+            f.write("##### Module: orphan_mod\n- Type: tool\n- Description: 沒人 include 我\n")
+        orphans = find_orphan_maps(root_map)
+        assert os.path.normpath(orphan_map) in [os.path.normpath(p) for p in orphans], \
+            f"orphan.md 應被偵測為孤兒子地圖，實際結果: {orphans}"
+        assert os.path.normpath(sub_map) not in [os.path.normpath(p) for p in orphans], \
+            "sub.md 已被 root.md include，不應被視為孤兒"
+        print("  - 測試 11.2: 孤兒子地圖偵測 (find_orphan_maps) 成功")
+
+        # 11.3 循環 include 偵測：a include b，b 又 include a，應直接報錯而非死循環
+        with open(circular_a, "w", encoding="utf-8") as f:
+            f.write("##### Module: circ_a\n- Type: tool\n- Description: a\n\n<!-- include: circular_b.md -->\n")
+        with open(circular_b, "w", encoding="utf-8") as f:
+            f.write("##### Module: circ_b\n- Type: tool\n- Description: b\n\n<!-- include: circular_a.md -->\n")
+        try:
+            resolve_includes(circular_a)
+            assert False, "循環 include 應該要拋出例外，而不是靜默死循環"
+        except Exception as e:
+            assert "循環" in str(e) or "circular" in str(e).lower(), f"錯誤訊息應提及循環 include，實際: {e}"
+        print("  - 測試 11.3: 循環 include 偵測成功")
+
+        # 11.4 重複模組名稱阻斷：兩個檔案定義了同名模組，編譯時應直接報錯
+        with open(dup_root, "w", encoding="utf-8") as f:
+            f.write("##### Module: dup_mod\n- Type: tool\n- Description: root 版本\n\n"
+                     "<!-- include: dup_sub.md -->\n")
+        with open(dup_sub, "w", encoding="utf-8") as f:
+            f.write("##### Module: dup_mod\n- Type: tool\n- Description: sub 版本 (重複)\n")
+        try:
+            expanded_dup = resolve_includes(dup_root)
+            parse_markdown(expanded_dup)
+            assert False, "重複模組名稱應該要被偵測並阻斷"
+        except Exception as e:
+            assert "dup_mod" in str(e) or "重複" in str(e) or "duplicate" in str(e).lower(), \
+                f"錯誤訊息應提及重複的模組名稱，實際: {e}"
+        print("  - 測試 11.4: 重複模組名稱阻斷成功")
+
+        print("[ADAD Test] 所有 Include 機制測試順利通過！")
+
+    finally:
+        if os.path.exists(test_dir):
+            shutil.rmtree(test_dir)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--test":

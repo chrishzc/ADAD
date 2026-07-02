@@ -13,10 +13,10 @@ def main():
         sys.exit(1)
         
     try:
-        with open(md_path, "r", encoding="utf-8") as f:
-            md_content = f.read()
+        from adad_core import resolve_includes
+        md_content = resolve_includes(md_path)
     except Exception as e:
-        print(json.dumps({"success": False, "error": f"讀取 {md_path} 失敗: {e}"}, ensure_ascii=False))
+        print(json.dumps({"success": False, "error": f"解析 include 檔案與讀取 {md_path} 失敗: {e}"}, ensure_ascii=False))
         sys.exit(1)
         
     # 1. 解析 Markdown
@@ -81,11 +81,21 @@ def main():
             else:
                 print(f"   - {p['node']} (原因: {p.get('reason', 'N/A')})")
         print("🚧 需要觸發一次補做 Checkpoint（含 ADR），請執行架構審查。\n")
-        
+
+    # 孤兒子地圖偵測（不阻斷編譯，僅提示）
+    from adad_core import find_orphan_maps
+    orphans = find_orphan_maps(md_path)
+    if orphans:
+        print("\n⚠️  [ORPHAN MAP] 以下 .md 檔案位於子地圖目錄底下，但沒有被任何 include 鏈引用到：")
+        for o in orphans:
+            print(f"   - {o}")
+        print("   請確認是否忘記在對應的父地圖加上 <!-- include ... --> ，否則這些內容不會被編譯進架構。\n")
+
     print(json.dumps({
         "success": True,
         "message": f"編譯成功！已將 {md_path} 編譯為 {yaml_path}，並完成狀態合併。",
-        "draft_debt": debt_result
+        "draft_debt": debt_result,
+        "orphan_maps": orphans
     }, ensure_ascii=False, indent=2))
     sys.exit(0)
 

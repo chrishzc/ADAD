@@ -2,7 +2,7 @@
 import sys
 import os
 import json
-from adad_core import ADADCore, parse_markdown
+from adad_core import ADADCore, parse_markdown, resolve_includes
 
 def main():
     # 強制重置標準輸出編碼為 utf-8 以支援 Windows 環境下的 Unicode 表情符號
@@ -18,11 +18,14 @@ def main():
         print(f"錯誤：找不到架構源檔案 {md_path}")
         sys.exit(1)
         
+    # ponytail-fix: 原本直接 open(md_path).read()，完全沒有展開 <!-- include --> 鏈，
+    # 導致專案一旦使用分區地圖（split-map）功能，所有寫在子地圖檔案裡的模組會被
+    # 這份進度報告完全漏掉（沒有錯誤或警告），跟 compile_map.py 的行為不一致。
+    # 改為比照 compile_map.py，統一透過 resolve_includes 展開後再解析。
     try:
-        with open(md_path, "r", encoding="utf-8") as f:
-            md_content = f.read()
+        md_content = resolve_includes(md_path)
     except Exception as e:
-        print(f"讀取 {md_path} 失敗: {e}")
+        print(f"解析 include 檔案與讀取 {md_path} 失敗: {e}")
         sys.exit(1)
         
     compiled_data = parse_markdown(md_content)
