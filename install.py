@@ -1,14 +1,35 @@
 # -*- coding: utf-8 -*-
 """
 ADAD Installer & Packager (ADAD 部署與打包工具)
-ponytail: 完全使用 Python 標準庫實作，支援專案初始化、全域安裝與 zip 打包，防範重複寫入全域 AGENTS.md。
+ponytail: 完全使用 Python 標準庫實作，支援專案初始化、全域安裝與 zip 打包，防範重複寫入全域規則檔。
+
+ponytail-fix (2026-07): Antigravity 生態系（Antigravity 2.0 / Antigravity IDE）
+自 2026 年中改版後，全域 Skills / 規則的實際路徑在不同文件與版本間並不一致
+（`~/.gemini/config/skills/`、`~/.gemini/skills/`、`~/.gemini/antigravity/skills/`
+都曾被官方或社群文件提及），且原本 `~/.gemini/config` 這個位置在部分版本裡是
+「Antigravity 全部產品（含 Antigravity CLI）共用」的全域目錄，並非 Antigravity
+2.0 / IDE 專屬。因此改為「多候選路徑、盡力而為地全部寫入」的策略，只要
+`~/.gemini` 這個 Antigravity 生態系的根目錄存在，就會安裝到所有已知候選位置，
+確保不論你目前的 Antigravity 2.0 / IDE 版本實際讀取哪一個路徑，都能吃到設定。
 """
 import os
 import sys
 import shutil
 import zipfile
 
-GLOBAL_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".gemini", "config")
+GEMINI_HOME = os.path.join(os.path.expanduser("~"), ".gemini")
+
+# ponytail: 全域 Skills 候選安裝目錄（依證據強度排序，全部會寫入，互不排斥）。
+GLOBAL_SKILLS_CANDIDATES = [
+    os.path.join(GEMINI_HOME, "skills"),           # 近期文件：Antigravity 全家族共用 Skills 目錄
+    os.path.join(GEMINI_HOME, "config", "skills"),  # 官方 Codelab 提及的舊/相容路徑
+    os.path.join(GEMINI_HOME, "antigravity", "skills"),  # 部分文件提及的 Antigravity 專屬路徑
+]
+
+# ponytail: Antigravity IDE 點擊「+ Global」新增全域規則時，實際寫入的檔案。
+# 這是目前多個獨立文件來源一致指向的路徑，作為全域規則的主要目標。
+GLOBAL_RULES_FILE = os.path.join(GEMINI_HOME, "GEMINI.md")
+
 AGENT_RULES_BLOCK_START = "\n# === ADAD GLOBAL RULES START ===\n"
 AGENT_RULES_BLOCK_END = "\n# === ADAD GLOBAL RULES END ===\n"
 
@@ -99,6 +120,7 @@ Draft / Proposed / Approved / Rejected / Deprecated
 ##### Module: calculate_tax
 - Type: function
 - Description: 計算各國稅金的最簡原子函數
+- Source: src/tax/calculate_tax.py
 - Preferred Pattern: pure_function
 - Decisions: []
 - Invariants: []
@@ -307,86 +329,115 @@ def clean_project():
 
     print("[ADAD] 專案清理還原完成！")
 
+def _write_global_rules_block(dest_file, agents_rules_content):
+    """安全地將 ADAD 規則區塊寫入/更新至指定的全域規則檔案（不影響檔案中其他既有內容）"""
+    global_rules_content = ""
+    if os.path.exists(dest_file):
+        with open(dest_file, "r", encoding="utf-8") as f:
+            global_rules_content = f.read()
+
+    # 移除舊的 ADAD 規則區塊，避免重複追加
+    if AGENT_RULES_BLOCK_START in global_rules_content:
+        start_idx = global_rules_content.find(AGENT_RULES_BLOCK_START)
+        end_idx = global_rules_content.find(AGENT_RULES_BLOCK_END) + len(AGENT_RULES_BLOCK_END)
+        global_rules_content = global_rules_content[:start_idx] + global_rules_content[end_idx:]
+
+    # 追加新規則
+    # ponytail-fix: 不論檔案原本是否為空都統一保留 "\n" 前綴再接上 new_rules_block，
+    # 讓 new_rules_block 內帶有的前導 "\n"（來自 AGENT_RULES_BLOCK_START 常數本身）
+    # 在檔案中維持完整不被截斷，否則下次比對 AGENT_RULES_BLOCK_START 會找不到
+    # 完整子字串而誤判成「尚未安裝過」，導致規則區塊被重複疊加。
+    new_rules_block = f"{AGENT_RULES_BLOCK_START}{agents_rules_content}{AGENT_RULES_BLOCK_END}"
+    global_rules_content = global_rules_content.rstrip() + "\n" + new_rules_block
+
+    os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+    with open(dest_file, "w", encoding="utf-8") as f:
+        f.write(global_rules_content)
+
+
 def install_global():
-    """將此 ADAD 客製化安裝至全域 Antigravity 設定"""
-    print(f"[ADAD] 正在安裝至全域目錄: {GLOBAL_CONFIG_DIR}...")
-    
-    if not os.path.exists(GLOBAL_CONFIG_DIR):
-        print(f"[ADAD ERROR] 找不到全域設定目錄: {GLOBAL_CONFIG_DIR}，請確認 Antigravity 已安裝且執行過。")
+    """
+    將此 ADAD 客製化安裝至全域 Antigravity（2.0 / IDE）設定。
+
+    ponytail-fix: Antigravity 的全域路徑目前在不同版本/文件間會變動，因此採取
+    「多候選路徑、盡力而為」策略：只要 ~/.gemini 存在，就會嘗試寫入所有已知
+    候選 Skills 目錄，而不是只信任單一路徑。全域規則統一寫入 ~/.gemini/GEMINI.md
+    （Antigravity IDE「+ Global」按鈕實際寫入的檔案），並用區塊標記安全合併，
+    不會覆蓋掉檔案中其他既有內容（例如你自己手動加的其他全域規則）。
+    """
+    if not os.path.exists(GEMINI_HOME):
+        print(f"[ADAD ERROR] 找不到 {GEMINI_HOME}，請確認 Antigravity 2.0 / IDE 已安裝且至少執行過一次。")
         sys.exit(1)
 
-    # 1. 複製 Skills 到全域
     src_skills_dir = os.path.join(".agents", "skills", "adad-workflow")
-    dest_skills_dir = os.path.join(GLOBAL_CONFIG_DIR, "skills", "adad-workflow")
-
     if not os.path.exists(src_skills_dir):
         print(f"[ADAD ERROR] 找不到專案內的 Skills 目錄: {src_skills_dir}")
         sys.exit(1)
 
-    if os.path.exists(dest_skills_dir):
-        print("  - 偵測到已存在全域 ADAD Skill，正在進行覆蓋更新...")
-        shutil.rmtree(dest_skills_dir)
-        
-    shutil.copytree(src_skills_dir, dest_skills_dir)
-    print("  - 複製 Skills 至全域成功")
+    # 1. 複製 Skills 至所有候選全域目錄
+    print("[ADAD] 正在安裝全域 Skills（多候選路徑，盡力而為）...")
+    installed_any = False
+    for base_dir in GLOBAL_SKILLS_CANDIDATES:
+        dest_skills_dir = os.path.join(base_dir, "adad-workflow")
+        try:
+            os.makedirs(base_dir, exist_ok=True)
+            if os.path.exists(dest_skills_dir):
+                shutil.rmtree(dest_skills_dir)
+            shutil.copytree(src_skills_dir, dest_skills_dir)
+            print(f"  ✅ {dest_skills_dir}")
+            installed_any = True
+        except Exception as e:
+            print(f"  ⚠️  跳過 {dest_skills_dir}（{e}）")
 
-    # 2. 安全寫入全域 AGENTS.md
+    if not installed_any:
+        print("[ADAD ERROR] 所有候選全域 Skills 目錄皆安裝失敗。")
+        sys.exit(1)
+
+    # 2. 安全寫入全域規則檔案（Antigravity IDE 的「+ Global」規則檔）
     src_agents_md = os.path.join(".agents", "AGENTS.md")
-    dest_agents_md = os.path.join(GLOBAL_CONFIG_DIR, "AGENTS.md")
-
     if os.path.exists(src_agents_md):
         with open(src_agents_md, "r", encoding="utf-8") as f:
             agents_rules_content = f.read()
+        try:
+            _write_global_rules_block(GLOBAL_RULES_FILE, agents_rules_content)
+            print(f"  ✅ 全域規則已安全寫入 {GLOBAL_RULES_FILE}")
+        except Exception as e:
+            print(f"  ⚠️  寫入全域規則檔案失敗: {e}")
 
-        global_rules_content = ""
-        if os.path.exists(dest_agents_md):
-            with open(dest_agents_md, "r", encoding="utf-8") as f:
-                global_rules_content = f.read()
+    print("\n[ADAD] 全域安裝完成！")
+    print("提醒：Antigravity 全域路徑約定仍在演進中，建議安裝後在 Antigravity")
+    print("2.0 / IDE 的「Global Skills / Rules」設定畫面（或環境提供的檢視指令）")
+    print("確認 adad-workflow 確實有被載入，若沒有請回報實際路徑以便修正。")
 
-        # 移除舊的 ADAD 規則區塊，避免重複追加
-        if AGENT_RULES_BLOCK_START in global_rules_content:
-            start_idx = global_rules_content.find(AGENT_RULES_BLOCK_START)
-            end_idx = global_rules_content.find(AGENT_RULES_BLOCK_END) + len(AGENT_RULES_BLOCK_END)
-            global_rules_content = global_rules_content[:start_idx] + global_rules_content[end_idx:]
-
-        # 追加新規則
-        new_rules_block = f"{AGENT_RULES_BLOCK_START}{agents_rules_content}{AGENT_RULES_BLOCK_END}"
-        global_rules_content = global_rules_content.rstrip() + "\n" + new_rules_block
-
-        with open(dest_agents_md, "w", encoding="utf-8") as f:
-            f.write(global_rules_content)
-        print("  - 全域 AGENTS.md 規則安全更新成功")
-    
-    print("[ADAD] 全域安裝完成！")
 
 def uninstall_global():
-    """自全域 Antigravity 設定移除 ADAD 客製化與規則"""
-    print(f"[ADAD] 正在自全域移除...")
-    
-    # 1. 移除全域 Skill
-    dest_skills_dir = os.path.join(GLOBAL_CONFIG_DIR, "skills", "adad-workflow")
-    if os.path.exists(dest_skills_dir):
+    """自全域 Antigravity（2.0 / IDE）設定移除 ADAD 客製化與規則"""
+    print("[ADAD] 正在自全域移除...")
+
+    # 1. 移除所有候選路徑下的全域 Skill
+    for base_dir in GLOBAL_SKILLS_CANDIDATES:
+        dest_skills_dir = os.path.join(base_dir, "adad-workflow")
+        if os.path.exists(dest_skills_dir):
+            try:
+                shutil.rmtree(dest_skills_dir)
+                print(f"  ✅ 移除 {dest_skills_dir} 成功")
+            except Exception as e:
+                print(f"  ⚠️  移除 {dest_skills_dir} 失敗: {e}")
+
+    # 2. 清除全域規則檔案中的 ADAD 規則區塊
+    if os.path.exists(GLOBAL_RULES_FILE):
         try:
-            shutil.rmtree(dest_skills_dir)
-            print("  - 移除全域 ADAD Skill 成功")
-        except Exception as e:
-            print(f"  - 移除全域 ADAD Skill 失敗: {e}")
-            
-    # 2. 清除全域 AGENTS.md 中的規則區塊
-    dest_agents_md = os.path.join(GLOBAL_CONFIG_DIR, "AGENTS.md")
-    if os.path.exists(dest_agents_md):
-        try:
-            with open(dest_agents_md, "r", encoding="utf-8") as f:
+            with open(GLOBAL_RULES_FILE, "r", encoding="utf-8") as f:
                 content = f.read()
             if AGENT_RULES_BLOCK_START in content:
                 start_idx = content.find(AGENT_RULES_BLOCK_START)
                 end_idx = content.find(AGENT_RULES_BLOCK_END) + len(AGENT_RULES_BLOCK_END)
                 content = content[:start_idx] + content[end_idx:]
-                with open(dest_agents_md, "w", encoding="utf-8") as f:
+                with open(GLOBAL_RULES_FILE, "w", encoding="utf-8") as f:
                     f.write(content)
-                print("  - 清除全域 AGENTS.md 規則區塊成功")
+                print(f"  ✅ 清除 {GLOBAL_RULES_FILE} 中的 ADAD 規則區塊成功")
         except Exception as e:
-            print(f"  - 清除全域 AGENTS.md 規則失敗: {e}")
+            print(f"  ⚠️  清除全域規則失敗: {e}")
 
     print("[ADAD] 全域卸載完成！")
 
@@ -413,8 +464,8 @@ def main():
         print("ADAD 部署與復原工具說明：")
         print("  python install.py init      - 在當前專案目錄初始化 ADAD (建立 checkpoints, system_map.md, venv, hook 等)")
         print("  python install.py clean     - 還原專案環境並清理 ADAD 檔案 (刪除 checkpoints, venv, hook 與 yaml)")
-        print("  python install.py global    - 將本規範與 Skill 部署至 Antigravity 全域設定 (供所有專案使用)")
-        print("  python install.py uninstall - 自 Antigravity 全域設定移除 ADAD 客製化與規則")
+        print("  python install.py global    - 將本規範與 Skill 部署至 Antigravity 2.0 / IDE 全域設定 (供所有專案使用)")
+        print("  python install.py uninstall - 自 Antigravity 2.0 / IDE 全域設定移除 ADAD 客製化與規則")
         print("  python install.py pack      - 打包 .agents 客製化目錄為 zip 檔，便於上傳 GitHub 發布")
         sys.exit(1)
 

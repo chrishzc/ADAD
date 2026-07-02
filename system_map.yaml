@@ -3,6 +3,10 @@ modules:
   read_context:
     type: tool
     description: 讀取單一節點最小上下文的輔助工具
+    source: .agents/skills/adad-workflow/scripts/read_context.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
     dependencies: []
     input:
       node_name: string
@@ -17,10 +21,15 @@ modules:
     checkpoint:
     - '[x] CP-1-001 (validated)'
     - '[x] CP-2-001 (deployed)'
-    state: deployed
+    state: planned
+    fan_in_snapshot: 0
   check_normalization:
     type: tool
     description: 執行 Rule of Two 邊界檢查，防範重複設計的工具
+    source: .agents/skills/adad-workflow/scripts/check_normalization.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
     dependencies: []
     input:
       proposed_function: string
@@ -37,10 +46,15 @@ modules:
     checkpoint:
     - '[x] CP-1-002 (validated)'
     - '[x] CP-2-002 (deployed)'
-    state: deployed
+    state: planned
+    fan_in_snapshot: 0
   analyze_cascade:
     type: tool
     description: 執行髒點級聯依賴分析的 DAG 走查工具
+    source: .agents/skills/adad-workflow/scripts/analyze_cascade.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
     dependencies: []
     input:
       changed_node_name: string
@@ -55,10 +69,15 @@ modules:
     checkpoint:
     - '[x] CP-1-003 (validated)'
     - '[x] CP-2-003 (deployed)'
-    state: deployed
+    state: planned
+    fan_in_snapshot: 0
   transit_state:
     type: tool
     description: 推進或變更模組生命週期狀態的狀態機工具
+    source: .agents/skills/adad-workflow/scripts/transit_state.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
     dependencies: []
     input:
       node_name: string
@@ -74,4 +93,5 @@ modules:
     checkpoint:
     - '[x] CP-1-004 (validated)'
     - '[x] CP-2-004 (deployed)'
-    state: deployed
+    state: planned
+    fan_in_snapshot: 0

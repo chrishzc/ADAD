@@ -15,6 +15,7 @@
 ##### Module: read_context
 - Type: tool
 - Description: 讀取單一節點最小上下文的輔助工具
+- Source: .agents/skills/adad-workflow/scripts/read_context.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -33,6 +34,7 @@
 ##### Module: check_normalization
 - Type: tool
 - Description: 執行 Rule of Two 邊界檢查，防範重複設計的工具
+- Source: .agents/skills/adad-workflow/scripts/check_normalization.py
 - Preferred Pattern: pure_function
 - Decisions: []
 - Invariants:
@@ -53,6 +55,7 @@
 ##### Module: analyze_cascade
 - Type: tool
 - Description: 執行髒點級聯依賴分析的 DAG 走查工具
+- Source: .agents/skills/adad-workflow/scripts/analyze_cascade.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -71,6 +74,7 @@
 ##### Module: transit_state
 - Type: tool
 - Description: 推進或變更模組生命週期狀態的狀態機工具
+- Source: .agents/skills/adad-workflow/scripts/transit_state.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
