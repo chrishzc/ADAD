@@ -13,10 +13,10 @@ def main():
         sys.exit(1)
         
     try:
-        with open(md_path, "r", encoding="utf-8") as f:
-            md_content = f.read()
+        from adad_core import resolve_includes
+        md_content = resolve_includes(md_path)
     except Exception as e:
-        print(json.dumps({"success": False, "error": f"讀取 {md_path} 失敗: {e}"}, ensure_ascii=False))
+        print(json.dumps({"success": False, "error": f"解析 include 檔案與讀取 {md_path} 失敗: {e}"}, ensure_ascii=False))
         sys.exit(1)
         
     # 1. 解析 Markdown

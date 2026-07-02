@@ -25,6 +25,61 @@ except ImportError:
 
 MAP_FILE = "system_map.yaml"
 
+def get_all_included_files(filepath, found=None):
+    if found is None:
+        found = set()
+    if not os.path.exists(filepath):
+        return found
+    abs_path = os.path.abspath(filepath)
+    if abs_path in found:
+        return found
+    found.add(abs_path)
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception:
+        return found
+    pattern = re.compile(r'<!--\s*include:?\s*([^\s-]+(?:\.md|\.yaml|\.txt)?)\s*-->')
+    for match in pattern.finditer(content):
+        include_path = match.group(1).strip()
+        base_dir = os.path.dirname(filepath)
+        target_path = os.path.join(base_dir, include_path)
+        get_all_included_files(target_path, found)
+    return found
+
+def get_max_mtime(root_md_path):
+    if not os.path.exists(root_md_path):
+        return 0
+    all_files = get_all_included_files(root_md_path)
+    if not all_files:
+        return os.path.getmtime(root_md_path)
+    return max(os.path.getmtime(f) for f in all_files)
+
+def resolve_includes(filepath, visited=None):
+    if visited is None:
+        visited = set()
+    
+    abs_path = os.path.abspath(filepath)
+    if abs_path in visited:
+        raise ValueError(f"偵測到循環 include: {filepath}")
+    visited.add(abs_path)
+    
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"找不到被 include 的檔案: {filepath}")
+        
+    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+        
+    pattern = re.compile(r'<!--\s*include:?\s*([^\s-]+(?:\.md|\.yaml|\.txt)?)\s*-->')
+    
+    def replace_match(match):
+        include_path = match.group(1).strip()
+        base_dir = os.path.dirname(filepath)
+        target_path = os.path.join(base_dir, include_path)
+        return resolve_includes(target_path, visited.copy())
+        
+    return pattern.sub(replace_match, content)
+
 def parse_markdown(md_content):
     lines = md_content.splitlines()
     data = {"version": 1, "modules": {}}
@@ -135,14 +190,14 @@ class ADADCore:
                     "error": f"找不到架構 IR 檔案 ({yaml_path})。請先執行編譯指令：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
             
-            md_mtime = os.path.getmtime(md_path)
+            md_mtime = get_max_mtime(md_path)
             yaml_mtime = os.path.getmtime(yaml_path)
             
             # 給予 1 秒的緩衝時間防範不同檔案系統時間戳記微幅飄移
             if md_mtime > yaml_mtime + 1:
                 return {
                     "valid": False,
-                    "error": f"架構源檔案 ({md_path}) 已更新，但 IR ({yaml_path}) 已過期。請重新執行編譯：python .agents/skills/adad-workflow/scripts/compile_map.py"
+                    "error": f"架構源檔案 ({md_path} 或其包含的子檔案) 已更新，但 IR ({yaml_path}) 已過期。請重新執行編譯：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
                 
         return {"valid": True}

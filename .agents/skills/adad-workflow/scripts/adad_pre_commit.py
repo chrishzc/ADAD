@@ -32,15 +32,16 @@ def get_staged_files():
 
 
 def check_staleness():
-    """RULE-01: 若 system_map.md 比 system_map.yaml 新，阻斷 commit"""
+    """RULE-01: 若 system_map.md (或其包含的子檔案) 比 system_map.yaml 新，阻斷 commit"""
     md_path = "system_map.md"
     yaml_path = "system_map.yaml"
     if not os.path.exists(md_path) or not os.path.exists(yaml_path):
         return None  # 非 ADAD 專案或尚未初始化，跳過
-    md_mtime = os.path.getmtime(md_path)
+    from adad_core import get_max_mtime
+    md_mtime = get_max_mtime(md_path)
     yaml_mtime = os.path.getmtime(yaml_path)
     if md_mtime > yaml_mtime + 1:
-        return "system_map.md 比 system_map.yaml 新，請先執行 compile_map.py"
+        return "system_map.md 或其包含的子檔案比 system_map.yaml 新，請先執行 compile_map.py"
     return None
 
 
