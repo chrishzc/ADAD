@@ -1,0 +1,15 @@
+# Python 暫存與虛擬環境
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+
+# 打包與壓縮檔
+*.zip
+*.tar.gz
+
+# 系統檔案
+.DS_Store
+Thumbs.db

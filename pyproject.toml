@@ -1,13 +1,29 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "programming_design"
-version = "0.1.0"
+name = "adad-cli"
+version = "1.0.0"
+description = "ADAD (Architecture-Driven Agentic Development) 開發規範與工具鏈 CLI"
+requires-python = ">=3.9"
 dependencies = [
-    "pydantic>=2.0",
     "pyyaml>=6.0",
     "click>=8.0",
-    "rich>=13.0"
 ]
+
+# ponytail: 這一段就是原本缺少的關鍵。
+# 有了 [project.scripts]，pip/pipx 安裝後會在 PATH 上產生一個
+# 真正的可執行檔 `adad`，指向 adad_cli/cli.py 的 main()，
+# 這樣才有辦法在任何專案目錄下直接輸入 `adad init`。
+[project.scripts]
+adad = "adad_cli.cli:main"
+
+[tool.setuptools]
+packages = ["adad_cli"]
+
+# 把 resources/ 底下所有範本、skill 腳本都當成套件資料一起打包進 wheel，
+# 這樣 importlib.resources 才能在「任何安裝位置」找到它們，
+# 不再依賴使用者執行指令當下的工作目錄。
+[tool.setuptools.package-data]
+adad_cli = ["resources/**/*"]
