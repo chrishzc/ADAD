@@ -87,6 +87,21 @@ def main():
 
     # 輸出 Markdown 報告
     print(f"# 📊 ADAD Architecture Resume Analysis")
+
+    # ponytail-fix: Resume 是 Agent 啟動/接手任務時最先看的報告，
+    # 在這裡主動秀出「pre-commit hook 到底有沒有真的裝上」，
+    # 避免文件寫了 install.py init、但沒人真的執行過，導致所有機械強制
+    # 其實完全沒在運作，卻沒有任何地方會提醒。
+    from adad_core import check_precommit_hook_status
+    hook_status = check_precommit_hook_status()
+    if hook_status["is_git_repo"] and not hook_status["hook_installed"]:
+        print(
+            "\n> ⚠️ **[NO GUARDRAIL]** 目前是 git repo，但尚未安裝 pre-commit hook——"
+            "RULE-01~05、Invariants、Verification 等機械強制目前實際上完全沒有在運作。"
+            "請執行 `python install.py init` 安裝 hook，或至少在 CI/CD 中另外執行 "
+            "`adad_pre_commit.py` 作為最後防線。\n"
+        )
+
     print(f"\n## 📈 目前架構進度")
     print(f"- **已完成部署 (Deployed)**: {len(completed_modules)}/{len(modules)}")
     for m in completed_modules:

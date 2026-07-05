@@ -23,6 +23,8 @@ modules:
     - '[x] CP-2-001 (deployed)'
     state: planned
     fan_in_snapshot: 0
+    known_symbols:
+    - main
   check_normalization:
     type: tool
     description: 執行 Rule of Two 邊界檢查，防範重複設計的工具
@@ -48,6 +50,8 @@ modules:
     - '[x] CP-2-002 (deployed)'
     state: planned
     fan_in_snapshot: 0
+    known_symbols:
+    - main
   analyze_cascade:
     type: tool
     description: 執行髒點級聯依賴分析的 DAG 走查工具
@@ -71,6 +75,8 @@ modules:
     - '[x] CP-2-003 (deployed)'
     state: planned
     fan_in_snapshot: 0
+    known_symbols:
+    - main
   transit_state:
     type: tool
     description: 推進或變更模組生命週期狀態的狀態機工具
@@ -95,3 +101,14 @@ modules:
     - '[x] CP-2-004 (deployed)'
     state: planned
     fan_in_snapshot: 0
+    known_symbols:
+    - main
+domains:
+  ADAD_Workflow:
+    description: ADAD (Architecture-Driven Agentic Development) 的架構與工作流核心管理工具集。
+    allowed_dependencies: []
+    subsystems:
+      Core_Engine:
+        description: 負責架構地圖讀寫、狀態推進、DAG 依賴分析與 Invariants 校驗的核心模組。
+        map_file: system_map.md
+    map_file: system_map.md

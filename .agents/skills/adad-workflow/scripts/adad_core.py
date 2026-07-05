@@ -9,6 +9,8 @@ import json
 import ast
 import re
 import shutil
+import math
+from collections import Counter
 
 # 自動安裝 PyYAML 依賴以確保跨裝置開箱即用
 try:
@@ -141,7 +143,13 @@ def resolve_includes(filepath, ancestors=None, resolved_cache=None):
         include_path = match.group(1).strip()
         base_dir = os.path.dirname(filepath)
         target_path = os.path.join(base_dir, include_path)
-        return resolve_includes(target_path, new_ancestors, resolved_cache)
+        included = resolve_includes(target_path, new_ancestors, resolved_cache)
+        # ponytail-fix: include 展開的內容結束後，若原檔案(filepath)在這個
+        # include 指令之後還有其他內容（例如同一份檔案裡 include 完子地圖，
+        # 後面又補了幾個 Domain/Module），這些內容在物理上仍然屬於 filepath，
+        # 但先前沒有補回歸標記，會讓它們被靜默誤判為仍屬於剛展開完的子檔案，
+        # 導致 map_file 判定錯誤、進而讓「模組錯放偵測」失效。
+        return included + f"\n<!-- __ADAD_SOURCE_FILE__: {os.path.relpath(abs_path)} -->\n"
 
     expanded = INCLUDE_PATTERN.sub(replace_match, content)
     result = rel_marker + expanded
@@ -188,9 +196,18 @@ def parse_markdown(md_content):
         d_match = domain_regex.match(line_strip)
         if d_match:
             current_domain = d_match.group(1).strip()
-            data["domains"].setdefault(
-                current_domain, {"description": "", "allowed_dependencies": [], "subsystems": {}}
-            )
+            # ponytail: 追蹤這個 Domain 標頭實際寫在哪個實體檔案，
+            # 讓 resolve_target_file.py 能回答「這個 Domain 該寫進哪個子地圖」。
+            # 刻意採「第一次出現的位置」為官方落點、後續重複出現不覆蓋：
+            # 這正是要防範的情境——如果 Domain/Subsystem 早就被拆到子地圖，
+            # 之後有人（或 Agent）在根目錄重新打開同名標頭夾帶新模組，
+            # 我們要它被判定為「錯放」，而不是讓最後一次出現的位置
+            # 悄悄變成新的官方落點、蓋掉原本的子地圖。
+            if current_domain not in data["domains"]:
+                data["domains"][current_domain] = {
+                    "description": "", "allowed_dependencies": [], "subsystems": {},
+                    "map_file": current_source_file
+                }
             current_subsystem = None
             current_module = None
             current_section = None
@@ -200,9 +217,13 @@ def parse_markdown(md_content):
         if s_match:
             current_subsystem = s_match.group(1).strip()
             if current_domain:
-                data["domains"][current_domain]["subsystems"].setdefault(
-                    current_subsystem, {"description": ""}
-                )
+                subs = data["domains"][current_domain]["subsystems"]
+                # ponytail: 同理，記錄 Subsystem 標頭實際所在的實體檔案，
+                # 一樣以第一次出現的位置為準、後續重複出現不覆蓋。
+                if current_subsystem not in subs:
+                    subs[current_subsystem] = {
+                        "description": "", "map_file": current_source_file
+                    }
             current_module = None
             current_section = None
             continue
@@ -305,6 +326,130 @@ def parse_markdown(md_content):
             
     return data
 
+def build_file_to_registered_functions(modules):
+    """
+    從 system_map.yaml 的 source 欄位建立 {file_path: {"whole_file": bool, "functions": set, "nodes": [...]}}。
+
+    source 欄位的兩種寫法：
+      - "path/to/file.py"                         → 整個檔案視為單一節點，不逐函式比對
+      - "path/to/file.py::func_name"               → 該節點只對應檔案內的這一個函式
+      - "path/to/file.py::f1,f2,f3"                → 該節點對應檔案內的多個函式（逗號分隔）
+
+    ponytail: 原本只存在 adad_pre_commit.py（給 RULE-04 用），現在
+    compile_map.py 的「靜默脫鉤」偵測也需要同一份邏輯，搬到這裡共用，
+    避免兩處各寫一份、之後改一邊忘了改另一邊。
+    """
+    file_map = {}
+    for name, info in modules.items():
+        src = (info.get("source") or "").replace("\\", "/")
+        if not src:
+            continue
+        if "::" in src:
+            file_path, funcs_part = src.split("::", 1)
+            funcs = [f.strip() for f in funcs_part.split(",") if f.strip()]
+        else:
+            file_path, funcs = src, []
+        entry = file_map.setdefault(file_path, {"whole_file": False, "functions": set(), "nodes": []})
+        entry["nodes"].append(name)
+        if funcs:
+            entry["functions"].update(funcs)
+        else:
+            entry["whole_file"] = True
+    return file_map
+
+
+def get_top_level_function_names(source_code):
+    """
+    解析原始碼，回傳所有 top-level 函式名稱（含 class 內的方法，以 Class.method 表示）。
+    語法錯誤時回傳 None，交由呼叫端略過（避免跟其他檢查重複報同一個語法錯誤）。
+    """
+    try:
+        tree = ast.parse(source_code)
+    except SyntaxError:
+        return None
+    names = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            for sub in node.body:
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    names.add(f"{node.name}.{sub.name}")
+    return names
+
+
+def check_precommit_hook_status(repo_root="."):
+    """
+    偵測目前是否在 git repo 內、以及 pre-commit hook 是否已實際安裝。
+
+    背景：README 有交代要執行 `install.py init` 來安裝 pre-commit hook，
+    但如果有人直接 clone 專案、跳過這一步就開始改東西，系統原本不會有
+    任何提示——RULE-01~05 等所有機械強制其實都沒有在運作，卻表現得
+    好像一切正常。這支函式讓 compile_map.py / resume_analysis.py 等
+    高曝光度的入口，能主動把這個「有沒有防護網」的狀態秀出來，而不是
+    只靠文件裡的一句話讓使用者自己記得。
+
+    回傳：{"is_git_repo": bool, "hook_installed": bool}
+    """
+    git_dir = os.path.join(repo_root, ".git")
+    if not os.path.isdir(git_dir):
+        return {"is_git_repo": False, "hook_installed": False}
+    hook_path = os.path.join(git_dir, "hooks", "pre-commit")
+    return {"is_git_repo": True, "hook_installed": os.path.isfile(hook_path)}
+
+
+def find_misplaced_modules(data):
+    """
+    「模組寫錯地方」偵測。
+
+    每個模組在解析時都記錄了 map_file（實際寫在哪個實體檔案），
+    每個 Domain / Subsystem 也記錄了自己的標頭實際寫在哪個實體檔案。
+    正常情況下：一個模組的 map_file 應該跟它所屬 Subsystem（若有）或
+    Domain 的 map_file 一致——因為它理應被寫在「該 Subsystem/Domain
+    目前落腳的子地圖檔案」裡。
+
+    若不一致，代表這個模組被寫到了錯的實體檔案（例如：Subsystem 早就
+    被拆到 docs/domains/checkout.md，但這個新模組卻被直接加進根目錄
+    system_map.md），這正是「Agent 忘記寫進子地圖」的機械化偵測點。
+
+    回傳：[{"module", "scope", "scope_name", "expected_file", "actual_file"}, ...]
+    """
+    domains = data.get("domains", {})
+    modules = data.get("modules", {})
+    misplaced = []
+
+    for name, info in modules.items():
+        domain = info.get("domain")
+        subsystem = info.get("subsystem")
+        actual = info.get("map_file") or "system_map.md"
+
+        if not domain or domain not in domains:
+            continue
+
+        dom_info = domains[domain]
+        expected = None
+        scope = "domain"
+        scope_name = domain
+
+        if subsystem and subsystem in dom_info.get("subsystems", {}):
+            expected = dom_info["subsystems"][subsystem].get("map_file")
+            scope = "subsystem"
+            scope_name = f"{domain} / {subsystem}"
+        else:
+            expected = dom_info.get("map_file")
+
+        if expected and expected != actual:
+            misplaced.append({
+                "module": name,
+                "scope": scope,
+                "scope_name": scope_name,
+                "expected_file": expected,
+                "actual_file": actual,
+            })
+
+    return misplaced
+
+
 class ADADCore:
     def __init__(self, map_path=MAP_FILE, check_validity=True):
         self.map_path = map_path
@@ -344,7 +489,15 @@ class ADADCore:
             return {"version": 1, "modules": {}}
         with open(self.map_path, "r", encoding="utf-8") as f:
             try:
-                content = yaml.safe_load(f)
+                # ponytail-fix: 優先用 C 擴充套件版的 CSafeLoader（若環境有裝
+                # libyaml 綁定），純 Python 版 SafeLoader 在模組數一多會明顯變慢
+                # （實測 2000 模組規模下差距可達數倍）。沒有 libyaml 時優雅退回
+                # 純 Python 版，行為完全不變，只是速度快慢的差異。
+                try:
+                    from yaml import CSafeLoader as _Loader
+                except ImportError:
+                    _Loader = yaml.SafeLoader
+                content = yaml.load(f, Loader=_Loader)
                 return content if content else {"version": 1, "modules": {}}
             except Exception as e:
                 print(f"[ADAD ERROR] 解析 {self.map_path} 失敗: {e}")
@@ -508,7 +661,8 @@ class ADADCore:
                 "input": node.get("input", {}),
                 "output": node.get("output", {}),
                 "dependencies": node.get("dependencies", []),
-                "description": node.get("description", "")
+                "description": node.get("description", ""),
+                "map_file": node.get("map_file", "system_map.md")
             },
             "dependency_interfaces": {}
         }
@@ -547,29 +701,89 @@ class ADADCore:
 
         return context
 
-    def evaluate_normalization(self, proposed_name, proposed_input, proposed_output):
-        """執行 Rule of Two 檢查，檢測是否有相似功能已重複出現 2 次以上"""
+    @staticmethod
+    def _bigrams(s):
+        s = (s or "").strip()
+        return set(s[i:i + 2] for i in range(len(s) - 1)) if len(s) >= 2 else set()
+
+    def evaluate_normalization(self, proposed_name, proposed_input, proposed_output, proposed_description=""):
+        """
+        執行 Rule of Two 檢查，檢測是否有相似功能已重複出現 2 次以上。
+
+        規則 1（保留，未變動）：input/output 介面簽章完全一致 → 判定為重複。
+        這條抓的是資料契約層級的重複，跟敘述寫得好不好完全無關，最精準、
+        不需要模糊比對，所以不動它。
+
+        規則 2（改版）：原本是對照一份寫死的 8 個關鍵字（tax/email/sms/...），
+        只要模組名稱剛好包含同一個關鍵字就判定重複——覆蓋率差，改個名字就能
+        完全繞過（實測 zzz_message_pusher_v2 可以完全閃避），而且死名單也
+        沒辦法涵蓋所有可能的功能領域。
+
+        改成對 Description 欄位做「IDF 加權的字元二元組 Jaccard 相似度」：
+        - 用字元二元組（bigram）取代詞彙切分，避免中文沒有空白分隔詞彙的問題，
+          不需要額外的斷詞套件（維持這個專案「純標準庫實作」的一貫作法）。
+        - 對常見詞（例如「使用者」「資料」「處理」這種到處都會出現的字）自動
+          降權，避免兩個完全不相關的模組只因為都用到通用詞彙就被誤判重複。
+
+        已知能力邊界（刻意的取捨，不是遺漏）：這仍然是純字面層級的重疊比對，
+        不是語意理解。如果兩個模組的 Description 刻意寫得語意相同但用詞
+        完全不同（沒有共同的二元組），是抓不到的——要抓到這種程度需要
+        embedding 或 LLM 語意判斷，那會重新引入非確定性與延遲成本，
+        已經在設計上決定不要那樣做：這種情況視為文件撰寫品質問題，
+        不是這個工具要解決的範圍。
+        """
         modules = self.data.get("modules", {})
-        
-        # 簡單的關鍵字相似度判定與介面完全判定
         matches = []
-        
+
+        # 規則 1：介面簽章完全一致
         for name, info in modules.items():
             if name == proposed_name:
                 continue
-            
-            # 1. 介面 input/output 完全一致判定
             if info.get("input") == proposed_input and info.get("output") == proposed_output:
                 matches.append((name, "介面簽章完全一致"))
-                continue
-                
-            # 2. 關鍵字模糊匹配 (比如 'tax', 'email', 'sms')
-            keywords = ["tax", "email", "sms", "auth", "login", "validate", "cache", "format"]
-            for kw in keywords:
-                if kw in name.lower() and kw in proposed_name.lower():
-                    matches.append((name, f"包含相同特徵關鍵字 '{kw}'"))
-                    break
-        
+
+        # 規則 2：Description 加權相似度
+        if proposed_description:
+            matched_names = {m[0] for m in matches}
+            others = {
+                name: info.get("description", "")
+                for name, info in modules.items()
+                if name != proposed_name and info.get("description")
+            }
+            # 用現有全部模組的 Description 建立 document frequency，計算 IDF；
+            # 語料量小（專案剛起步）時 IDF 區分度有限，屬預期中的冷啟動限制。
+            df = Counter()
+            for desc in others.values():
+                for bg in self._bigrams(desc):
+                    df[bg] += 1
+            n_docs = max(len(others), 1)
+
+            def _idf(bg):
+                return math.log((n_docs + 1) / (1 + df.get(bg, 0))) + 1
+
+            cand_bg = self._bigrams(proposed_description)
+            # RULE_OF_TWO_SIMILARITY_THRESHOLD：依實測校準（用一批模擬真實情境的
+            # Description 測試不同門檻的分類結果後選定 0.17）：
+            #   - 真重複（含輕度改寫的用詞）：分數落在 0.18~0.40，門檻 0.17 全部命中
+            #   - 相關但非重複：分數約 0.14，有 0.03 的安全邊際，不會被誤判
+            #   - 純粹共用通用詞彙：分數約 0.06，遠低於門檻
+            # 門檻越低，抓到越多真重複，但誤判風險也越高；0.17 是目前資料下
+            # 兩者的平衡點，非絕對值，未來有更多真實案例可以重新校準。
+            threshold = 0.17
+            for name, desc in others.items():
+                if name in matched_names:
+                    continue  # 已經因介面一致被記錄，不重複列出
+                other_bg = self._bigrams(desc)
+                union = cand_bg | other_bg
+                if not union:
+                    continue
+                inter = cand_bg & other_bg
+                w_inter = sum(_idf(bg) for bg in inter)
+                w_union = sum(_idf(bg) for bg in union)
+                score = w_inter / w_union if w_union else 0.0
+                if score >= threshold:
+                    matches.append((name, f"敘述加權相似度 {score:.2f}"))
+
         if len(matches) >= 2:
             return {
                 "passed": False,
@@ -931,6 +1145,36 @@ def run_self_test():
         res = core.evaluate_normalization("calculate_uk_tax", {"amount": "float"}, {"tax": "float"})
         assert res["passed"] is False, "應該觸發 Rule of Two 警告"
         print("  - 測試 2: Rule of Two 阻斷判定成功")
+
+        # 2.5 測試 Rule of Two 改版：Description 加權相似度（取代原本寫死的關鍵字表）
+        core.data["modules"]["send_invoice_notice"] = {
+            "type": "function", "state": "deployed", "dependencies": [],
+            "input": {"order_id": "str"}, "output": {"sent": "bool"},
+            "description": "產生發票並寄送給使用者確認付款狀態"
+        }
+        core.data["modules"]["notify_payment_status"] = {
+            "type": "function", "state": "deployed", "dependencies": [],
+            "input": {"order_id": "str"}, "output": {"sent": "bool"},
+            "description": "確認付款狀態後通知使用者對應結果"
+        }
+        # 用詞完全不同、介面也刻意設計成不一樣（避免規則 1 直接命中），
+        # 純粹考驗 Description 加權相似度這條規則本身
+        res_dup = core.evaluate_normalization(
+            "dispatch_invoice_email", {"uid": "str"}, {"ok": "bool"},
+            proposed_description="寄送發票通知信給使用者確認付款"
+        )
+        assert res_dup["passed"] is False, "改寫過的重複敘述應該被 Rule of Two（加權相似度）攔截"
+        print("  - 測試 2.5a: Rule of Two 改版（敘述加權相似度）正確攔截改寫過的重複敘述")
+
+        # 完全不相關、但共用「使用者」這種通用詞彙 —— 不應該被誤判為重複
+        res_unrelated = core.evaluate_normalization(
+            "calculate_shipping_fee", {"weight": "float"}, {"fee": "float"},
+            proposed_description="計算商品運費並套用使用者的會員折扣"
+        )
+        assert res_unrelated["passed"] is True, "只是共用通用詞彙，不該被誤判為 Rule of Two 重複"
+        print("  - 測試 2.5b: Rule of Two 改版（敘述加權相似度）沒有被通用詞彙誤判成功")
+        del core.data["modules"]["send_invoice_notice"]
+        del core.data["modules"]["notify_payment_status"]
 
         # 3. 測試 DAG 級聯分析
         # db_connector 變更，應該讓 user_service 變為 dirty

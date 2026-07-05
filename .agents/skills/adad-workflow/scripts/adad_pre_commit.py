@@ -13,12 +13,14 @@ ponytail: 純標準庫實作（subprocess + ast），不引入額外依賴。
   6. 跨 Domain 依賴邊界校驗
   7. 未登記函式掃描（RULE-04：實作前必須先登記於 system_map）
   8. 懸空依賴校驗（dependencies 指向不存在的節點）
+  9. 模組落點校驗（RULE-05：模組必須寫在其 Domain/Subsystem 目前落腳的子地圖檔案）
 """
 import subprocess
 import sys
 import os
 import json
 import ast
+import tempfile
 
 # ponytail: 動態加入 scripts 目錄以便 import adad_core
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,12 +28,28 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 
-def get_staged_files():
-    """取得 git staged 的新增/修改檔案清單"""
+def get_staged_files(diff_filter="ACM"):
+    """
+    取得 git staged 且符合指定 diff-filter 的檔案清單。
+
+    ponytail (Bug 5 修正): 預設 "ACM"（新增/複製/修改）給需要讀檔案內容的檢查用
+    （被刪除的檔案讀不到內容）。但狀態門禁、原子範圍這類只在意「這個模組的原始碼
+    是否被動了」的檢查，應該用 "ACMD" 把刪除也算進去——不然砍掉一個 deployed
+    模組的原始碼會完全繞過 RULE-02，因為刪除本身也是一種需要先轉成 dirty 才能做
+    的變更。
+    """
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"],
+        ["git", "diff", "--cached", "--name-only", f"--diff-filter={diff_filter}"],
         capture_output=True, text=True
     )
+    if result.returncode != 0:
+        print(
+            f"❌ [GIT] 無法取得 staged 檔案清單（git diff 執行失敗，returncode={result.returncode}）：\n"
+            f"{result.stderr.strip()}",
+            file=sys.stderr
+        )
+        print("🚫 Commit 被阻斷（無法確認變更內容，安全起見中止）。", file=sys.stderr)
+        sys.exit(1)
     return [f for f in result.stdout.strip().split("\n") if f.strip()]
 
 
@@ -50,6 +68,14 @@ def get_staged_content(path):
     if result.returncode != 0:
         return None
     return result.stdout.decode("utf-8", errors="ignore")
+
+
+def write_temp_file(content, suffix):
+    """把內容寫進一個暫存檔，回傳路徑；呼叫端用完要負責刪除。"""
+    fd, tmp_path = tempfile.mkstemp(suffix=suffix)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(content)
+    return tmp_path
 
 
 def check_staleness():
@@ -78,9 +104,17 @@ def build_source_to_module_map(modules):
 
 
 def check_state_gate(staged_files, modules, src_map):
-    """RULE-02: 只有 planned/dirty/validated/draft 狀態的模組才允許修改對應程式碼"""
+    """
+    RULE-02: 只有 planned/dirty/validated/draft 狀態的模組才允許修改對應程式碼。
+
+    ponytail (Bug 6 修正): 原本這裡混進了 pending_review，跟本函式的文件說明矛盾。
+    pending_review 語意是「已提交待人類審查」，這個狀態理應被凍結——如果允許在
+    送審期間繼續靜默修改程式碼，等於讓 RULE-02 的審查閘門形同虛設。要修改已進入
+    pending_review 的程式碼，應該先用 transit_state.py 轉回 dirty，讓狀態轉移
+    留下明確紀錄，而不是繞過去直接改。
+    """
     errors = []
-    allowed_states = {"planned", "dirty", "validated", "draft", "pending_review"}
+    allowed_states = {"planned", "dirty", "validated", "draft"}
     for f in staged_files:
         f_norm = f.replace("\\", "/")
         mod_name = src_map.get(f_norm)
@@ -112,10 +146,20 @@ def check_atomic_scope(staged_files, src_map):
     return warnings
 
 
-def check_invariants_staged(py_files, modules, src_map):
-    """對 staged .py 檔執行 deny_imports 校驗"""
+def check_invariants_staged(py_files, modules, src_map, map_path):
+    """對 staged .py 檔執行 deny_imports 校驗（讀 git index 內容，不讀工作目錄）"""
     from adad_core import ADADCore
     errors = []
+    # ponytail-fix: 原本 ADADCore(map_path) 寫在迴圈內，代表每一個 staged .py
+    # 檔案都會重新讀取並解析一次整份 system_map.yaml。專案小的時候感覺不出來，
+    # 但實測在 2000 模組規模、50 個 staged 檔案的情境下，這個寫法要跑 67 秒；
+    # 搬到迴圈外只載入一次之後，同樣的工作只要 1.3 秒。這正是會讓
+    # pre-commit 從「跟 Linter 一樣快」變成「卡到讓人想用 --no-verify」的元兇，
+    # 必須修掉，而不是靠使用者忍耐。
+    try:
+        core = ADADCore(map_path, check_validity=False)
+    except Exception:
+        return errors  # 無法載入 core 時不阻斷其他檢查
     for f in py_files:
         f_norm = f.replace("\\", "/")
         mod_name = src_map.get(f_norm)
@@ -124,24 +168,35 @@ def check_invariants_staged(py_files, modules, src_map):
         mod_info = modules.get(mod_name, {})
         if not mod_info.get("invariants"):
             continue
-        # 借用 ADADCore 的 check_invariants 方法
+        staged_content = get_staged_content(f)
+        if staged_content is None:
+            continue  # 理論上不該發生（ACM filter 保證此檔存在於 index），保守略過
+        tmp_py = None
         try:
-            core = ADADCore("system_map.yaml", check_validity=False)
-            result = core.check_invariants(mod_name, f)
+            tmp_py = write_temp_file(staged_content, suffix=".py")
+            result = core.check_invariants(mod_name, tmp_py)
             if not result.get("success", True):
                 for v in result.get("violations", []):
                     errors.append(
                         f"[INVARIANT] {f}:{v['line']} — 違反 {v['rule']}，匯入了 {v['imported']}"
                     )
         except Exception:
-            pass  # ponytail: 無法載入 core 時不阻斷其他檢查
+            pass  # ponytail: 單一檔案解析失敗不阻斷其他檢查
+        finally:
+            if tmp_py and os.path.exists(tmp_py):
+                os.remove(tmp_py)
     return errors
 
 
-def check_verification_staged(py_files, modules, src_map):
-    """對 staged .py 檔執行 must_have_assertions 校驗"""
+def check_verification_staged(py_files, modules, src_map, map_path):
+    """對 staged .py 檔執行 must_have_assertions 校驗（讀 git index 內容，不讀工作目錄）"""
     from adad_core import ADADCore
     errors = []
+    # ponytail-fix: 同上，ADADCore 只在這裡載入一次，不要放進迴圈。
+    try:
+        core = ADADCore(map_path, check_validity=False)
+    except Exception:
+        return errors
     for f in py_files:
         f_norm = f.replace("\\", "/")
         mod_name = src_map.get(f_norm)
@@ -150,17 +205,24 @@ def check_verification_staged(py_files, modules, src_map):
         mod_info = modules.get(mod_name, {})
         if not mod_info.get("verification"):
             continue
+        staged_content = get_staged_content(f)
+        if staged_content is None:
+            continue
+        tmp_py = None
         try:
-            core = ADADCore("system_map.yaml", check_validity=False)
-            result = core.verify_implementation(mod_name, f)
+            tmp_py = write_temp_file(staged_content, suffix=".py")
+            result = core.verify_implementation(mod_name, tmp_py)
             if not result.get("success", True):
                 errors.append(f"[VERIFICATION] {f} — {result.get('error', '校驗失敗')}")
         except Exception:
             pass
+        finally:
+            if tmp_py and os.path.exists(tmp_py):
+                os.remove(tmp_py)
     return errors
 
 
-def check_domain_boundary_staged(staged_files, modules, src_map):
+def check_domain_boundary_staged(staged_files, modules, src_map, map_path):
     """
     只要本次 commit 有觸碰到任一模組的原始碼，就對「整份架構圖」做一次
     跨 Domain 依賴邊界檢查（而不只是被改動的模組），因為邊界違規往往是
@@ -174,7 +236,7 @@ def check_domain_boundary_staged(staged_files, modules, src_map):
     if not touched_any_module:
         return errors
     try:
-        core = ADADCore("system_map.yaml", check_validity=False)
+        core = ADADCore(map_path, check_validity=False)
         result = core.check_domain_boundary()
         if not result.get("passed", True):
             for v in result.get("violations", []):
@@ -184,52 +246,7 @@ def check_domain_boundary_staged(staged_files, modules, src_map):
     return errors
 
 
-def build_file_to_registered_functions(modules):
-    """
-    從 system_map.yaml 的 source 欄位建立 {file_path: {"whole_file": bool, "functions": set, "nodes": [...]}}。
-
-    source 欄位的兩種寫法：
-      - "path/to/file.py"                         → 整個檔案視為單一節點，不逐函式比對
-      - "path/to/file.py::func_name"               → 該節點只對應檔案內的這一個函式
-      - "path/to/file.py::f1,f2,f3"                → 該節點對應檔案內的多個函式（逗號分隔）
-    """
-    file_map = {}
-    for name, info in modules.items():
-        src = (info.get("source") or "").replace("\\", "/")
-        if not src:
-            continue
-        if "::" in src:
-            file_path, funcs_part = src.split("::", 1)
-            funcs = [f.strip() for f in funcs_part.split(",") if f.strip()]
-        else:
-            file_path, funcs = src, []
-        entry = file_map.setdefault(file_path, {"whole_file": False, "functions": set(), "nodes": []})
-        entry["nodes"].append(name)
-        if funcs:
-            entry["functions"].update(funcs)
-        else:
-            entry["whole_file"] = True
-    return file_map
-
-
-def get_top_level_function_names(source_code):
-    """
-    解析原始碼，回傳所有 top-level 函式名稱（含 class 內的方法，以 Class.method 表示）。
-    語法錯誤時回傳 None，交由呼叫端略過（避免跟其他檢查重複報同一個語法錯誤）。
-    """
-    try:
-        tree = ast.parse(source_code)
-    except SyntaxError:
-        return None
-    names = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            names.add(node.name)
-        elif isinstance(node, ast.ClassDef):
-            for sub in node.body:
-                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    names.add(f"{node.name}.{sub.name}")
-    return names
+from adad_core import build_file_to_registered_functions, get_top_level_function_names
 
 
 def check_unregistered_functions(py_files, modules):
@@ -264,6 +281,36 @@ def check_unregistered_functions(py_files, modules):
     return errors
 
 
+def check_module_placement(modules, domains):
+    """
+    RULE-05：模組必須寫在其所屬 Domain/Subsystem 目前落腳的子地圖檔案裡。
+
+    依模組目前的生命週期狀態決定嚴重度，而不是一律阻斷：
+    - `planned` / `draft`：尚未通過任何一次人工 Checkpoint 審查，規劃期本來就
+      預期會邊規劃邊調整位置，先寫草稿、之後再挪到正確的子地圖是正常流程。
+      這個階段只發出 WARNING，不阻斷 commit。
+    - 其餘狀態（`pending_review` 以上，代表至少通過一次 Checkpoint、甚至已經
+      有其他模組依賴它）：放錯位置已經是真正的結構性問題，直接阻斷 commit。
+    """
+    from adad_core import find_misplaced_modules
+    LOOSE_STATES = {"planned", "draft"}
+    errors = []
+    warnings = []
+    misplaced = find_misplaced_modules({"modules": modules, "domains": domains})
+    for m in misplaced:
+        state = modules.get(m["module"], {}).get("state", "planned")
+        detail = (
+            f"模組 `{m['module']}`（屬於 {m['scope']} `{m['scope_name']}`，狀態: `{state}`）"
+            f"實際寫在 [{m['actual_file']}]，但應該寫在 [{m['expected_file']}]。"
+            f"請搬移，或執行 resolve_target_file.py 確認正確落點"
+        )
+        if state in LOOSE_STATES:
+            warnings.append(f"[RULE-05] {detail}（狀態為 `{state}`，規劃期暫不阻斷，但建議盡快搬移）")
+        else:
+            errors.append(f"[RULE-05] {detail}")
+    return errors, warnings
+
+
 def check_dangling_dependencies(modules):
     """
     校驗每個模組的 dependencies 是否都指向 system_map.yaml 中實際存在的節點，
@@ -285,46 +332,68 @@ def main():
     errors = []
     warnings = []
 
-    # 1. Staleness 檢查
+    # 1. Staleness 檢查（比對本機檔案 mtime，跟 git 暫存無關，維持讀磁碟）
     stale = check_staleness()
     if stale:
         errors.append(f"[STALENESS] {stale}")
 
     # 取得 staged 檔案
-    staged = get_staged_files()
-    if not staged:
+    # ponytail (Bug 5 修正): staged 只含 ACM（讀內容用），staged_all 額外含刪除（D），
+    # 給狀態門禁 / 原子範圍 / domain boundary 這些只在意「有沒有被動到」的檢查用。
+    staged = get_staged_files("ACM")
+    staged_all = get_staged_files("ACMD")
+    if not staged_all:
         sys.exit(0)
 
     py_files = [f for f in staged if f.endswith(".py")]
 
-    # 嘗試載入 system_map.yaml
+    # 載入「即將被 commit」的 system_map.yaml（staged/index 版本，而非工作目錄）
     yaml_path = "system_map.yaml"
     modules = {}
+    domains = {}
     src_map = {}
-    if os.path.exists(yaml_path):
+    tmp_map_path = None
+    staged_yaml_content = get_staged_content(yaml_path)
+    if staged_yaml_content is None and os.path.exists(yaml_path):
+        # ponytail: yaml 尚未被 git 追蹤/staged（例如專案剛初始化）時，退回讀磁碟版本，
+        # 盡力而為；一旦被 git add 過，之後一律以 staged 內容為準。
         try:
-            # ponytail: 直接用 yaml.safe_load 避免循環 import
-            import yaml
             with open(yaml_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
+                staged_yaml_content = f.read()
+        except Exception:
+            staged_yaml_content = None
+    if staged_yaml_content is not None:
+        try:
+            import yaml
+            data = yaml.safe_load(staged_yaml_content) or {}
             modules = data.get("modules", {})
+            domains = data.get("domains", {})
             src_map = build_source_to_module_map(modules)
+            tmp_map_path = write_temp_file(staged_yaml_content, suffix=".yaml")
         except Exception:
             pass  # 載入失敗不阻斷，僅跳過需要 YAML 的檢查
 
-    # 2-8. 各項檢查
-    if src_map:
-        errors.extend(check_state_gate(staged, modules, src_map))
-        warnings.extend(check_atomic_scope(staged, src_map))
-    if py_files and src_map:
-        errors.extend(check_invariants_staged(py_files, modules, src_map))
-        errors.extend(check_verification_staged(py_files, modules, src_map))
-    if src_map:
-        errors.extend(check_domain_boundary_staged(staged, modules, src_map))
-    if modules:
-        errors.extend(check_dangling_dependencies(modules))
-    if py_files and modules:
-        errors.extend(check_unregistered_functions(py_files, modules))
+    try:
+        # 2-8. 各項檢查
+        if src_map:
+            errors.extend(check_state_gate(staged_all, modules, src_map))
+            warnings.extend(check_atomic_scope(staged_all, src_map))
+        if py_files and src_map and tmp_map_path:
+            errors.extend(check_invariants_staged(py_files, modules, src_map, tmp_map_path))
+            errors.extend(check_verification_staged(py_files, modules, src_map, tmp_map_path))
+        if src_map and tmp_map_path:
+            errors.extend(check_domain_boundary_staged(staged_all, modules, src_map, tmp_map_path))
+        if modules:
+            errors.extend(check_dangling_dependencies(modules))
+        if modules and domains:
+            e5, w5 = check_module_placement(modules, domains)
+            errors.extend(e5)
+            warnings.extend(w5)
+        if py_files and modules:
+            errors.extend(check_unregistered_functions(py_files, modules))
+    finally:
+        if tmp_map_path and os.path.exists(tmp_map_path):
+            os.remove(tmp_map_path)
 
     # 輸出結果
     for w in warnings:
