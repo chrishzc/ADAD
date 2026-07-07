@@ -52,9 +52,7 @@ CLAUDE_HOME = os.path.join(os.path.expanduser("~"), ".claude")
 # 全域 Skills 候選安裝目錄（依證據強度排序，全部會寫入，互不排斥）。
 GLOBAL_SKILLS_CANDIDATES_BY_AGENT = {
     "antigravity": [
-        os.path.join(GEMINI_HOME, "skills"),
         os.path.join(GEMINI_HOME, "config", "skills"),
-        os.path.join(GEMINI_HOME, "antigravity", "skills"),
     ],
     "claude": [
         os.path.join(CLAUDE_HOME, "skills"),
@@ -580,7 +578,7 @@ def install_global(agents=None) -> None:
             print(f"[ADAD ERROR] 找不到 {home_dir}，請確認 {label} 已安裝且至少執行過一次，跳過此 agent。")
             continue
 
-        print(f"[ADAD] 正在安裝全域 Skills 至 {label}（多候選路徑，盡力而為）...")
+        print(f"[ADAD] 正在安裝全域 Skills 至 {label}...")
         installed_any = False
         for base_dir in GLOBAL_SKILLS_CANDIDATES_BY_AGENT[agent]:
             dest_skills_dir = os.path.join(base_dir, "adad-workflow")
