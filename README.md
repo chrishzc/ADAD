@@ -7,13 +7,13 @@
   <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
-  <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code-38BDF8">
+  <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
   <img alt="PRs" src="https://img.shields.io/badge/PRs-welcome-brightgreen">
 </p>
 
 # 📋 ADAD (Architecture-Driven Agentic Development) 開發規範與工具鏈
 
-本專案源自為 **Antigravity AI Agent** 開發的 Workspace Customization 擴充套件，旨在實行 **ADAD (架構驅動型智能體開發)** 開發模式；目前已擴展支援 **Claude Code** 等其他 Agent 平台，可依需求選擇要套用的一個或多個 Agent。
+本專案源自為 **Antigravity AI Agent** 開發的 Workspace Customization 擴充套件，旨在實行 **ADAD (架構驅動型智能體開發)** 開發模式；目前已擴展支援 **Claude Code**、**Codex CLI / 桌面 App** 等其他 Agent 平台，可依需求選擇要套用的一個或多個 Agent。
 
 ADAD 的核心理念是：**將「系統設計（架構）」與「程式碼實作（邏輯）」徹底解耦**。由人類把持高價值的架構與驗收 Checkpoint，並指派 Agent 在最小 Context 的約束下進行高精度的原子程式碼生成，以防範 AI 開發中的架構失控與 Context 膨脹問題。
 
@@ -139,7 +139,7 @@ pip install -e .
 > `.git/hooks/pre-commit`、建立 `checkpoints/`、`system_map.md` 等安全防線的，
 > 是 `adad init`。**沒有對某個專案執行過 `adad init`，那個專案就完全沒有
 > ADAD 的機械強制保護**——即使你已經執行過 `adad global install` 也一樣，
-> 因為全域安裝影響的是「Agent（Antigravity IDE 或 Claude Code）認不認得這個 skill」，
+> 因為全域安裝影響的是「Agent（Antigravity IDE、Claude Code 或 Codex）認不認得這個 skill」，
 > 跟「這個專案有沒有裝上 pre-commit hook」是兩件互不相關的事。
 
 1. `cd` 到**任何**想套用 ADAD 架構的專案根目錄（必須已經是 `git init` 過的 repo，
@@ -153,25 +153,39 @@ pip install -e .
    要為哪些 Agent 設定 ADAD？（可複選，Enter 採用預設值 y）
      antigravity — Antigravity 2.0 / IDE (Gemini)？ [Y/n]
      claude      — Claude Code？ [Y/n]
+     codex       — Codex CLI / 桌面 App？ [Y/n]
    ```
 
    也可以用 `--agents` 直接指定、跳過互動選單，例如只設定 Claude Code：
    ```bash
    adad init --agents claude
    ```
-   或同時設定兩者：
+   或同時設定三者：
    ```bash
-   adad init --agents antigravity,claude
+   adad init --agents antigravity,claude,codex
    ```
 
    這會建立 `checkpoints/`、`docs/adr`、`docs/patterns`、`system_map.md`（並自動編譯出
    `system_map.yaml`）、`venv/`、`.git/hooks/pre-commit`，**並把 `adad-workflow` skill 的腳本
    複製一份到該專案的 `.agents/skills/adad-workflow/`**，讓這個專案完全自我完備，不必依賴
-   全域安裝也能運作。若選擇了 `claude`，還會額外：
+   全域安裝也能運作。
+
+   若選擇了 `claude`，還會額外：
    - 把 `adad-workflow` skill 複製一份到 `.claude/skills/adad-workflow/`，讓 Claude Code 的
      Project Skills 機制能自動發現（Claude Code 讀 `.claude/skills/<name>/SKILL.md`）；
    - 在專案根目錄的 `CLAUDE.md` 開頭補上一行 `@.agents/AGENTS.md` 匯入既有規則檔
      （若 `CLAUDE.md` 不存在會自動建立；若已存在，只新增匯入這一行，不覆蓋你原本的內容）。
+
+   若選擇了 `codex`，則會：
+   - **不需要**複製 skill——Codex CLI / 桌面 App 原生就會掃描 `.agents/skills/`，
+     跟 ADAD 既有的專案結構完全相同；
+   - 在專案根目錄建立一個 `AGENTS.md` → `.agents/AGENTS.md` 的 **symlink**。因為 Codex 讀取
+     `AGENTS.md` 是「由上而下逐層合併」（全域 `~/.codex/AGENTS.md` → repo 根目錄 `AGENTS.md`
+     → 子目錄 `AGENTS.md`），讀的是 repo 根目錄那份，用 symlink 讓兩邊內容自動保持一致，
+     不需要手動同步兩份檔案。若根目錄已經有你自己的 `AGENTS.md`（不是 ADAD 建立的 symlink），
+     ADAD 不會覆蓋它，只會印出提醒；若環境不支援建立 symlink（常見於 Windows 未開啟開發者
+     模式／沒有系統管理員權限），會 fallback 改成直接複製檔案，並提醒這份副本之後不會自動
+     跟著 `.agents/AGENTS.md` 同步，需要重新執行 `adad upgrade` 手動確認。
 
    選擇的結果會記錄在 `.agents/.adad-agents.json`，之後執行 `adad upgrade` 會自動讀取這份
    紀錄、不需要重新選一次。
@@ -184,23 +198,24 @@ pip install -e .
    venv/bin/python .agents/skills/adad-workflow/scripts/read_context.py <node_name>
    ```
 4. 不再需要 ADAD 時，於該專案目錄執行 `adad remove` 即可還原（移除 venv、pre-commit hook、
-   本地 skill 副本）。**`system_map.md`／`system_map.yaml`／`checkpoints/` 這些是你自己的
-   架構文件與決策紀錄，預設會保留、不會被刪除**；如果確定要連同這些也一起清掉重來，
-   改執行 `adad remove --purge-docs`。
+   本地 skill 副本、Codex 用的根目錄 `AGENTS.md` symlink）。**`system_map.md`／
+   `system_map.yaml`／`checkpoints/` 這些是你自己的架構文件與決策紀錄，預設會保留、
+   不會被刪除**；如果確定要連同這些也一起清掉重來，改執行 `adad remove --purge-docs`。
 
-### 步驟 2（可選加碼）：全域安裝至 Antigravity / Claude Code
+
+### 步驟 2（可選加碼）：全域安裝至 Antigravity / Claude Code / Codex
 
 `adad init` 每個專案都要各自執行一次，這件事不會因為做了下面這步而改變。
-這步純粹是**額外的便利功能**：讓 Antigravity IDE 或 Claude Code 在任何專案裡都能直接看到
-ADAD 的 skill 說明與規則，不用等到 `adad init` 之後才看得到。
+這步純粹是**額外的便利功能**：讓 Antigravity IDE、Claude Code 或 Codex 在任何專案裡都能
+直接看到 ADAD 的 skill 說明與規則，不用等到 `adad init` 之後才看得到。
 
 ```bash
 adad global install
 ```
 
-同樣不加 `--agents` 會跳出互動選單；也可以直接指定，例如只對 Claude Code 全域安裝：
+同樣不加 `--agents` 會跳出互動選單；也可以直接指定，例如只對 Codex 全域安裝：
 ```bash
-adad global install --agents claude
+adad global install --agents codex
 ```
 
 *   選擇 `antigravity`：會將 `adad-workflow` Skills 複製到所有已知 Antigravity 全域路徑，
@@ -208,6 +223,10 @@ adad global install --agents claude
 *   選擇 `claude`：會將 `adad-workflow` Skills 複製到 `~/.claude/skills/`，並將 ADAD 規則
     寫入 `~/.claude/CLAUDE.md`。安裝完成後，開一個新的 Claude Code session，
     問它「你現在有哪些 skills 可以用」即可確認載入成功。
+*   選擇 `codex`：會將 `adad-workflow` Skills 複製到 `~/.agents/skills/`（Codex CLI 的
+    全域個人路徑）與 `~/.codex/skills/`（Codex 桌面 App 記載的全域路徑），並將 ADAD 規則
+    寫入 `~/.codex/AGENTS.md`。安裝完成後，同樣建議開新 session 詢問 Codex 目前有哪些
+    skill／規則可用，以確認已被讀到。
 
 若要移除，執行 `adad global uninstall`（同樣支援 `--agents` 指定要卸載的 Agent，
 省略則卸載全部已知 Agent）。
@@ -237,22 +256,20 @@ adad upgrade
 `.bak`；`system_map.md`、`checkpoints/`、`docs/adr`、`docs/patterns` 等你自己的資產
 完全不會被觸碰，`.agents/AGENTS.md` 若偵測到你客製化過也只會提示、不會自動覆蓋
 （要強制覆蓋才需要加 `--force-agents-md`）。
-記得提醒你的agent套件已更新，不然他還會載入舊的上下文。
-
-
 
 ### 常用指令一覽
 
 | 指令 | 說明 |
 |---|---|
-| `adad init` | 在目前專案初始化 ADAD（自我完備，含本地 skill 副本）；不加 `--agents` 會跳互動選單詢問要設定 antigravity / claude 中的哪些 |
-| `adad init --agents claude` | 同上，但只為 Claude Code 設定（跳過互動選單），可用逗號指定多個，如 `antigravity,claude` |
+| `adad init` | 在目前專案初始化 ADAD（自我完備，含本地 skill 副本）；不加 `--agents` 會跳互動選單詢問要設定 antigravity / claude / codex 中的哪些 |
+| `adad init --agents claude` | 同上，但只為 Claude Code 設定（跳過互動選單），可用逗號指定多個，如 `antigravity,claude,codex` |
+| `adad init --agents codex` | 同上，但只為 Codex 設定：不複製 skill（原生共用 `.agents/skills/`），改為建立根目錄 `AGENTS.md` symlink |
 | `adad upgrade` | 將已安裝的套件版本安全同步到已 init 過的專案（讀取當初 `adad init` 記錄的 Agent 清單；僅更新套件管理的檔案，不動使用者資產；覆蓋前自動備份成 `.bak`） |
 | `adad upgrade --force-agents-md` | 同上，但連 `.agents/AGENTS.md` 也用套件最新版本強制覆蓋 |
-| `adad remove` | 清理/還原目前專案的環境與工具產出（venv、pre-commit hook、本地 skill 副本，含 `.claude/skills/adad-workflow`）；`system_map.md/.yaml`、`checkpoints/` 等使用者資產預設保留 |
+| `adad remove` | 清理/還原目前專案的環境與工具產出（venv、pre-commit hook、本地 skill 副本，含 `.claude/skills/adad-workflow` 與 Codex 用的根目錄 `AGENTS.md` symlink）；`system_map.md/.yaml`、`checkpoints/` 等使用者資產預設保留 |
 | `adad remove --purge-docs` | 同上，但連同 `system_map.md/.yaml`、`checkpoints/` 一併刪除 |
-| `adad global install` | 部署到 Antigravity 與／或 Claude Code 全域設定，供所有專案共用；不加 `--agents` 會跳互動選單 |
-| `adad global uninstall` | 自 Antigravity 與／或 Claude Code 全域設定移除；可用 `--agents` 指定，省略則卸載全部已知 Agent |
+| `adad global install` | 部署到 Antigravity／Claude Code／Codex 全域設定，供所有專案共用；不加 `--agents` 會跳互動選單 |
+| `adad global uninstall` | 自 Antigravity／Claude Code／Codex 全域設定移除；可用 `--agents` 指定，省略則卸載全部已知 Agent |
 | `adad pack` | 打包目前目錄的 `.agents`（與 `.claude`，若存在）為 zip，供發布用 |
 | `adad --version` / `adad --help` | 查看版本 / 說明 |
 
@@ -289,11 +306,13 @@ adad upgrade
    - 中型規模（2000 個模組、單次 commit 觸及 50 個檔案）：修正前（每個 staged 檔案都重新載入一次整份 `system_map.yaml`）要 **69.5 秒**；修正後（`system_map.yaml` 只載入一次、所有檔案共用）降到 **2.3 秒**。
    若你的專案模組數持續成長、單次 commit 又常常一次觸及大量檔案，2 秒左右的等待仍然存在——這是目前架構下（YAML 反序列化 + 逐檔 AST 解析）的合理下限，不是零成本。若這個等待時間開始造成困擾，建議把非阻斷性的檢查（如孤兒地圖偵測）搬到 CI 而非本地 hook，只在本地保留真正需要即時回饋的幾條規則。
 
+4. **同時使用 Claude Code 與 Codex 時，Codex 桌面 App 可能會自動改寫 skill 內容。** 據社群回報，Codex 桌面 App 偵測到專案內有 `.claude/skills/` 時，會自動把內容複製一份到 `.agents/skills/`，並把其中「Claude Code」等字串取代成「Codex」。這代表如果你的專案同時勾選了 `claude` 與 `codex` 兩個 agent，事後可能會發現 `.agents/skills/adad-workflow/` 底下的內容被改動過。目前建議：若同時使用兩者，執行完 `adad init` 或 `adad upgrade` 後，可用 `git diff` 確認 `.agents/skills/` 底下有沒有非預期的變更，必要時重新執行一次 `adad upgrade` 復原。
+
 ---
 
 ## 🔄 ADAD 核心 CLI 工具說明
 
-當前專案底下設定的 Agent（Antigravity 或 Claude Code）可以直接調用以下指令來操作架構狀態：
+當前專案底下設定的 Agent（Antigravity、Claude Code 或 Codex）可以直接調用以下指令來操作架構狀態：
 
 | 工具腳本 | 功能說明 | 調用時機 |
 | :--- | :--- | :--- |

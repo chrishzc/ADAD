@@ -44,10 +44,12 @@ from adad_cli.resources import agents_dir, templates_dir
 AGENT_CHOICES = {
     "antigravity": "Antigravity 2.0 / IDE (Gemini)",
     "claude": "Claude Code",
+    "codex": "Codex CLI / 桌面 App",
 }
 
 GEMINI_HOME = os.path.join(os.path.expanduser("~"), ".gemini")
 CLAUDE_HOME = os.path.join(os.path.expanduser("~"), ".claude")
+CODEX_HOME = os.path.join(os.path.expanduser("~"), ".codex")
 
 # 全域 Skills 候選安裝目錄（依證據強度排序，全部會寫入，互不排斥）。
 GLOBAL_SKILLS_CANDIDATES_BY_AGENT = {
@@ -57,18 +59,24 @@ GLOBAL_SKILLS_CANDIDATES_BY_AGENT = {
     "claude": [
         os.path.join(CLAUDE_HOME, "skills"),
     ],
+    "codex": [
+        os.path.join(os.path.expanduser("~"), ".agents", "skills"),
+        os.path.join(CODEX_HOME, "skills"),
+    ],
 }
 
 # 各 agent 「點擊 + Global 新增全域規則」實際寫入的檔案。
 GLOBAL_RULES_FILE_BY_AGENT = {
     "antigravity": os.path.join(GEMINI_HOME, "GEMINI.md"),
     "claude": os.path.join(CLAUDE_HOME, "CLAUDE.md"),
+    "codex": os.path.join(CODEX_HOME, "AGENTS.md"),
 }
 
 # 各 agent 對應的「本機是否已安裝該工具」判斷路徑。
 AGENT_HOME_DIR = {
     "antigravity": GEMINI_HOME,
     "claude": CLAUDE_HOME,
+    "codex": CODEX_HOME,
 }
 
 AGENT_RULES_BLOCK_START = "\n# === ADAD GLOBAL RULES START ===\n"
@@ -81,7 +89,8 @@ PROJECT_AGENT_CONFIG = os.path.join(".agents", ".adad-agents.json")
 # Claude Code 讀 CLAUDE.md、不吃 AGENTS.md，官方文件建議的作法是在
 # CLAUDE.md 開頭用 @path 語法匯入既有規則檔，避免維護兩份重複內容。
 CLAUDE_MD_IMPORT_LINE = "@.agents/AGENTS.md"
-
+ROOT_AGENTS_MD = "AGENTS.md"
+CODEX_AGENTS_MD_TARGET = os.path.join(".agents", "AGENTS.md")
 
 def _normalize_agents(agents) -> list:
     """驗證/正規化 agents 清單，不合法的名稱會直接丟例外，讓呼叫端提早發現打字錯誤。"""
@@ -137,25 +146,39 @@ def _setup_claude_project_skill(local_skill_dir: str) -> None:
         print("  - [Claude Code] .claude/skills/adad-workflow 已存在，跳過")
 
 
-def _ensure_claude_md_import(claude_md_path: str = "CLAUDE.md") -> None:
-    """確保專案根目錄的 CLAUDE.md 有匯入 .agents/AGENTS.md，不會動到使用者
-    自己在 CLAUDE.md 裡寫的其他內容（新增一行匯入，而不是整份覆蓋）。"""
-    if not os.path.exists(claude_md_path):
-        with open(claude_md_path, "w", encoding="utf-8") as f:
-            f.write(CLAUDE_MD_IMPORT_LINE + "\n")
-        print(f"  - [Claude Code] 建立 {claude_md_path} 成功（已匯入 .agents/AGENTS.md）")
+def _ensure_codex_root_agents_md(root_agents_md: str = ROOT_AGENTS_MD) -> None:
+    
+    target = CODEX_AGENTS_MD_TARGET  # .agents/AGENTS.md（相對路徑，跟 root_agents_md 同一層）
+
+    if os.path.islink(root_agents_md):
+        current_target = os.readlink(root_agents_md)
+        if current_target == target:
+            print(f"  - [Codex] {root_agents_md} 已是指向 {target} 的 symlink，跳過")
+        else:
+            print(f"  - [Codex] [提示] {root_agents_md} 是 symlink，但指向 {current_target}（非 ADAD 管理），未自動修改")
         return
 
-    with open(claude_md_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    if CLAUDE_MD_IMPORT_LINE in content:
-        print(f"  - [Claude Code] {claude_md_path} 已包含 AGENTS.md 匯入，跳過")
+    if os.path.exists(root_agents_md):
+        print(f"  - [Codex] [提示] {root_agents_md} 已存在且不是 ADAD 建立的 symlink，未自動覆蓋，"
+              f"請自行確認內容是否需要包含 {target} 的規則")
         return
 
-    with open(claude_md_path, "w", encoding="utf-8") as f:
-        f.write(CLAUDE_MD_IMPORT_LINE + "\n\n" + content)
-    print(f"  - [Claude Code] 已在既有 {claude_md_path} 開頭補上 AGENTS.md 匯入（原內容保留在後面）")
+    if not os.path.exists(target):
+        print(f"  - [Codex] [警告] 找不到 {target}，略過建立 {root_agents_md}")
+        return
+
+    try:
+        os.symlink(target, root_agents_md)
+        print(f"  - [Codex] 建立 {root_agents_md} -> {target} 的 symlink 成功")
+    except (OSError, NotImplementedError) as e:
+        # Windows 常見情境：沒有開發者模式/系統管理員權限時 symlink 會失敗。
+        try:
+            shutil.copyfile(target, root_agents_md)
+            print(f"  - [Codex] [警告] 無法建立 symlink（{e}），已改用複製檔案 fallback。")
+            print(f"           注意：{root_agents_md} 現在是獨立副本，之後 {target} 更新時"
+                  "不會自動同步，需重新執行 `adad upgrade` 手動確認。")
+        except Exception as copy_err:
+            print(f"  - [Codex] [警告] 建立 {root_agents_md} 失敗（symlink: {e}；複製 fallback: {copy_err}）")
 
 
 def init_project(agents=None) -> None:
@@ -186,12 +209,15 @@ def init_project(agents=None) -> None:
     local_agents_md = os.path.join(".agents", "AGENTS.md")
     _copy_file_if_absent(agents_dir() / "AGENTS.md", local_agents_md)
 
-    # 0.5 針對個別 agent 的額外設定
+   # 0.5 針對個別 agent 的額外設定
     if "claude" in agents:
         _setup_claude_project_skill(local_skill_dir)
         _ensure_claude_md_import("CLAUDE.md")
     if "antigravity" in agents:
         print("  - [Antigravity] 會自動讀取 .agents/AGENTS.md 與 .agents/skills/，不需要額外設定")
+    if "codex" in agents:
+        print("  - [Codex] .agents/skills/ 原生共用，不需要額外複製 skill")
+        _ensure_codex_root_agents_md()
 
     # 1. 建立 checkpoints 目錄
     if not os.path.exists("checkpoints"):
@@ -323,23 +349,7 @@ def _sync_file(src: Path, dst: str, report: dict) -> None:
 
 
 def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
-    """安全地把「目前已安裝的 ADAD 套件版本」同步到一個已經 `adad init`
-    過的既有專案，不會動到使用者自己的資產。
-
-    agents: 要同步的 agent 清單。傳 None 時會先嘗試讀取
-            .agents/.adad-agents.json（`adad init` 當初存的選擇）；
-            如果連設定檔都沒有（例如專案是這個功能加入前建立的），
-            才 fallback 成同步全部已知 agent，確保舊專案不會出錯。
-
-    ponytail-fix: 在這個指令出現以前，`init_project()` 對已存在的檔案一律
-    「跳過」，代表套件本身修好的 bug（例如 pre-commit hook 寫死呼叫
-    "python" 的問題）永遠不會反映到舊專案裡，使用者只能被迫先
-    `adad remove` 再 `adad init`，結果連 venv、checkpoints 都被砍掉重建。
-    這裡改成只同步「vendored、完全由套件管理、使用者不會手動編輯」的
-    檔案（adad-workflow 的 scripts、pre-commit hook），使用者資產
-    （system_map.md、checkpoints/、docs/adr、docs/patterns 等）完全不觸碰；
-    AGENTS.md 屬於灰色地帶，預設也不覆蓋，只提示差異。
-    """
+    
     if agents is None:
         agents = load_project_agents() or list(AGENT_CHOICES.keys())
     agents = _normalize_agents(agents)
@@ -373,6 +383,8 @@ def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
             dst_file = os.path.join(claude_skill_dir, str(rel_path))
             _sync_file(src_file, dst_file, report)
         _ensure_claude_md_import("CLAUDE.md")
+    if "codex" in agents:
+        _ensure_codex_root_agents_md()
 
     # 2. 重新產生 pre-commit hook：即使腳本內容沒變，也順便修正
     #    sys.executable 路徑可能因為換了 Python 版本、搬動 venv 而失效的問題。
@@ -497,6 +509,17 @@ def clean_project(purge_docs: bool = False) -> None:
     if os.path.exists("CLAUDE.md"):
         print("  - [提示] CLAUDE.md 可能包含你自己的其他規則，未自動刪除，如需清除請手動處理")
 
+    # 只移除「確定是 ADAD 自己建立」的 Codex symlink；如果根目錄 AGENTS.md
+    # 是一般檔案（例如 fallback 複製或使用者自己寫的），保留不動並提示。
+    if os.path.islink(ROOT_AGENTS_MD) and os.readlink(ROOT_AGENTS_MD) == CODEX_AGENTS_MD_TARGET:
+        try:
+            os.remove(ROOT_AGENTS_MD)
+            print(f"  - 移除 Codex 用的 {ROOT_AGENTS_MD} symlink 成功")
+        except Exception as e:
+            print(f"  - 移除 {ROOT_AGENTS_MD} symlink 失敗: {e}")
+    elif os.path.exists(ROOT_AGENTS_MD):
+        print(f"  - [提示] {ROOT_AGENTS_MD} 存在但不是 ADAD 建立的 symlink（可能是複製 fallback 或你自己的檔案），未自動刪除")
+
     if os.path.exists(PROJECT_AGENT_CONFIG):
         try:
             os.remove(PROJECT_AGENT_CONFIG)
@@ -614,6 +637,8 @@ def install_global(agents=None) -> None:
     print("提醒：Antigravity 建議安裝後在 IDE 的「Global Skills / Rules」設定畫面確認載入；")
     print("      Claude Code 請開一個新的 session，問它「你現在有哪些 skills 可以用」")
     print("      來確認 adad-workflow 是否已被載入（Skills 只在 session 啟動時讀取一次）。")
+    print("      Codex 同樣建議開新 session 後詢問它目前有哪些 skill/規則可用來確認 "
+          f"{GLOBAL_RULES_FILE_BY_AGENT['codex']} 已被讀到。")
 
 
 def uninstall_global(agents=None) -> None:
