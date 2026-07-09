@@ -3,6 +3,7 @@ import sys
 import os
 import json
 from adad_core import ADADCore, parse_markdown
+from validate_schema import validate_schema_conformance
 
 def main():
     md_path = "system_map.md"
@@ -188,6 +189,26 @@ def main():
         print("   請確認這些新函式是否真的屬於這個模組的既定用途；"
               "若這個檔案的職責已經變得複雜，考慮改用 `Source: file.py::func1,func2` 逐函式登記，"
               "才能啟用 RULE-04 的硬性保護。\n")
+
+    # 正式 Schema 驗證（獨立於 parse_markdown 之外的第二層防線，見 validate_schema.py 說明）
+    schema_path = "system_map.schema.json"
+    if os.path.exists(schema_path):
+        schema_result = validate_schema_conformance(yaml_path, schema_path)
+        if not schema_result.get("success"):
+            print("\n🚫 [SCHEMA VIOLATION] 編譯產出的 system_map.yaml 不符合正式 schema 規格：")
+            for err in schema_result.get("errors", []):
+                print(f"   - {err['path']}: {err['message']}")
+            print("   這代表 parse_markdown/compile_map.py 本身可能有 bug，"
+                  "或 system_map.yaml 曾被繞過編譯流程手動改壞。\n")
+            print(json.dumps({
+                "success": False,
+                "error": schema_result.get("error"),
+                "schema_errors": schema_result.get("errors", [])
+            }, ensure_ascii=False, indent=2))
+            sys.exit(1)
+    else:
+        print("\n⚠️  [NO SCHEMA] 找不到 system_map.schema.json，跳過正式 schema 驗證這道防線。"
+              "建議從新版 ADAD 範本補上這份檔案（放在專案根目錄，與 system_map.yaml 同層）。\n")
 
     print(json.dumps({
         "success": True,

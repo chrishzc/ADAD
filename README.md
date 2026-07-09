@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2DD4BF">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-38BDF8">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code-38BDF8">
@@ -304,9 +304,18 @@ adad upgrade
 | `check_normalization.py` | 執行 Rule of Two 檢查 | Phase 1 架構規劃期，檢測是否重複造輪子 |
 | `analyze_cascade.py` | 執行髒點依賴分析 (DAG 走查) | Phase 3 反向同步，架構變更時級聯標記 `dirty` |
 | `transit_state.py` | 推進/變更模組生命週期狀態（硬化版：非法轉移阻斷） | CP 審查通過、Lint 通過或被退回時更新狀態 |
-| `verify_implementation.py` | 執行代碼實現驗證條件（如 assert）校驗 | 原子代碼生成完畢後進行自檢驗證 |
+| `verify_implementation.py` | 執行代碼實現驗證條件（`must_have_assertions` 靜態檢查，或 `case` 動態執行實際比對 Input/Output） | 原子代碼生成完畢後進行自檢驗證 |
 | `check_invariants.py` | 執行不變量約束（如 deny_imports）校驗 | 原子代碼生成完畢後進行靜態 AST 檢查 |
+| `validate_schema.py` | 驗證 `system_map.yaml` 是否符合正式 `system_map.schema.json` 規格 | 已整合進 `compile_map.py` 每次編譯自動執行；也可獨立對其他 yaml 檔案手動呼叫 |
 | `adad_pre_commit.py` | Pre-Commit Hook（機械強制 5 項檢查） | 每次 `git commit` 自動執行，或手動呼叫 |
+
+> 💡 **`validate_schema.py` 想要最完整的驗證，額外安裝一次即可（不裝也能運作，見下方說明）**：
+> ```bash
+> pip install jsonschema
+> # 或者，如果你是用本專案的 pip install .／pip install -e . 安裝方式：
+> pip install .[schema]
+> ```
+> 沒安裝 `jsonschema` 時，`validate_schema.py` 會自動退回一個只實作用得到的子集的純標準庫驗證器（型別檢查、必填欄位、enum 合法值、`case` 結構），一樣能擋下常見的結構性錯誤，只是沒有完整 JSON Schema 規範那麼齊全（例如不支援 `patternProperties`）。裝了 `jsonschema` 後，`validate_schema.py` 會自動偵測並優先使用，不需要額外設定。
 
 ---
 
@@ -696,6 +705,18 @@ checkpoint_payload:
 
 ### 9. 狀態轉移硬化
 *   **改善邏輯**：`transit_state()` 從原本的 WARNING（允許非法轉移）改為 ERROR + 阻斷。非法的狀態轉移會直接返回錯誤，不再允許執行，確保狀態機的完整性。
+
+### 10. Complexity 分級與 Algorithm 步驟大綱（v1.1.0）
+*   **背景**：Module 的契約（Input/Output/Invariants）只描述「對外承諾什麼」，沒描述「內部該怎麼做」。函式邏輯一旦複雜（多分支、多步驟、有演算法），能力較弱的模型光靠契約常常一次生成邏輯就出錯，或反覆撞 Verification 失敗卻收斂不了。
+*   **改善邏輯**：新增 `Complexity: low/medium/high` 分級欄位（Plan 階段標注），以及 `Algorithm` 步驟大綱欄位（僅描述步驟，不是完整程式碼）。高複雜度節點若缺 `Algorithm`，`compile_map.py` 會印出 `[MISSING ALGORITHM]` 警告提醒補上。有了步驟大綱，Phase 2 只需要把每一小段「翻譯」成程式碼，而不必自己重新「設計」邏輯。
+
+### 11. Verification 從靜態斷言升級為可執行測試（v1.1.0）
+*   **背景**：原本的 `must_have_assertions` 只用 AST 掃描「檔案裡有沒有寫 assert」，不執行程式碼、不知道斷言內容對不對——即使邏輯整個寫反，只要塞一行 `assert True` 照樣「通過」。
+*   **改善邏輯**：`Verification` 新增 `case: {"input": {...}, "expect": ...}` 語法（嚴格 JSON），`verify_implementation.py` 會動態 import 對應函式、用 `input` 當 kwargs 實際呼叫、比對 `expect`，失敗時回傳每組 case 的 `input`/`expect`/`actual`，agent 自己就能看到具體哪裡算錯。`case` 語法寫錯會在編譯期直接失敗並指出哪個模組哪一段，不留到執行期才含糊報錯。
+
+### 12. system_map.yaml 正式 JSON Schema 化（v1.1.0）
+*   **背景**：`system_map.yaml` 的結構規範原本只活在 `parse_markdown` 的 Python 邏輯裡，是隱性規則——「產生者」跟「檢查者」是同一段程式碼，自身邏輯 bug 不會被自己抓到，其他語言/工具也無法脫離這份 Python 實作去驗證。
+*   **改善邏輯**：新增獨立的 `system_map.schema.json`（標準 JSON Schema，定義必要欄位、`state`/`complexity` 合法 enum、`verification.case` 結構），以及 `validate_schema.py` 驗證器，已整合進 `compile_map.py` 每次編譯後自動執行，不符合直接中止編譯。優先使用 `jsonschema`（若已安裝），沒裝則自動退回純標準庫實作的子集驗證器，開箱即用不強迫多裝套件。
 
 ---
 

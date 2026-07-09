@@ -299,7 +299,31 @@ def parse_markdown(md_content):
                     k, v = kv_match.group(1), kv_match.group(2).strip()
                     data["modules"][current_module][current_section][k] = v
             elif current_section in ["invariants", "verification", "todo", "checkpoint", "algorithm"]:
-                data["modules"][current_module][current_section].append(sub_content)
+                # ponytail: Verification 底下的 `case: {...}` 是可執行測試案例（JSON 語法），
+                # 跟 `must_have_assertions` 這種純字串標籤混用在同一個清單裡。
+                # 這裡在編譯期就把它解析成結構化 dict、而不是留到執行期才發現格式錯誤——
+                # 寫錯 JSON（漏引號、多逗號）現在會讓 compile_map.py 直接失敗並指出是哪個
+                # 模組、哪一行寫錯，而不是等到 verify_implementation.py 執行時才含糊報錯。
+                if current_section == "verification" and sub_content.lower().startswith("case:"):
+                    case_json_str = sub_content.split(":", 1)[1].strip()
+                    try:
+                        case_obj = json.loads(case_json_str)
+                    except Exception as e:
+                        raise ValueError(
+                            f"編譯失敗：模組 '{current_module}' 的 Verification case 不是合法 JSON：\n"
+                            f"  {sub_content}\n"
+                            f"解析錯誤：{e}\n"
+                            f"case 語法必須是嚴格 JSON（雙引號、不可有多餘逗號），"
+                            f"例如：case: {{\"input\": {{\"x\": 1}}, \"expect\": 2}}"
+                        )
+                    if not isinstance(case_obj, dict) or "input" not in case_obj or "expect" not in case_obj:
+                        raise ValueError(
+                            f"編譯失敗：模組 '{current_module}' 的 Verification case 缺少必要欄位 "
+                            f"'input'/'expect'：{sub_content}"
+                        )
+                    data["modules"][current_module][current_section].append({"case": case_obj})
+                else:
+                    data["modules"][current_module][current_section].append(sub_content)
             continue
             
         lh_match = list_header_regex.match(line_strip)
@@ -1074,8 +1098,78 @@ class ADADCore:
 
         return {"success": True, "message": "架構不變量 (Invariants) 檢查通過。"}
 
+    def _resolve_verify_target_func(self, node_name, node):
+        """
+        決定 case 驗證要動態呼叫的實際函式名稱。
+
+        慣例（對應 build_file_to_registered_functions 的 Source 語法）：
+          - Source 帶 `::func_name`（單一函式登記）→ 直接用它
+          - Source 帶 `::f1,f2,...`（多函式登記）→ 若 node_name 剛好在列表中就用
+            node_name；否則退而求其次用列表第一個。這種一個 Module 對應多個函式
+            的寫法本來就不利於單一 case 驗證（不知道該測哪一個），只是儘量给出
+            一個合理預設，不是嚴謹規則——建議這類節點改回一對一 `::` 登記。
+          - Source 沒有 `::`（整檔登記）→ 假設函式名稱與 node_name 相同，這跟
+            SKILL.md 一路以來「Module 名稱即函式名稱」的慣例一致。
+        """
+        src = node.get("source", "") or ""
+        if "::" in src:
+            _, funcs_part = src.split("::", 1)
+            funcs = [f.strip() for f in funcs_part.split(",") if f.strip()]
+            if node_name in funcs:
+                return node_name
+            if funcs:
+                return funcs[0]
+        return node_name
+
+    @staticmethod
+    def _load_function_from_file(file_path, func_name):
+        """
+        動態載入實作檔案，取出指定函式物件供 case 驗證直接呼叫。
+
+        ponytail-fix: 原本用 importlib.util.spec_from_file_location + exec_module，
+        這條路徑預設會透過 SourceFileLoader 走 __pycache__ 的 .pyc bytecode 快取
+        （依 mtime + size 判斷是否命中快取）。驗證工具的檔案常常是「短時間內反覆
+        覆寫同一個檔名」（例如 agent 修一次、驗證一次、再修一次），如果兩次覆寫
+        剛好落在同一個檔案系統 mtime 解析度秒數內、又剛好新舊內容位元組數相同
+        （這在真實程式碼修正時完全可能發生，不是刻意構造的邊界案例），.pyc 快取
+        驗證會誤判「沒變」而繼續吃舊的編譯結果——對驗證工具而言，這是最糟的失效
+        模式：明明程式碼已經改了，驗證卻悄悄比對到舊邏輯，回報「通過」但其實測的
+        不是目前這份程式碼。已用自我測試（7.5）重現過一次。
+        改用 compile()+exec() 直接從原始碼字串編譯執行，完全繞過任何 bytecode 快取，
+        保證每次呼叫都反映檔案「當下」的實際內容，也不會在專案裡留下 __pycache__。
+        """
+        import types
+        abs_path = os.path.abspath(file_path)
+        module_dir = os.path.dirname(abs_path)
+        added_path = module_dir not in sys.path
+        if added_path:
+            sys.path.insert(0, module_dir)
+        try:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                source = f.read()
+            mod_id = "_adad_verify_target_" + re.sub(r"\W", "_", os.path.basename(abs_path))
+            module = types.ModuleType(mod_id)
+            module.__file__ = abs_path
+            code = compile(source, abs_path, "exec")
+            exec(code, module.__dict__)
+        finally:
+            if added_path and module_dir in sys.path:
+                sys.path.remove(module_dir)
+        if not hasattr(module, func_name):
+            raise AttributeError(f"檔案 {file_path} 找不到函式 `{func_name}`")
+        return getattr(module, func_name)
+
     def verify_implementation(self, node_name, file_path=None):
-        """驗證指定節點的實作代碼是否符合 Verification 約束 (首波支援 must_have_assertions)"""
+        """
+        驗證指定節點的實作代碼是否符合 Verification 約束。
+
+        支援兩種規則，可以在同一個節點混用：
+          - `must_have_assertions`：原有的靜態 AST 掃描，檢查檔案裡至少有一個
+            assert 語句。只證明「有自檢」，不證明「自檢的內容是對的」。
+          - `case`：新增的動態執行驗證。實際 import 該節點對應的函式，用
+            `case.input` 當作 kwargs 呼叫它，比對回傳值是否等於 `case.expect`。
+            這才是真正驗證「邏輯對不對」，不只是「有沒有寫測試」。
+        """
         node = self.get_node(node_name)
         if not node:
             return {"success": False, "error": f"找不到節點: {node_name}"}
@@ -1085,37 +1179,86 @@ class ADADCore:
             return {"success": True, "message": "此節點未定義 verification 驗證條件，無須檢查。"}
 
         file_path = file_path or node.get("source") or f"{node_name}.py"
+        # Source 可能是 "file.py::func" 這種帶函式標註的完整字串；檔案存在性
+        # 檢查與動態載入只需要路徑部分。
+        real_file_path = file_path.split("::", 1)[0] if file_path else file_path
 
-        if not os.path.exists(file_path):
-            return {"success": False, "error": f"找不到實作檔案: {file_path}"}
+        if not os.path.exists(real_file_path):
+            return {"success": False, "error": f"找不到實作檔案: {real_file_path}"}
 
-        # 讀取並解析檔案 AST
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                tree = ast.parse(f.read(), filename=file_path)
-        except Exception as e:
-            return {"success": False, "error": f"解析檔案 {file_path} 失敗: {e}"}
+        static_error = None
 
-        # 檢查 must_have_assertions 限制
+        # --- 靜態規則：must_have_assertions（原有行為不變）---
         if "must_have_assertions" in verification:
+            try:
+                with open(real_file_path, "r", encoding="utf-8") as f:
+                    tree = ast.parse(f.read(), filename=real_file_path)
+            except Exception as e:
+                return {"success": False, "error": f"解析檔案 {real_file_path} 失敗: {e}"}
+
             class AssertVisitor(ast.NodeVisitor):
                 def __init__(self):
                     self.has_assert = False
 
                 def visit_Assert(self, node_visitor):
                     self.has_assert = True
-                    # 不用進一步遞迴
 
             visitor = AssertVisitor()
             visitor.visit(tree)
-
             if not visitor.has_assert:
-                return {
-                    "success": False,
-                    "error": f"違反驗證條件 (Verification) 約束！檔案 {file_path} 必須包含至少一個 assert 語句作為自檢斷言。"
-                }
+                static_error = (
+                    f"違反驗證條件 (Verification) 約束！檔案 {real_file_path} "
+                    f"必須包含至少一個 assert 語句作為自檢斷言。"
+                )
 
-        return {"success": True, "message": "驗證條件 (Verification) 檢查通過。"}
+        # --- 動態規則：case（實際執行函式，比對 Input → Expected Output）---
+        cases = [v["case"] for v in verification if isinstance(v, dict) and "case" in v]
+        case_results = []
+        if cases:
+            func_name = self._resolve_verify_target_func(node_name, node)
+            load_error = None
+            func = None
+            try:
+                func = self._load_function_from_file(real_file_path, func_name)
+            except Exception as e:
+                load_error = str(e)
+
+            for idx, case in enumerate(cases):
+                case_input = case.get("input", {})
+                expect = case.get("expect")
+                if load_error:
+                    case_results.append({
+                        "case_index": idx, "passed": False,
+                        "error": f"無法載入函式 `{func_name}`：{load_error}"
+                    })
+                    continue
+                try:
+                    actual = func(**case_input) if isinstance(case_input, dict) else func(case_input)
+                    case_results.append({
+                        "case_index": idx, "passed": actual == expect,
+                        "input": case_input, "expect": expect, "actual": actual
+                    })
+                except Exception as e:
+                    case_results.append({
+                        "case_index": idx, "passed": False,
+                        "input": case_input, "expect": expect,
+                        "error": f"執行時發生例外：{type(e).__name__}: {e}"
+                    })
+
+        all_cases_passed = all(c["passed"] for c in case_results)
+
+        if static_error or not all_cases_passed:
+            return {
+                "success": False,
+                "error": static_error or f"{sum(1 for c in case_results if not c['passed'])} / "
+                                         f"{len(case_results)} 個 Verification case 未通過，詳見 case_results。",
+                "case_results": case_results
+            }
+
+        result = {"success": True, "message": "驗證條件 (Verification) 檢查通過。"}
+        if case_results:
+            result["case_results"] = case_results
+        return result
 
 
 # ================= 自我單元測試 =================
@@ -1343,7 +1486,36 @@ Approved
             res_pass = core.verify_implementation("calculate_jp_tax", test_impl_file)
             assert res_pass["success"] is True
             print("  - 測試 7.3: Verification 有斷言實作順利通過成功")
-            
+
+            # 7.4 驗證 case 動態執行：邏輯正確時應通過，且回傳的 actual/expect 一致
+            core.get_node("calculate_jp_tax")["verification"] = [
+                {"case": {"input": {"x": 2}, "expect": 4}},
+                {"case": {"input": {"x": 3}, "expect": 6}},
+            ]
+            core.get_node("calculate_jp_tax")["source"] = test_impl_file
+            with open(test_impl_file, "w", encoding="utf-8") as f:
+                f.write("def calculate_jp_tax(x):\n    return x * 2\n")
+
+            res_case_pass = core.verify_implementation("calculate_jp_tax", test_impl_file)
+            assert res_case_pass["success"] is True
+            assert all(c["passed"] for c in res_case_pass["case_results"])
+            assert res_case_pass["case_results"][0]["actual"] == 4
+            print("  - 測試 7.4: Verification case 動態執行（邏輯正確）順利通過成功")
+
+            # 7.5 驗證 case 動態執行：邏輯錯誤時應阻斷，且明確回報 expect/actual 落差
+            with open(test_impl_file, "w", encoding="utf-8") as f:
+                f.write("def calculate_jp_tax(x):\n    return x + 2\n")  # 刻意寫錯（應為 x * 2）
+
+            res_case_fail = core.verify_implementation("calculate_jp_tax", test_impl_file)
+            assert res_case_fail["success"] is False
+            # case_index 0 (x=2, expect 4) 用錯誤實作 x+2 巧合算出 4，會誤判通過，
+            # 不能拿來斷言；改用 case_index 1 (x=3, expect 6) 這組沒有巧合、真正會
+            # 暴露邏輯錯誤 (3+2=5 != 6) 的案例來驗證回報內容是否正確。
+            assert res_case_fail["case_results"][1]["passed"] is False
+            assert res_case_fail["case_results"][1]["expect"] == 6
+            assert res_case_fail["case_results"][1]["actual"] == 5
+            print("  - 測試 7.5: Verification case 動態執行（邏輯錯誤）正確阻斷並回報落差成功")
+
         finally:
             if os.path.exists(test_pattern_file):
                 os.remove(test_pattern_file)
@@ -1384,6 +1556,37 @@ Approved
         assert len(mod["todo"]) == 1 and "todo1" in mod["todo"][0]
         assert len(mod["checkpoint"]) == 1 and "CP-1-001" in mod["checkpoint"][0]
         print("  - 測試 8: Markdown 解析 (parse_markdown) 成功")
+
+        # 8.5 測試 Verification 的 case JSON 語法解析
+        test_md_case_content = """##### Module: case_test_mod
+- Type: function
+- Description: 測試 case 語法解析
+- Verification:
+  - must_have_assertions
+  - case: {"input": {"x": 1}, "expect": 2}
+- Input:
+  - x: int
+- Output:
+  - result: int
+"""
+        parsed_case = parse_markdown(test_md_case_content)
+        v = parsed_case["modules"]["case_test_mod"]["verification"]
+        assert v[0] == "must_have_assertions"
+        assert isinstance(v[1], dict) and v[1]["case"] == {"input": {"x": 1}, "expect": 2}
+        print("  - 測試 8.5a: Verification case JSON 語法正確解析成功")
+
+        test_md_bad_case = """##### Module: bad_case_mod
+- Type: function
+- Description: 測試非法 case JSON 應該編譯失敗
+- Verification:
+  - case: {input: 1, expect: 2}
+"""
+        try:
+            parse_markdown(test_md_bad_case)
+            assert False, "非法 JSON 的 case 應該要拋出例外"
+        except ValueError as e:
+            assert "不是合法 JSON" in str(e)
+        print("  - 測試 8.5b: Verification case 非法 JSON 正確阻斷編譯成功")
 
         # 9. 測試模組名稱可正確保留連字號（module_regex 修正的回歸測試）
         # 修正前：\w+ 不含 '-'，"my-tax-calc" 會被靜默截斷成 "my"，且不報錯。

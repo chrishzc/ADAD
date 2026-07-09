@@ -4,13 +4,31 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adad-cli"
-version = "1.0.0"
+# ponytail-fix: 原本這裡跟 adad_cli/__init__.py 的 __version__ 是兩個完全獨立、
+# 各自手動維護的版本號——改一邊、忘了改另一邊，pyproject.toml 寫的版本號跟
+# `adad --version` / `adad upgrade` 實際印出來的完全對不上（使用者回報過這個問題：
+# 這裡改成 1.1.0，但套件安裝後 `adad upgrade` 依然顯示 1.0.0，因為那段程式碼讀的
+# 是 adad_cli.__version__，根本沒看這個檔案）。
+# 改成 dynamic + [tool.setuptools.dynamic]，讓 pyproject.toml 直接從
+# adad_cli/__init__.py 的 __version__ 讀值，兩邊永遠保證一致——以後只需要改
+# adad_cli/__init__.py 這一個變數，這裡跟 build 出來的套件 metadata 會自動同步。
+dynamic = ["version"]
 description = "ADAD (Architecture-Driven Agentic Development) 開發規範與工具鏈 CLI"
 requires-python = ">=3.9"
 dependencies = [
     "pyyaml>=6.0",
     "click>=8.0",
 ]
+
+# ponytail: system_map.yaml 的正式 JSON Schema 驗證（validate_schema.py）優先使用
+# jsonschema（功能最完整、業界標準實作）。刻意不放進主要 dependencies——沒裝的話
+# validate_schema.py 會自動退回一個只實作用得到的子集的純標準庫驗證器，一樣能擋下
+# 常見的結構性錯誤（非法 enum、缺欄位、型別錯），所以不強迫每個使用者都多裝一個套件。
+# 想要最嚴謹的驗證（完整支援 $ref、patternProperties 等進階語法），額外執行：
+#   pip install adad-cli[schema]
+# 或直接 pip install jsonschema 也可以，效果相同。
+[project.optional-dependencies]
+schema = ["jsonschema>=4.0"]
 
 # ponytail: 這一段就是原本缺少的關鍵。
 # 有了 [project.scripts]，pip/pipx 安裝後會在 PATH 上產生一個
@@ -21,6 +39,11 @@ adad = "adad_cli.cli:main"
 
 [tool.setuptools]
 packages = ["adad_cli"]
+
+# 對應上面 [project] 的 dynamic = ["version"]：版本號的唯一事實來源是
+# adad_cli/__init__.py 的 __version__，這裡只是告訴 setuptools 去哪裡讀。
+[tool.setuptools.dynamic]
+version = { attr = "adad_cli.__version__" }
 
 # 把 resources/ 底下所有範本、skill 腳本都當成套件資料一起打包進 wheel，
 # 這樣 importlib.resources 才能在「任何安裝位置」找到它們，

@@ -217,6 +217,9 @@ def init_project(agents=None) -> None:
         shutil.copyfile(tpl / "system_map.md", "system_map.md")
         print("  - 建立 system_map.md 初始範本成功")
 
+        # 2.1 建立正式 JSON Schema（system_map.yaml 的獨立結構規格，見 validate_schema.py）
+        _copy_file_if_absent(tpl / "system_map.schema.json", "system_map.schema.json")
+
         # 自動執行編譯以產生 system_map.yaml (IR)，使用剛複製進本專案的 compile_map.py
         compile_script = os.path.join(local_skill_dir, "scripts", "compile_map.py")
         try:
@@ -227,6 +230,9 @@ def init_project(agents=None) -> None:
             print(f"  - [警告] 自動編譯架構源檔案失敗: {e}")
     else:
         print("  - system_map.md 已存在，跳過")
+        # 既有專案升級 adad-cli 版本重跑 init 時，也該補上這份新加入的 schema 檔案，
+        # 不能只靠「全新專案」那個分支，否則舊專案永遠拿不到。
+        _copy_file_if_absent(tpl / "system_map.schema.json", "system_map.schema.json")
 
     # 3. 建立 Docker 相關範本與 .gitignore
     _copy_file_if_absent(tpl / "gitignore", ".gitignore")
