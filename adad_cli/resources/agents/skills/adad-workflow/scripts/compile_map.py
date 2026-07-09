@@ -95,6 +95,23 @@ def main():
             print(f"   - {o}")
         print("   請確認是否忘記在對應的父地圖加上 <!-- include ... --> ，否則這些內容不會被編譯進架構。\n")
 
+    # 高複雜度節點缺 Algorithm 偵測（不阻斷編譯，僅提示）：
+    # Complexity: high 的意義是「這個函式光靠 Input/Output/Invariants 契約，
+    # 能力較弱的模型大概率一次生成不對」，Algorithm 步驟大綱就是為了補這個縫。
+    # 如果分級成 high 卻沒填 Algorithm，等於白標記，Phase 2 拿到的 context
+    # 跟 low complexity 的節點沒有實質差異——這裡只給警告、不阻斷編譯，因為
+    # Plan 階段本來就可能分批填寫，先讓人/Agent 看得到還沒補的節點即可。
+    high_complexity_missing_algorithm = [
+        name for name, info in core.data["modules"].items()
+        if info.get("complexity") == "high" and not info.get("algorithm")
+    ]
+    if high_complexity_missing_algorithm:
+        print("\n⚠️  [MISSING ALGORITHM] 以下模組標記為 Complexity: high，但尚未填寫 Algorithm 步驟大綱：")
+        for name in high_complexity_missing_algorithm:
+            print(f"   - {name}")
+        print("   高複雜度節點若缺乏步驟大綱，Phase 2 實作階段容易一次生成邏輯出錯，"
+              "建議在 system_map.md 補上 Algorithm 欄位後再進入原子生成。\n")
+
     # 模組落點偵測（不阻斷編譯，僅提示；commit 前會由 adad_pre_commit.py 硬性阻擋）
     from adad_core import find_misplaced_modules
     misplaced = find_misplaced_modules(core.data)
@@ -179,6 +196,7 @@ def main():
         "orphan_maps": orphans,
         "misplaced_modules": misplaced,
         "untracked_symbols": untracked,
+        "high_complexity_missing_algorithm": high_complexity_missing_algorithm,
         "precommit_hook_installed": hook_status["hook_installed"]
     }, ensure_ascii=False, indent=2))
     sys.exit(0)

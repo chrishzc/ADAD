@@ -253,7 +253,15 @@ def parse_markdown(md_content):
                 "verification": [],
                 "decisions": [],
                 "todo": [],
-                "checkpoint": []
+                "checkpoint": [],
+                # ponytail: Complexity/Algorithm 兩個欄位是為了解決「Module 契約
+                # (Input/Output/Invariants) 只描述對外承諾，卻沒描述內部該怎麼做」
+                # 這個縫隙——複雜函式光靠契約，能力較弱的模型常常一次生成就邏輯出錯，
+                # 或反覆撞 Verification 失敗卻收斂不了。Complexity 讓 Plan 階段先分級，
+                # Algorithm 讓高複雜度節點在 Plan 階段就先拆好步驟大綱，實作階段只需要
+                # 「翻譯」而不是「設計」。
+                "complexity": "low",
+                "algorithm": []
             }
             current_section = None
             continue
@@ -290,7 +298,7 @@ def parse_markdown(md_content):
                 if kv_match:
                     k, v = kv_match.group(1), kv_match.group(2).strip()
                     data["modules"][current_module][current_section][k] = v
-            elif current_section in ["invariants", "verification", "todo", "checkpoint"]:
+            elif current_section in ["invariants", "verification", "todo", "checkpoint", "algorithm"]:
                 data["modules"][current_module][current_section].append(sub_content)
             continue
             
@@ -312,6 +320,16 @@ def parse_markdown(md_content):
                 data["modules"][current_module]["source"] = val
             elif key == "preferred_pattern":
                 data["modules"][current_module]["preferred_pattern"] = val
+            elif key == "complexity":
+                # ponytail: 寫死允許值而不是照單全收——如果之後打錯字（例如 "hgih"），
+                # 靜默存成一個沒人檢查的字串，會讓依賴這個欄位的檢查全部失效卻毫無警告。
+                # 這裡選擇「正規化成合法值，否則退回 low 並留在 compile_map.py 的
+                # 警告清單裡」而不是直接讓編譯失敗，因為 Complexity 目前只是輔助分級、
+                # 不是像 Type 那樣的必要欄位，還不到值得阻斷編譯的嚴重程度。
+                normalized = val.strip().lower()
+                data["modules"][current_module]["complexity"] = (
+                    normalized if normalized in ("low", "medium", "high") else "low"
+                )
             elif key == "dependencies":
                 if val.startswith("[") and val.endswith("]"):
                     items = [x.strip() for x in val[1:-1].split(",") if x.strip()]
@@ -662,7 +680,18 @@ class ADADCore:
                 "output": node.get("output", {}),
                 "dependencies": node.get("dependencies", []),
                 "description": node.get("description", ""),
-                "map_file": node.get("map_file", "system_map.md")
+                "map_file": node.get("map_file", "system_map.md"),
+                # ponytail-fix: SKILL.md 一直宣稱 read_context 會回傳 Invariants，
+                # 但原本的 target_node dict 從沒放進去——Phase 2 的 agent 實際上
+                # 從來沒拿到這兩項，只能等 check_normalization/pre-commit 事後才發現
+                # 違反了 deny_imports 之類的規則。一併補上，讓契約在動筆「之前」
+                # 就完整，而不是靠事後檢查才發現。
+                "invariants": node.get("invariants", []),
+                "verification": node.get("verification", []),
+                # ponytail: Complexity/Algorithm——複雜函式的步驟大綱，讓實作階段
+                # 只需要「翻譯」步驟而不是重新「設計」邏輯，詳見 parse_markdown 的說明。
+                "complexity": node.get("complexity", "low"),
+                "algorithm": node.get("algorithm", [])
             },
             "dependency_interfaces": {}
         }
