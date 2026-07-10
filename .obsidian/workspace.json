@@ -41,12 +41,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "adad_state_machine.md",
+                "file": "adad_workflow_flowchart.md",
                 "mode": "preview",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "adad_state_machine"
+              "title": "adad_workflow_flowchart"
             }
           }
         ],
@@ -214,8 +214,8 @@
   },
   "active": "88bbd8acbff2bd5e",
   "lastOpenFiles": [
-    "adad_workflow_flowchart.md",
     "adad_state_machine.md",
+    "adad_workflow_flowchart.md",
     "README.md",
     "docs/README.md",
     "system_map.md",

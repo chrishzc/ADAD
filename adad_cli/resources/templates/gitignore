@@ -6,6 +6,9 @@ __pycache__/
 *.pyd
 .env
 
+# ADAD Task 快照（本機施工狀態，不進版控）
+.agents/tasks/
+
 # 打包與壓縮檔
 *.zip
 *.tar.gz

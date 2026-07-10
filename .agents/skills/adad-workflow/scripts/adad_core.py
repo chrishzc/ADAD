@@ -10,6 +10,8 @@ import ast
 import re
 import shutil
 import math
+import hashlib
+import datetime
 from collections import Counter
 
 # 自動安裝 PyYAML 依賴以確保跨裝置開箱即用
@@ -27,6 +29,21 @@ except ImportError:
         sys.exit(1)
 
 MAP_FILE = "system_map.yaml"
+TASK_DIR = os.path.join(".agents", "tasks")
+
+# ponytail: 原本 RULE-02 允許修改的狀態集合，在 adad_core.py / adad_pre_commit.py /
+# adad_pretooluse_gate.py 三處各自寫了一份一模一樣的 {"planned","dirty","validated","draft"}，
+# 改一次要記得改三個地方。現在統一定義在這裡，其他檔案改成 import 這個常數。
+ALLOWED_EDIT_STATES = {"planned", "dirty", "validated", "draft"}
+
+# Task.status 的合法值與其對「是否允許繼續編輯對應程式碼」的意義：
+#   assigned/in_progress → 任務開放中，允許編輯
+#   submitted            → 已提交待人類審查，凍結、不允許再編輯（等 approve/reject）
+#   approved             → 本輪任務已完成並結案，若要再改，需重新 generate_task
+#   rejected             → 內部過渡值，task_reject() 執行完會立刻改回 assigned，
+#                           理論上不會被外部觀察到停留在這個值，保留僅供 history 記錄語意
+TASK_EDITABLE_STATUSES = {"assigned", "in_progress"}
+
 
 # ponytail-fix: 原正則 [^\s-]+ 會排除連字號，導致 "user-service.md"、
 # "adad-workflow/sub.md" 這類含 '-' 的路徑完全比對失敗、被靜默忽略。
@@ -747,7 +764,13 @@ class ADADCore:
             if dep_node:
                 context["dependency_interfaces"][dep] = {
                     "input": dep_node.get("input", {}),
-                    "output": dep_node.get("output", {})
+                    "output": dep_node.get("output", {}),
+                    # ponytail-fix: 原本這裡只帶 input/output，代表下游模組完全看不到
+                    # 上游依賴「保證」了什麼行為（例如 deny_imports 以外的其他保證，
+                    # 之後擴充 invariants 詞彙後會更明顯）。只給型別、不給保證，
+                    # 下游模型要嘛自己重複防禦性檢查，要嘛賭一把假設它成立——
+                    # 兩種都不是「好任務」該有的樣子，一併補上。
+                    "invariants": dep_node.get("invariants", []),
                 }
             else:
                 context["dependency_interfaces"][dep] = "未定義"
@@ -956,6 +979,261 @@ class ADADCore:
 
         node["state"] = next_state
         return {"success": True, "from": curr_state, "to": next_state}
+
+    # ------------------------------------------------------------------
+    # Task 快照機制
+    #
+    # 背景：Module 是「架構長期存在的事實」，Task 是「某個時間點針對這個
+    # Module 正式核發的一份施工指令」，兩者分開之後，coding 端只讀取 Task
+    # 快照檔（.agents/tasks/<node>.task.json），不需要（未來甚至可以不被允許）
+    # 直接存取 system_map.yaml。這樣設計的好處是「有沒有先核發任務、有沒有
+    # 真的等到人類審查」變成可以單純從檔案系統狀態檢查的事實，不需要解析
+    # 任何 agent 平台特有的 transcript 格式，天生跨平台。
+    # ------------------------------------------------------------------
+
+    def _task_path(self, node_name):
+        return os.path.join(TASK_DIR, f"{node_name}.task.json")
+
+    def _node_source_hash(self, node_name):
+        """對節點目前在 system_map.yaml 裡的完整內容算 hash，用來偵測任務是否過期。"""
+        node = self.get_node(node_name)
+        if node is None:
+            return None
+        canonical = json.dumps(node, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def load_task(self, node_name):
+        """讀取 Task 快照檔，不存在或解析失敗回傳 None（呼叫端自行判斷後續行為）。"""
+        path = self._task_path(node_name)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def _save_task(self, node_name, task_data):
+        os.makedirs(TASK_DIR, exist_ok=True)
+        path = self._task_path(node_name)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(task_data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+
+    def task_is_expired(self, node_name, task_data=None):
+        """任務快照的 source_hash 是否已經對不上目前的 system_map.yaml。"""
+        task_data = task_data if task_data is not None else self.load_task(node_name)
+        if not task_data:
+            return False  # 沒有任務檔，不算「過期」，是另一種情況（不存在）
+        current_hash = self._node_source_hash(node_name)
+        return current_hash is not None and task_data.get("source_hash") != current_hash
+
+    def generate_task(self, node_name, force=False):
+        """
+        匯出一份 Task 快照給 coding 端讀取。
+
+        只有在模組狀態允許修改、且架構未過期（RULE-01）的前提下才能核發，
+        把「這個模組現在能不能動」的判斷收斂到核發這一刻做一次，下游
+        （PreToolUse gate / pre-commit）之後只需要檢查 Task.status，
+        不需要重新問一次模組狀態——單一事實來源。
+        """
+        node = self.get_node(node_name)
+        if not node:
+            return {"success": False, "error": f"找不到節點: {node_name}"}
+
+        state = node.get("state", "unknown")
+        if state not in ALLOWED_EDIT_STATES:
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 模組 `{node_name}` 目前狀態為 `{state}`，"
+                         f"只有 {sorted(ALLOWED_EDIT_STATES)} 狀態才允許核發任務。"
+            }
+
+        validity = self.check_ir_validity()
+        if not validity["valid"]:
+            return {"success": False, "error": validity["error"]}
+
+        existing = self.load_task(node_name)
+        if existing and not force and existing.get("status") in TASK_EDITABLE_STATUSES.union({"submitted"}):
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 模組 `{node_name}` 已有一份進行中的任務"
+                         f"（status={existing.get('status')}，task_id={existing.get('task_id')}），"
+                         f"尚未結案（approved/rejected）不能重新核發。若確定要作廢重開，加上 force=True。"
+            }
+
+        source_hash = self._node_source_hash(node_name)
+        version = self.data.get("version", 1)
+        task_id = f"{node_name}@v{version}@{source_hash[:6]}"
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        task_data = {
+            "task_id": task_id,
+            "node_name": node_name,
+            "exported_at": now,
+            "system_map_version": version,
+            "source_hash": source_hash,
+            "status": "assigned",
+            "history": [{"event": "generated", "at": now}],
+            "spec": self.read_context(node_name),
+        }
+        self._save_task(node_name, task_data)
+        return {"success": True, "task_id": task_id, "path": self._task_path(node_name)}
+
+    def task_submit(self, node_name, file_path=None):
+        """
+        coding 端「我做完了、本地檢查都過了」的自我宣告——這一步允許 Agent
+        自己觸發，因為這只代表「準備好給人審」，不是核准，跟 task_approve
+        / task_reject 那種需要人類親自介入的終局決策不同。
+
+        會在這裡就地重新跑一次 invariants + verification 檢查，確保
+        「submitted」這個狀態本身是有意義的保證，不是 Agent 說了算。
+        """
+        task_data = self.load_task(node_name)
+        if not task_data:
+            return {"success": False, "error": f"模組 `{node_name}` 尚未核發任務，請先執行 generate_task。"}
+
+        if task_data.get("status") not in TASK_EDITABLE_STATUSES:
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 任務目前狀態為 `{task_data.get('status')}`，"
+                         f"只有 {sorted(TASK_EDITABLE_STATUSES)} 狀態才能提交。"
+            }
+
+        if self.task_is_expired(node_name, task_data):
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 架構自從這份任務核發後已被更動（source_hash 不符），"
+                         f"請重新執行 generate_task 取得最新快照後再重做。"
+            }
+
+        inv_res = self.check_invariants(node_name, file_path)
+        if not inv_res.get("success"):
+            return {"success": False, "error": f"Invariants 檢查未通過，不能提交: {inv_res.get('error')}"}
+
+        ver_res = self.verify_implementation(node_name, file_path)
+        if not ver_res.get("success"):
+            return {"success": False, "error": f"Verification 檢查未通過，不能提交: {ver_res.get('error')}"}
+
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        task_data["status"] = "submitted"
+        task_data.setdefault("history", []).append({"event": "submitted", "at": now})
+        self._save_task(node_name, task_data)
+        return {"success": True, "task_id": task_data["task_id"], "status": "submitted"}
+
+    def _advance_module_to_validated(self, node_name):
+        """approve 通過後，把模組狀態推進到 validated，處理 draft 需要先經過
+        pending_review 這個中繼站的兩段式轉移；已經是 validated 就不動作。"""
+        node = self.get_node(node_name)
+        if not node:
+            return
+        state = node.get("state")
+        if state == "validated":
+            return
+        if state == "draft":
+            self.transit_state(node_name, "pending_review")
+            state = "pending_review"
+        if state in ("pending_review", "planned", "dirty"):
+            self.transit_state(node_name, "validated")
+
+    def task_approve(self, node_name, confirm_suffix):
+        """
+        人類核准 CP-2。呼叫端（adad_task.py）必須先確認是真人在互動終端機
+        執行這個指令（sys.stdin.isatty()），這裡只負責核對核准依據字串是否
+        正確——要求輸入 task_id 的後 6 碼，確保不是隨手打的空白確認。
+        """
+        task_data = self.load_task(node_name)
+        if not task_data:
+            return {"success": False, "error": f"模組 `{node_name}` 沒有待審的任務。"}
+        if task_data.get("status") != "submitted":
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 任務狀態為 `{task_data.get('status')}`，只有 `submitted` 才能核准。"
+            }
+        expected_suffix = task_data.get("task_id", "")[-6:]
+        if confirm_suffix.strip() != expected_suffix:
+            return {"success": False, "error": "核准依據不符（task_id 後 6 碼對不上），未核准。"}
+
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        task_data["status"] = "approved"
+        task_data.setdefault("history", []).append({"event": "approved", "at": now})
+        self._save_task(node_name, task_data)
+        self._advance_module_to_validated(node_name)
+        self.save()
+        return {"success": True, "task_id": task_data["task_id"], "status": "approved"}
+
+    def task_reject(self, node_name, reason):
+        """人類駁回 CP-2，任務退回 assigned 讓 coding 端重做，駁回原因留在
+        history 裡——下次 coding 端讀 Task 快照時看得到這次為什麼被打回。"""
+        task_data = self.load_task(node_name)
+        if not task_data:
+            return {"success": False, "error": f"模組 `{node_name}` 沒有待審的任務。"}
+        if task_data.get("status") != "submitted":
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 任務狀態為 `{task_data.get('status')}`，只有 `submitted` 才能駁回。"
+            }
+
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        task_data["status"] = "assigned"
+        task_data.setdefault("history", []).append({"event": "rejected", "at": now, "reason": reason})
+        self._save_task(node_name, task_data)
+        return {"success": True, "task_id": task_data["task_id"], "status": "assigned", "reason": reason}
+
+    def check_task_gate(self, rel_path):
+        """
+        給 adad_pretooluse_gate.py / adad_pre_commit.py 共用的政策判斷：
+        這個檔案現在能不能被寫入？回傳 {"allow": bool, "reason": str, "node_name": str|None}。
+
+        漸進式規則（避免對還沒採用 Task 流程的既有專案造成 breaking change）：
+          - 檔案沒對應到任何模組 → allow（不在 ADAD 追蹤範圍）
+          - 這個模組從來沒核發過任何 Task（.task.json 不存在）→ allow，但 reason
+            會帶提醒訊息，呼叫端可以選擇印出 WARNING（不阻斷）
+          - 有 Task 快照但已過期（架構被改過）→ 阻擋，要求重新 generate_task
+          - 有 Task 快照且 status 屬於「開放編輯」集合 → allow
+          - 其餘狀態（submitted / approved）→ 阻擋
+        """
+        src_map = {}
+        for name, info in (self.data.get("modules", {}) or {}).items():
+            src = (info or {}).get("source", "")
+            if src:
+                src_map[src.split("::", 1)[0].strip().replace("\\", "/")] = name
+
+        node_name = src_map.get(rel_path.replace("\\", "/"))
+        if node_name is None:
+            return {"allow": True, "reason": "檔案未對應任何已登記模組", "node_name": None}
+
+        task_data = self.load_task(node_name)
+        if task_data is None:
+            return {
+                "allow": True,
+                "node_name": node_name,
+                "reason": f"模組 `{node_name}` 尚未核發過任何 Task 快照，建議先執行 "
+                          f"generate_task.py {node_name}（目前為過渡期，暫不阻斷，僅提醒）。",
+                "soft_warning": True,
+            }
+
+        if self.task_is_expired(node_name, task_data):
+            return {
+                "allow": False,
+                "node_name": node_name,
+                "reason": f"模組 `{node_name}` 的 Task 快照已過期（架構自核發後被更動），"
+                          f"請重新執行 generate_task.py {node_name}。",
+            }
+
+        status = task_data.get("status")
+        if status in TASK_EDITABLE_STATUSES:
+            return {"allow": True, "node_name": node_name, "reason": f"Task 狀態為 `{status}`，允許編輯"}
+
+        return {
+            "allow": False,
+            "node_name": node_name,
+            "reason": f"模組 `{node_name}` 的 Task 狀態為 `{status}`，不允許編輯。"
+                      + ("任務待人類審查中，請等候 CP-2 核准或駁回。" if status == "submitted"
+                         else "此輪任務已核准結案，如需再修改請重新執行 generate_task.py。"),
+        }
+
+
 
     def get_fan_in_map(self):
         """回傳 {module_name: fan_in_count}，fan-in = 有多少模組依賴此節點"""

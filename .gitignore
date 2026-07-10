@@ -40,11 +40,16 @@ htmlcov/
 .env
 .env.*
 *.local
-.obsidian/
 
 # === 打包與壓縮檔 ===
 *.zip
 *.tar.gz
+
+# === ADAD Task 快照（施工狀態，屬於本機/session 暫存，不進版控） ===
+# 這是 generate_task.py 核發的凍結快照，記錄「這一輪任務做到哪」，
+# 跟架構本身（system_map.md/.yaml，需要進版控）是不同性質的東西——
+# 類似 PR 的審查狀態不會存進 repo 本身，同樣道理。
+.agents/tasks/
 
 # === 系統檔案 ===
 .DS_Store

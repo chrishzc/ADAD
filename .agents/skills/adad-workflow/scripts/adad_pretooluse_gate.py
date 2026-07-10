@@ -8,9 +8,17 @@ ADAD PreToolUse Gate — 在 Agent 真正呼叫 Edit/Write 之前擋下違規修
   才在 commit 時被擋下來，回頭又要重新生成一次——等於白花一輪 token。
 
   這支腳本改掛在 Claude Code 的 PreToolUse hook 上，在 Edit / Write / MultiEdit
-  工具呼叫「執行前」就攔截：只要目標檔案對應的模組狀態不允許改代碼，
+  工具呼叫「執行前」就攔截：只要目標檔案對應的 Task 快照狀態不允許編輯，
   直接 exit 2 擋下這次工具呼叫，Agent 連一行程式碼都還沒寫出來就會收到明確的
   阻擋原因，不會浪費任何 token 在會被丟棄的程式碼上。
+
+  ponytail (Task 機制重構)：原本這裡直接查模組的 state（RULE-02），現在改成
+  呼叫 adad_core.ADADCore.check_task_gate()，判斷依據是 .agents/tasks/<node>.task.json
+  這份 Task 快照的 status，而不是 system_map.yaml 裡的模組狀態。這個改動是為了
+  讓「有沒有先取得核准才動手」這件事變成單純檢查檔案系統就能判斷的事實，
+  不需要解析 Claude Code 特有的 transcript 格式——同一份 check_task_gate()
+  邏輯之後也能被 Codex、或自建的 agent harness 直接 import 重用，不綁定在
+  單一平台的 hook API 上。
 
   這是硬規則，不是 agent 自律：即使 agent 在推理時想跳過 read_context.py
   直接動手改，工具呼叫本身會被 Claude Code 攔截，agent 無法繞過
@@ -111,8 +119,6 @@ def _is_stale(root):
     return md_mtime > yaml_mtime + 1
 
 
-ALLOWED_STATES = {"planned", "dirty", "validated", "draft"}
-
 
 def main():
     try:
@@ -170,20 +176,36 @@ def main():
     if mod_name is None:
         sys.exit(0)  # 這個檔案沒有對應到任何已登記模組，不在 ADAD 追蹤範圍內
 
-    state = (modules.get(mod_name, {}) or {}).get("state", "unknown")
-    if state not in ALLOWED_STATES:
+    # --- 護欄 3：Task 狀態門禁（取代原本直接查 RULE-02 模組 state） ---
+    # ponytail: 改成呼叫 adad_core.ADADCore.check_task_gate，這是跟平台無關的
+    # 純政策邏輯（只讀 .agents/tasks/<node>.task.json，不解析任何 agent 平台
+    # 特有的 transcript 格式），Claude Code / Codex / 自建 agent 都能重用同一份
+    # 判斷邏輯，差別只在「誰負責在動手前呼叫它」。
+    try:
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from adad_core import ADADCore
+        cwd_before = os.getcwd()
+        os.chdir(root)
+        try:
+            core = ADADCore(check_validity=False)  # staleness 已在護欄 2 檢查過
+            gate = core.check_task_gate(rel_path)
+        finally:
+            os.chdir(cwd_before)
+    except Exception:
+        sys.exit(0)  # Task 機制本身故障不應該讓正常開發卡死，退回不阻擋
+
+    if gate.get("soft_warning"):
+        # 過渡期：模組還沒開始用 Task 流程，只提醒不阻擋，避免破壞既有專案。
+        print(f"⚠️  [ADAD] {gate.get('reason')}", file=sys.stderr)
+        sys.exit(0)
+
+    if not gate.get("allow", True):
         print(
-            f"🚫 [ADAD RULE-02] 檔案 `{rel_path}` 對應模組 `{mod_name}`，"
-            f"目前狀態為 `{state}`。\n"
-            f"只有狀態為 {sorted(ALLOWED_STATES)} 的模組才允許修改商業邏輯代碼。\n\n"
-            f"在動筆之前，請先擇一處理：\n"
-            f"  1. 若這是既有規格內的修改：先確認狀態機是否卡在 `pending_review` 或 `deployed`，\n"
-            f"     需要人類先核准並執行 transit_state.py 轉為 `dirty` 後才能改。\n"
-            f"  2. 若這代表架構規格本身需要變動（少了引數、要新增欄位等）：\n"
-            f"     依 RULE-04 停止生成程式碼，改為輸出 Schema Update Request，\n"
-            f"     等待人類審查（Checkpoint 3），核准後才會被標記為 dirty。\n"
-            f"  3. 若你還不確定目前上下文，先執行：\n"
-            f"     python .agents/skills/adad-workflow/scripts/read_context.py {mod_name}",
+            f"🚫 [ADAD TASK GATE] {gate.get('reason')}\n\n"
+            f"若還不確定目前上下文，可先執行：\n"
+            f"  python .agents/skills/adad-workflow/scripts/read_context.py {mod_name}",
             file=sys.stderr,
         )
         sys.exit(2)

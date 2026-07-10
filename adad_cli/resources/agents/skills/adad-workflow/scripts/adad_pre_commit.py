@@ -129,6 +129,50 @@ def check_state_gate(staged_files, modules, src_map):
     return errors
 
 
+def check_task_gate_staged(staged_files, src_map, map_path=None):
+    """
+    Task 狀態門禁：commit 時再檢查一次 .agents/tasks/<node>.task.json 的 status。
+
+    這是 RULE-02 的補強，不是取代——RULE-02 管的是模組長期生命週期（防止改動
+    已 deployed 的模組），Task Gate 管的是這一輪施工指令有沒有還在「開放編輯」
+    的狀態。兩者分開檢查，任一項不過都會擋下 commit。
+
+    ponytail: 這裡刻意做成 pre-commit 層級的第二道防線，是因為 PreToolUse hook
+    這種「動手前攔截」的機制不是每個 agent 平台都支援到位——例如 Codex CLI 目前
+    的 PreToolUse hook 只對 Bash 工具呼叫觸發，對它自己原生的檔案編輯工具
+    （apply_patch）完全不會觸發。不管是哪個平台、用什麼工具改的檔案，只要最後
+    真的要 commit，這裡都逃不掉，把防線退到所有平台都繞不過去的關卡上。
+
+    map_path 傳入 staged/index 版本的暫存檔路徑（呼叫端已經為其他檢查產生過），
+    跟其餘檢查一致地以「即將被 commit 的內容」為準，而不是工作目錄上可能還沒
+    git add 的版本。
+    """
+    errors = []
+    warnings = []
+    try:
+        from adad_core import ADADCore, MAP_FILE
+        core = ADADCore(map_path=map_path or MAP_FILE, check_validity=False)  # staleness 已由 check_staleness() 檢查過
+    except Exception:
+        return errors, warnings  # Task 機制本身故障不應該讓 commit 整個卡死
+
+    checked_nodes = set()
+    for f in staged_files:
+        f_norm = f.replace("\\", "/")
+        mod_name = src_map.get(f_norm)
+        if mod_name is None or mod_name in checked_nodes:
+            continue
+        checked_nodes.add(mod_name)
+        try:
+            gate = core.check_task_gate(f_norm)
+        except Exception:
+            continue
+        if gate.get("soft_warning"):
+            warnings.append(gate.get("reason"))
+        elif not gate.get("allow", True):
+            errors.append(f"[TASK GATE] {gate.get('reason')}")
+    return errors, warnings
+
+
 def check_atomic_scope(staged_files, src_map):
     """RULE-03: 計算涉及的不同模組數量，>1 發出 WARNING"""
     touched_modules = set()
@@ -378,6 +422,9 @@ def main():
         if src_map:
             errors.extend(check_state_gate(staged_all, modules, src_map))
             warnings.extend(check_atomic_scope(staged_all, src_map))
+            task_errors, task_warnings = check_task_gate_staged(staged_all, src_map, map_path=tmp_map_path)
+            errors.extend(task_errors)
+            warnings.extend(task_warnings)
         if py_files and src_map and tmp_map_path:
             errors.extend(check_invariants_staged(py_files, modules, src_map, tmp_map_path))
             errors.extend(check_verification_staged(py_files, modules, src_map, tmp_map_path))
