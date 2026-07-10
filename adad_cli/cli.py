@@ -8,7 +8,7 @@ ADAD CLI 入口點。
 
 multi-agent 支援 (2026 新增):
 `adad init` / `adad global install` 現在支援選擇要對哪些 agent
-（antigravity / claude）設定 ADAD。不加 --agents 參數時會跳出互動選單
+（antigravity / claude / codex）設定 ADAD。不加 --agents 參數時會跳出互動選單
 詢問；加了就直接照參數指定的清單執行，不會再問（方便在 CI / 腳本裡
 非互動呼叫）。選擇結果會存進 .agents/.adad-agents.json，之後
 `adad upgrade` 會自動讀這份設定，不需要每次都重新詢問一次。
@@ -61,7 +61,7 @@ def main():
 @click.option(
     "--agents",
     default=None,
-    help="逗號分隔要設定的 agent，如 antigravity,claude；省略則跳出互動選單詢問。",
+    help="逗號分隔要設定的 agent，如 antigravity,claude,codex；省略則跳出互動選單詢問。",
 )
 def cmd_init(agents):
     """在目前專案目錄初始化 ADAD (checkpoints、system_map.md、venv、pre-commit hook 等)。"""
@@ -113,14 +113,14 @@ def cmd_upgrade(force_agents_md):
 
 @main.group("global")
 def cmd_global():
-    """管理各 Agent（Antigravity 2.0 / Claude Code 等）的全域 ADAD Skills 與規則。"""
+    """管理各 Agent（Antigravity 2.0 / Claude Code / Codex 等）的全域 ADAD Skills 與規則。"""
 
 
 @cmd_global.command("install")
 @click.option(
     "--agents",
     default=None,
-    help="逗號分隔要安裝的 agent，如 antigravity,claude；省略則跳出互動選單詢問。",
+    help="逗號分隔要安裝的 agent，如 antigravity,claude,codex；省略則跳出互動選單詢問。",
 )
 def cmd_global_install(agents):
     """將 ADAD 部署至全域設定，供所有專案共用。"""
@@ -132,7 +132,7 @@ def cmd_global_install(agents):
 @click.option(
     "--agents",
     default=None,
-    help="逗號分隔要卸載的 agent，如 antigravity,claude；省略則卸載全部已知 agent。",
+    help="逗號分隔要卸載的 agent，如 antigravity,claude,codex；省略則卸載全部已知 agent。",
 )
 def cmd_global_uninstall(agents):
     """自全域設定移除 ADAD 客製化與規則。"""

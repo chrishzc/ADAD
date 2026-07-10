@@ -40,6 +40,7 @@ htmlcov/
 .env
 .env.*
 *.local
+.obsidian/
 
 # === 打包與壓縮檔 ===
 *.zip

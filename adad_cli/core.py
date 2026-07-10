@@ -19,9 +19,17 @@ ponytail-fix (CLI 化重構):
 
 multi-agent 支援 (2026 新增):
 ADAD 原本只認 Antigravity（Gemini）這一種 agent。現在 `adad init` /
-`adad global install` 可以互動選擇要對哪些 agent（antigravity / claude）
-設定，選擇結果會存進 .agents/.adad-agents.json，之後 `adad upgrade`
+`adad global install` 可以互動選擇要對哪些 agent（antigravity / claude /
+codex）設定，選擇結果會存進 .agents/.adad-agents.json，之後 `adad upgrade`
 直接讀這個檔案就知道要同步哪些 agent 的檔案，不必每次都重問一次。
+
+Codex 支援備註：Codex CLI / 桌面 App 原生就會掃描 `.agents/skills/`
+（跟 ADAD 既有結構完全相同），所以不需要像 Claude Code 那樣額外複製一份
+skill；但 Codex 的 AGENTS.md 讀取邏輯是「由上而下逐層合併」，讀的是
+repo 根目錄的 AGENTS.md（而非 `.agents/AGENTS.md`），所以改用在 repo
+根目錄建立一個指向 `.agents/AGENTS.md` 的 symlink 來讓 Codex 原生讀到
+（Windows 若無建立 symlink 的權限，會 fallback 成複製檔案並印出警告，
+提醒使用者這份副本不會自動跟著 `.agents/AGENTS.md` 同步更新）。
 
 這個模組刻意不 import click——互動詢問（真正跳出選單問使用者）由
 cli.py 負責，core.py 只負責「給定 agents 清單之後該做什麼事」這個
@@ -44,10 +52,12 @@ from adad_cli.resources import agents_dir, templates_dir
 AGENT_CHOICES = {
     "antigravity": "Antigravity 2.0 / IDE (Gemini)",
     "claude": "Claude Code",
+    "codex": "Codex CLI / 桌面 App",
 }
 
 GEMINI_HOME = os.path.join(os.path.expanduser("~"), ".gemini")
 CLAUDE_HOME = os.path.join(os.path.expanduser("~"), ".claude")
+CODEX_HOME = os.path.join(os.path.expanduser("~"), ".codex")
 
 # 全域 Skills 候選安裝目錄（依證據強度排序，全部會寫入，互不排斥）。
 GLOBAL_SKILLS_CANDIDATES_BY_AGENT = {
@@ -59,18 +69,24 @@ GLOBAL_SKILLS_CANDIDATES_BY_AGENT = {
     "claude": [
         os.path.join(CLAUDE_HOME, "skills"),
     ],
+    "codex": [
+        os.path.join(os.path.expanduser("~"), ".agents", "skills"),
+        os.path.join(CODEX_HOME, "skills"),
+    ],
 }
 
 # 各 agent 「點擊 + Global 新增全域規則」實際寫入的檔案。
 GLOBAL_RULES_FILE_BY_AGENT = {
     "antigravity": os.path.join(GEMINI_HOME, "GEMINI.md"),
     "claude": os.path.join(CLAUDE_HOME, "CLAUDE.md"),
+    "codex": os.path.join(CODEX_HOME, "AGENTS.md"),
 }
 
 # 各 agent 對應的「本機是否已安裝該工具」判斷路徑。
 AGENT_HOME_DIR = {
     "antigravity": GEMINI_HOME,
     "claude": CLAUDE_HOME,
+    "codex": CODEX_HOME,
 }
 
 AGENT_RULES_BLOCK_START = "\n# === ADAD GLOBAL RULES START ===\n"
@@ -83,6 +99,13 @@ PROJECT_AGENT_CONFIG = os.path.join(".agents", ".adad-agents.json")
 # Claude Code 讀 CLAUDE.md、不吃 AGENTS.md，官方文件建議的作法是在
 # CLAUDE.md 開頭用 @path 語法匯入既有規則檔，避免維護兩份重複內容。
 CLAUDE_MD_IMPORT_LINE = "@.agents/AGENTS.md"
+
+# Codex 讀取 AGENTS.md 是「由上而下逐層合併」：全域 ~/.codex/AGENTS.md ->
+# repo 根目錄 AGENTS.md -> 子目錄 AGENTS.md，讀的是 repo 根目錄那份，
+# 不是 .agents/AGENTS.md。做法是在根目錄建立一個指向 .agents/AGENTS.md
+# 的 symlink，讓 Codex 原生讀到、且不會跟 .agents/AGENTS.md 內容脫節。
+ROOT_AGENTS_MD = "AGENTS.md"
+CODEX_AGENTS_MD_TARGET = os.path.join(".agents", "AGENTS.md")
 
 
 def _normalize_agents(agents) -> list:
@@ -139,6 +162,98 @@ def _setup_claude_project_skill(local_skill_dir: str) -> None:
         print("  - [Claude Code] .claude/skills/adad-workflow 已存在，跳過")
 
 
+# PreToolUse hook 設定：在 Claude Code 真正執行 Edit/Write/MultiEdit 之前
+# 攔截違規修改，比 pre-commit hook 更早擋下（省下已經花掉又要丟棄的 token）。
+# 用 command 裡的檔名（而不是整個 dict）判斷「這是不是我們裝的那一條」，
+# 這樣使用者自己在同一個 matcher 下加其他 hook 指令不會被誤判成同一條。
+CLAUDE_SETTINGS_PATH = os.path.join(".claude", "settings.json")
+PRETOOLUSE_GATE_SCRIPT = os.path.join(".agents", "skills", "adad-workflow", "scripts", "adad_pretooluse_gate.py")
+PRETOOLUSE_GATE_MATCHER = "Edit|Write|MultiEdit"
+
+
+def _ensure_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) -> None:
+    """把 adad_pretooluse_gate.py 註冊進 .claude/settings.json 的 PreToolUse hook。
+
+    這一步做完，「Agent 在動手改代碼之前先被機械攔截」才會真的生效——
+    只把腳本複製進 .agents/skills/ 是不夠的，Claude Code 要看 settings.json
+    才知道要在哪個時機點呼叫它。合併時只新增／更新我們自己的這一條，
+    使用者原本設定的其他 hooks（含同一個 matcher 下的其他指令）一律保留。
+    """
+    gate_command = f"python3 {PRETOOLUSE_GATE_SCRIPT}"
+
+    settings = {}
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  - [Claude Code] [警告] {settings_path} 解析失敗（{e}），"
+                  "為避免覆蓋你手動編輯過的內容，這步驟已略過，請自行檢查/修正該檔案。")
+            return
+
+    hooks = settings.setdefault("hooks", {})
+    pretooluse = hooks.setdefault("PreToolUse", [])
+
+    # 找找看陣列裡有沒有「matcher 相同、且底下已經有我們這支腳本」的項目
+    for entry in pretooluse:
+        if entry.get("matcher") != PRETOOLUSE_GATE_MATCHER:
+            continue
+        for inner in entry.get("hooks", []):
+            if "adad_pretooluse_gate.py" in inner.get("command", ""):
+                print(f"  - [Claude Code] {settings_path} 已註冊 PreToolUse gate，跳過")
+                return
+
+    pretooluse.append({
+        "matcher": PRETOOLUSE_GATE_MATCHER,
+        "hooks": [{"type": "command", "command": gate_command}],
+    })
+
+    os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    print(f"  - [Claude Code] 已在 {settings_path} 註冊 PreToolUse gate"
+          "（開新 session 後用 /hooks 確認已生效）")
+
+
+def _remove_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) -> None:
+    """只移除我們自己註冊的那一條 PreToolUse hook，其餘設定原封不動保留。"""
+    if not os.path.exists(settings_path):
+        return
+    try:
+        with open(settings_path, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        print(f"  - [提示] {settings_path} 解析失敗，PreToolUse hook 未自動移除，請自行檢查")
+        return
+
+    pretooluse = settings.get("hooks", {}).get("PreToolUse", [])
+    changed = False
+    for entry in list(pretooluse):
+        if entry.get("matcher") != PRETOOLUSE_GATE_MATCHER:
+            continue
+        kept_inner = [h for h in entry.get("hooks", []) if "adad_pretooluse_gate.py" not in h.get("command", "")]
+        if len(kept_inner) != len(entry.get("hooks", [])):
+            changed = True
+            if kept_inner:
+                entry["hooks"] = kept_inner
+            else:
+                pretooluse.remove(entry)
+
+    if not changed:
+        return
+
+    if not pretooluse:
+        settings.get("hooks", {}).pop("PreToolUse", None)
+    if not settings.get("hooks"):
+        settings.pop("hooks", None)
+
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    print(f"  - 已從 {settings_path} 移除 PreToolUse gate 設定")
+
+
 def _ensure_claude_md_import(claude_md_path: str = "CLAUDE.md") -> None:
     """確保專案根目錄的 CLAUDE.md 有匯入 .agents/AGENTS.md，不會動到使用者
     自己在 CLAUDE.md 裡寫的其他內容（新增一行匯入，而不是整份覆蓋）。"""
@@ -158,6 +273,48 @@ def _ensure_claude_md_import(claude_md_path: str = "CLAUDE.md") -> None:
     with open(claude_md_path, "w", encoding="utf-8") as f:
         f.write(CLAUDE_MD_IMPORT_LINE + "\n\n" + content)
     print(f"  - [Claude Code] 已在既有 {claude_md_path} 開頭補上 AGENTS.md 匯入（原內容保留在後面）")
+
+
+def _ensure_codex_root_agents_md(root_agents_md: str = ROOT_AGENTS_MD) -> None:
+    """確保 repo 根目錄有一份 AGENTS.md 可以被 Codex 原生讀到。
+
+    Codex 的 AGENTS.md 讀取機制是從 repo 根目錄逐層往下合併，讀的是
+    <repo-root>/AGENTS.md，不是 ADAD 慣用的 .agents/AGENTS.md，兩者
+    需要一份等價內容才行。優先用 symlink（好處是 .agents/AGENTS.md
+    以後更新時，根目錄那份自動跟著變，不必額外同步）；建立 symlink
+    失敗時（常見於 Windows 無開發者模式/系統管理員權限），才 fallback
+    成直接複製檔案，並提醒使用者這份副本不會自動同步。
+    """
+    target = CODEX_AGENTS_MD_TARGET  # .agents/AGENTS.md（相對路徑，跟 root_agents_md 同一層）
+
+    if os.path.islink(root_agents_md):
+        current_target = os.readlink(root_agents_md)
+        if current_target == target:
+            print(f"  - [Codex] {root_agents_md} 已是指向 {target} 的 symlink，跳過")
+        else:
+            print(f"  - [Codex] [提示] {root_agents_md} 是 symlink，但指向 {current_target}（非 ADAD 管理），未自動修改")
+        return
+
+    if os.path.exists(root_agents_md):
+        print(f"  - [Codex] [提示] {root_agents_md} 已存在且不是 ADAD 建立的 symlink，未自動覆蓋，"
+              f"請自行確認內容是否需要包含 {target} 的規則")
+        return
+
+    if not os.path.exists(target):
+        print(f"  - [Codex] [警告] 找不到 {target}，略過建立 {root_agents_md}")
+        return
+
+    try:
+        os.symlink(target, root_agents_md)
+        print(f"  - [Codex] 建立 {root_agents_md} -> {target} 的 symlink 成功")
+    except (OSError, NotImplementedError) as e:
+        try:
+            shutil.copyfile(target, root_agents_md)
+            print(f"  - [Codex] [警告] 無法建立 symlink（{e}），已改用複製檔案 fallback。")
+            print(f"           注意：{root_agents_md} 現在是獨立副本，之後 {target} 更新時"
+                  "不會自動同步，需重新執行 `adad upgrade` 手動確認。")
+        except Exception as copy_err:
+            print(f"  - [Codex] [警告] 建立 {root_agents_md} 失敗（symlink: {e}；複製 fallback: {copy_err}）")
 
 
 def init_project(agents=None) -> None:
@@ -192,8 +349,12 @@ def init_project(agents=None) -> None:
     if "claude" in agents:
         _setup_claude_project_skill(local_skill_dir)
         _ensure_claude_md_import("CLAUDE.md")
+        _ensure_claude_pretooluse_hook()
     if "antigravity" in agents:
         print("  - [Antigravity] 會自動讀取 .agents/AGENTS.md 與 .agents/skills/，不需要額外設定")
+    if "codex" in agents:
+        print("  - [Codex] .agents/skills/ 原生共用，不需要額外複製 skill")
+        _ensure_codex_root_agents_md()
 
     # 1. 建立 checkpoints 目錄
     if not os.path.exists("checkpoints"):
@@ -381,6 +542,15 @@ def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
             dst_file = os.path.join(claude_skill_dir, str(rel_path))
             _sync_file(src_file, dst_file, report)
         _ensure_claude_md_import("CLAUDE.md")
+        # 這個專案有可能是「加入 PreToolUse gate 這個功能之前」就 init 過的，
+        # upgrade 時順便補上，不需要使用者自己手動編輯 settings.json。
+        _ensure_claude_pretooluse_hook()
+
+    # 1.6 若專案有選 Codex，重新確認根目錄 AGENTS.md 這個 symlink
+    #     還在（例如使用者不小心刪掉，或這個專案是加入 Codex 支援前
+    #     `adad init` 的，這次 upgrade 順便補上）。
+    if "codex" in agents:
+        _ensure_codex_root_agents_md()
 
     # 2. 重新產生 pre-commit hook：即使腳本內容沒變，也順便修正
     #    sys.executable 路徑可能因為換了 Python 版本、搬動 venv 而失效的問題。
@@ -504,6 +674,18 @@ def clean_project(purge_docs: bool = False) -> None:
             print(f"  - 移除 Claude Code adad-workflow skill 副本失敗: {e}")
     if os.path.exists("CLAUDE.md"):
         print("  - [提示] CLAUDE.md 可能包含你自己的其他規則，未自動刪除，如需清除請手動處理")
+    _remove_claude_pretooluse_hook()
+
+    # 只移除「確定是 ADAD 自己建立」的 Codex symlink；如果根目錄 AGENTS.md
+    # 是一般檔案（例如 fallback 複製或使用者自己寫的），保留不動並提示。
+    if os.path.islink(ROOT_AGENTS_MD) and os.readlink(ROOT_AGENTS_MD) == CODEX_AGENTS_MD_TARGET:
+        try:
+            os.remove(ROOT_AGENTS_MD)
+            print(f"  - 移除 Codex 用的 {ROOT_AGENTS_MD} symlink 成功")
+        except Exception as e:
+            print(f"  - 移除 {ROOT_AGENTS_MD} symlink 失敗: {e}")
+    elif os.path.exists(ROOT_AGENTS_MD):
+        print(f"  - [提示] {ROOT_AGENTS_MD} 存在但不是 ADAD 建立的 symlink（可能是複製 fallback 或你自己的檔案），未自動刪除")
 
     if os.path.exists(PROJECT_AGENT_CONFIG):
         try:
@@ -621,7 +803,9 @@ def install_global(agents=None) -> None:
     print("\n[ADAD] 全域安裝完成！")
     print("提醒：Antigravity 建議安裝後在 IDE 的「Global Skills / Rules」設定畫面確認載入；")
     print("      Claude Code 請開一個新的 session，問它「你現在有哪些 skills 可以用」")
-    print("      來確認 adad-workflow 是否已被載入（Skills 只在 session 啟動時讀取一次）。")
+    print("      來確認 adad-workflow 是否已被載入（Skills 只在 session 啟動時讀取一次）；")
+    print("      Codex 同樣建議開新 session 後詢問它目前有哪些 skill/規則可用來確認 "
+          f"{GLOBAL_RULES_FILE_BY_AGENT['codex']} 已被讀到。")
 
 
 def uninstall_global(agents=None) -> None:
