@@ -111,6 +111,419 @@ modules:
     fan_in_snapshot: 0
     known_symbols:
     - main
+  adad_core:
+    type: library
+    description: 核心引擎，提供 system_map 讀寫、DAG 依賴分析、狀態推進、Invariants/Domain 邊界檢查等共用邏輯，被本檔案登記的其餘所有工具
+      import 使用；本身不是獨立執行的 CLI 工具，沒有對外的輸入輸出介面。
+    source: .agents/skills/adad-workflow/scripts/adad_core.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input: {}
+    output: {}
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    - '[ ] 依賴此檔案的腳本改動共用邏輯時，目前沒有自動化的跨檔案影響分析'
+    checkpoint:
+    - '[ ] CP-1-005 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 10
+    known_symbols:
+    - ADADCore.__init__
+    - ADADCore._advance_module_to_validated
+    - ADADCore._bigrams
+    - ADADCore._extract_adr_summary
+    - ADADCore._extract_pattern_summary
+    - ADADCore._load_function_from_file
+    - ADADCore._load_map
+    - ADADCore._node_source_hash
+    - ADADCore._resolve_verify_target_func
+    - ADADCore._save_task
+    - ADADCore._task_path
+    - ADADCore.analyze_dirty_cascade
+    - ADADCore.check_domain_boundary
+    - ADADCore.check_draft_debt
+    - ADADCore.check_invariants
+    - ADADCore.check_ir_validity
+    - ADADCore.check_task_gate
+    - ADADCore.evaluate_normalization
+    - ADADCore.generate_task
+    - ADADCore.get_fan_in_map
+    - ADADCore.get_node
+    - ADADCore.load_task
+    - ADADCore.read_context
+    - ADADCore.save
+    - ADADCore.task_approve
+    - ADADCore.task_is_expired
+    - ADADCore.task_reject
+    - ADADCore.task_submit
+    - ADADCore.transit_state
+    - ADADCore.verify_implementation
+    - build_file_to_registered_functions
+    - check_precommit_hook_status
+    - find_misplaced_modules
+    - find_orphan_maps
+    - get_all_included_files
+    - get_max_mtime
+    - get_top_level_function_names
+    - parse_markdown
+    - resolve_includes
+    - run_self_test
+  compile_map:
+    type: tool
+    description: 將 system_map.md（含 include 分區地圖）編譯為機讀 IR system_map.yaml，並執行智慧狀態合併（結構未變沿用舊狀態、結構有變標記
+      dirty）與 Draft Debt Ledger 偵測。
+    source: .agents/skills/adad-workflow/scripts/compile_map.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      cwd_system_map_md: file（無 CLI 參數，讀取當前目錄的 system_map.md）
+    output:
+      result: object
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-006 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  generate_task:
+    type: tool
+    description: 從 system_map.yaml 匯出一份含 source_hash 的 Task 快照給 coding 端讀取；Task 與
+      Module 分離，可偵測架構是否在執行期間被更動過。
+    source: .agents/skills/adad-workflow/scripts/generate_task.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      node_name: string
+    output:
+      result: object
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-007 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  resolve_target_file:
+    type: tool
+    description: Phase 1 新增模組前，查表回答「這個 Domain/Subsystem 目前該寫進哪個實體子地圖檔案」，取代 Agent 憑印象追蹤
+      include 鏈猜落點。
+    source: .agents/skills/adad-workflow/scripts/resolve_target_file.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      domain: string
+      subsystem: string（選填）
+    output:
+      target_file: string
+      domain_exists: boolean
+      subsystem_exists: boolean
+      hint: string
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-008 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  resume_analysis:
+    type: tool
+    description: 比對 system_map.md 與 system_map.yaml，產出模組完成度進度報告（completed / dirty
+      / planned 分類統計），供人類快速掌握目前施工進度。
+    source: .agents/skills/adad-workflow/scripts/resume_analysis.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      cwd_system_map_md: file（無 CLI 參數，讀取當前目錄檔案）
+    output:
+      report: text（stdout 輸出）
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-009 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  validate_schema:
+    type: tool
+    description: 獨立於 parse_markdown/compile_map.py 之外的第二層防線，用標準 JSON Schema（system_map.schema.json）驗證
+      system_map.yaml 的結構正確性；未安裝 jsonschema 套件時退回純標準庫的最小驗證器。
+    source: .agents/skills/adad-workflow/scripts/validate_schema.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      cwd_system_map_yaml: file（預設驗證 system_map.yaml 對照 system_map.schema.json）
+    output:
+      result: object
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-010 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - _MinimalError.__init__
+    - _MinimalValidator.__init__
+    - _MinimalValidator._resolve
+    - _MinimalValidator._type_ok
+    - _MinimalValidator._validate
+    - _MinimalValidator.iter_errors
+    - main
+    - validate_schema_conformance
+  adad_pre_commit:
+    type: tool
+    description: Git pre-commit hook，將 AGENTS.md 的軟規則轉為 commit 階段的機械硬閘門：Staleness
+      阻斷、狀態門禁、原子範圍警告、Invariants/Verification 校驗、跨 Domain 依賴邊界、未登記函式掃描、懸空依賴、模組落點校驗。
+    source: .agents/skills/adad-workflow/scripts/adad_pre_commit.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      git_staged_files: file（讀取 git staged diff，無 CLI 參數）
+    output:
+      errors: array
+      warnings: array
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-011 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - build_source_to_module_map
+    - check_atomic_scope
+    - check_dangling_dependencies
+    - check_domain_boundary_staged
+    - check_invariants_staged
+    - check_module_placement
+    - check_staleness
+    - check_state_gate
+    - check_task_gate_staged
+    - check_unregistered_functions
+    - check_verification_staged
+    - get_staged_content
+    - get_staged_files
+    - main
+    - write_temp_file
+  adad_pretooluse_gate:
+    type: tool
+    description: 掛在 Claude Code 的 PreToolUse hook 上，在 Edit/Write/MultiEdit 工具呼叫「執行前」攔截：目標檔案對應的
+      Task 快照狀態不允許編輯時直接 exit 2 擋下，避免 agent 白花 token 寫出會被丟棄的程式碼；無法判斷的情況一律放行，不取代 pre-commit/CI
+      的完整檢查。
+    source: .agents/skills/adad-workflow/scripts/adad_pretooluse_gate.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      stdin: object（Claude Code hook payload，含 tool_input.file_path）
+    output:
+      exit_code: string（0=放行；2=阻擋，原因寫在 stderr）
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-012 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - _build_src_map
+    - _find_project_root
+    - _is_stale
+    - _load_modules
+    - main
+  adad_task:
+    type: tool
+    description: Task 快照生命週期操作：submit（coding 端自行呼叫，就地重跑 check_invariants + verify_implementation
+      都過才允許轉 submitted）、approve/reject（僅限人類在真正互動終端機執行，非 tty 一律拒絕，防止 Agent 透過工具呼叫自我核准）。
+    source: .agents/skills/adad-workflow/scripts/adad_task.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      command: string（submit｜approve｜reject）
+      node_name: string
+      extra: string（依 command 而定：submit 選填 file_path；approve 為 task_id 後6碼；reject
+        為駁回原因）
+    output:
+      result: object
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-013 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - _require_human_tty
+    - cmd_approve
+    - cmd_reject
+    - cmd_submit
+    - main
+  check_domain_boundary:
+    type: tool
+    description: 檢查模組是否只依賴同一 Domain 內的模組，除非該 Domain 已用 Allowed Dependencies 明確宣告允許跨
+      Domain 依賴。
+    source: .agents/skills/adad-workflow/scripts/check_domain_boundary.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      cwd_system_map_yaml: file（無 CLI 參數，掃描整份 system_map.yaml）
+    output:
+      passed: boolean
+      violations: array
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-014 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  check_invariants:
+    type: tool
+    description: 校驗指定節點的實作是否違反其宣告的 Invariants（例如 deny_imports）。
+    source: .agents/skills/adad-workflow/scripts/check_invariants.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      node_name: string
+      file_path: string（選填）
+    output:
+      success: boolean
+      result: object
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-015 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  verify_implementation:
+    type: tool
+    description: 校驗指定節點的實作是否符合其宣告的 Verification 條件（例如 must_have_assertions、結構化 case）。
+    source: .agents/skills/adad-workflow/scripts/verify_implementation.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      node_name: string
+      file_path: string（選填）
+    output:
+      success: boolean
+      result: object
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-016 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
 domains:
   ADAD_Workflow:
     description: ADAD (Architecture-Driven Agentic Development) 的架構與工作流核心管理工具集。
@@ -118,5 +531,9 @@ domains:
     subsystems:
       Core_Engine:
         description: 負責架構地圖讀寫、狀態推進、DAG 依賴分析與 Invariants 校驗的核心模組。
+        map_file: system_map.md
+      Enforcement_Gates:
+        description: 機械強制執行層——commit 階段與 agent 工具呼叫前後的閘門、驗證與 Task 生命週期控管，把 AGENTS.md
+          的軟性規則轉成硬規則。
         map_file: system_map.md
     map_file: system_map.md

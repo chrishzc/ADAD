@@ -1,0 +1,64 @@
+# -*- coding: utf-8 -*-
+from conftest import run_script, write_yaml
+
+
+def test_verify_implementation_must_have_assertions_pass(project_dir, base_modules):
+    src = project_dir / "asserted_tool.py"
+    src.write_text(
+        "def sample_tool(x):\n    assert isinstance(x, int)\n    return x + 1\n",
+        encoding="utf-8",
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "asserted_tool.py"
+    base_modules["modules"]["sample_tool"]["verification"] = ["must_have_assertions"]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script(
+        "verify_implementation.py", ["sample_tool"], cwd=project_dir
+    )
+    assert code == 0, err
+    assert data["success"] is True
+
+
+def test_verify_implementation_must_have_assertions_fail(project_dir, base_modules):
+    src = project_dir / "no_assert_tool.py"
+    src.write_text("def sample_tool(x):\n    return x + 1\n", encoding="utf-8")
+    base_modules["modules"]["sample_tool"]["source"] = "no_assert_tool.py"
+    base_modules["modules"]["sample_tool"]["verification"] = ["must_have_assertions"]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script(
+        "verify_implementation.py", ["sample_tool"], cwd=project_dir
+    )
+    assert code == 1
+    assert data["success"] is False
+
+
+def test_verify_implementation_case_pass_and_fail(project_dir, base_modules):
+    src = project_dir / "case_tool.py"
+    src.write_text("def sample_tool(x):\n    return x * 2\n", encoding="utf-8")
+    base_modules["modules"]["sample_tool"]["source"] = "case_tool.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"case": {"input": {"x": 3}, "expect": 6}},
+        {"case": {"input": {"x": 3}, "expect": 999}},
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script(
+        "verify_implementation.py", ["sample_tool"], cwd=project_dir
+    )
+    assert code == 1
+    assert data["success"] is False
+    results = data["case_results"]
+    assert results[0]["passed"] is True and results[0]["actual"] == 6
+    assert results[1]["passed"] is False and results[1]["actual"] == 6
+
+
+def test_verify_implementation_no_verification_defined_is_noop(project_dir, base_modules):
+    base_modules["modules"]["sample_tool"]["verification"] = []
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script(
+        "verify_implementation.py", ["sample_tool"], cwd=project_dir
+    )
+    assert code == 0, err
+    assert data["success"] is True
