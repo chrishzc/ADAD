@@ -25,6 +25,17 @@ def test_validate_schema_flags_missing_required_field(project_dir, base_modules)
     assert data["success"] is False
 
 
+def test_validate_schema_flags_missing_environment(project_dir, base_modules):
+    del base_modules["environment"]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script(
+        "validate_schema.py", ["system_map.yaml", SCHEMA_PATH], cwd=project_dir
+    )
+    assert code == 1
+    assert data["success"] is False
+
+
 def test_validate_schema_flags_wrong_type(project_dir, base_modules):
     # version 必須是 integer，這裡故意塞字串
     base_modules["version"] = "not-a-number"

@@ -12,6 +12,7 @@ import shutil
 import math
 import hashlib
 import datetime
+import copy
 from collections import Counter
 
 # 自動安裝 PyYAML 依賴以確保跨裝置開箱即用
@@ -30,6 +31,7 @@ except ImportError:
 
 MAP_FILE = "system_map.yaml"
 TASK_DIR = os.path.join(".agents", "tasks")
+CHECKPOINT_DIR = "checkpoints"
 
 # ponytail: 原本 RULE-02 允許修改的狀態集合，在 adad_core.py / adad_pre_commit.py /
 # adad_pretooluse_gate.py 三處各自寫了一份一模一樣的 {"planned","dirty","validated","draft"}，
@@ -175,17 +177,19 @@ def resolve_includes(filepath, ancestors=None, resolved_cache=None):
 
 def parse_markdown(md_content):
     lines = md_content.splitlines()
-    data = {"version": 1, "modules": {}, "domains": {}}
+    data = {"version": 1, "modules": {}, "domains": {}, "environment": None}
 
     current_module = None
     current_section = None
     current_domain = None
     current_subsystem = None
+    current_environment = False
     current_source_file = "system_map.md"
 
     source_marker_regex = re.compile(r'^<!--\s*__ADAD_SOURCE_FILE__:\s*(.+?)\s*-->$')
     domain_regex = re.compile(r'^###\s+Domain:\s*(.+)')
     subsystem_regex = re.compile(r'^####\s+Subsystem:\s*(.+)')
+    environment_regex = re.compile(r'^##\s+Environment\s*$')
     # ponytail-fix: 原本 (\w+) 不含連字號 '-'，導致 "my-tax-calc" 這類模組名稱
     # 只會比對到 "my" 就停止——正則仍然「成功比對」（re.match 不要求比對到行尾），
     # 於是靜默建立了一個名稱被截斷的錯誤模組，沒有任何錯誤或警告。
@@ -206,12 +210,22 @@ def parse_markdown(md_content):
             current_source_file = src_match.group(1).strip()
             continue
 
+        if environment_regex.match(line_strip):
+            data["environment"] = {"state": "", "services": []}
+            current_environment = True
+            current_domain = None
+            current_subsystem = None
+            current_module = None
+            current_section = None
+            continue
+
         # ponytail-fix: Domain / Subsystem 標題不再被忽略——
         # (1) 記錄下來，供之後架構邊界檢查使用
         # (2) 一律重置 current_module / current_section，避免其後的
         #     "- Description: ..." 之類欄位被誤植到「上一個模組」身上
         d_match = domain_regex.match(line_strip)
         if d_match:
+            current_environment = False
             current_domain = d_match.group(1).strip()
             # ponytail: 追蹤這個 Domain 標頭實際寫在哪個實體檔案，
             # 讓 resolve_target_file.py 能回答「這個 Domain 該寫進哪個子地圖」。
@@ -247,6 +261,7 @@ def parse_markdown(md_content):
 
         m_match = module_regex.match(line_strip)
         if m_match:
+            current_environment = False
             current_module = m_match.group(1)
             if current_module in data["modules"]:
                 prev_src = data["modules"][current_module].get("map_file", "system_map.md")
@@ -289,6 +304,19 @@ def parse_markdown(md_content):
                     data["version"] = int(line_strip.split(":", 1)[1].strip())
                 except:
                     pass
+            elif current_environment:
+                fd_match = field_regex.match(line_strip)
+                if fd_match:
+                    fkey = fd_match.group(1).strip().lower().replace(" ", "_")
+                    fval = fd_match.group(2).strip()
+                    if fkey == "state":
+                        data["environment"]["state"] = fval
+                    elif fkey == "services":
+                        if fval == "[]":
+                            data["environment"]["services"] = []
+                        elif fval.startswith("[") and fval.endswith("]"):
+                            names = [x.strip() for x in fval[1:-1].split(",") if x.strip()]
+                            data["environment"]["services"] = [{"name": name} for name in names]
             elif current_domain and not current_subsystem:
                 fd_match = field_regex.match(line_strip)
                 if fd_match:
@@ -918,6 +946,143 @@ class ADADCore:
 
         return {"passed": len(violations) == 0, "violations": violations}
 
+    def check_source_binding(self):
+        """
+        Source 綁定完整性檢查（代辦事項 #8：地基層檢查）。
+
+        `adad_pre_commit.py` / `adad_pretooluse_gate.py` 拿 staged/即將編輯的檔案
+        反查對應模組，唯一依據就是每個模組 `source` 欄位建立起來的
+        {file(::func) → module} 映射（見 `build_source_to_module_map` /
+        `build_file_to_registered_functions`）。SKILL.md 過去只用文字要求
+        「一個 Source 路徑理論上只對應一個模組」，但從未真的被機械驗證過——
+        如果這份映射本身有歧義，反查只會命中其中一個模組，其餘模組會在完全
+        不自知的情況下被靜默排除在 RULE-02/03/04、Invariants、Verification、
+        跨 Domain 邊界檢查之外。這支方法把這條規則從指示性建議升級成機械檢查。
+
+        會擋下三種歧義（`violations`，任一項存在即 `passed=False`）：
+          1. `duplicate_source`：兩個以上模組填了完全相同的 `source` 字串。
+          2. `whole_file_vs_function_conflict`：同一支檔案被一個模組整檔登記，
+             又被另一個模組逐函式登記——兩種語意在同一支檔案上互斥。
+          3. `duplicate_function_binding`：同一支檔案裡的同一個函式名稱，被
+             兩個以上模組同時登記。
+
+        `source` 欄位本身留空（尚未填寫）不是錯誤——schema 明文允許空字串代表
+        「尚未填寫」，這裡只把它們額外列在 `unbound`（軟提示）方便盤點還有
+        哪些模組完全沒有綁定、機械強制對它們完全不生效。
+
+        回傳：{"passed": bool, "violations": [...], "unbound": [...]}
+        """
+        modules = self.data.get("modules", {})
+
+        violations = []
+
+        # 1) 完全相同的 source 字串被多個模組同時使用。
+        exact = {}
+        for name, info in modules.items():
+            src = (info.get("source") or "").strip().replace("\\", "/")
+            if not src:
+                continue
+            exact.setdefault(src, []).append(name)
+        for src, names in exact.items():
+            if len(names) > 1:
+                violations.append({
+                    "type": "duplicate_source",
+                    "source": src,
+                    "modules": sorted(names),
+                    "reason": (
+                        f"Source `{src}` 被多個模組同時登記：{sorted(names)}。"
+                        f"反查時只會命中其中一個，其餘模組的機械強制會被靜默繞過。"
+                    )
+                })
+
+        # 2) 同一支實體檔案：整檔登記 vs 逐函式登記混用、或函式名稱重疊。
+        per_file = {}  # file_path -> {"whole_file_modules": [...], "func_owner": {func: [modules]}}
+        for name, info in modules.items():
+            src = (info.get("source") or "").strip().replace("\\", "/")
+            if not src:
+                continue
+            if "::" in src:
+                file_path, funcs_part = src.split("::", 1)
+                funcs = [f.strip() for f in funcs_part.split(",") if f.strip()]
+            else:
+                file_path, funcs = src, []
+            entry = per_file.setdefault(file_path, {"whole_file_modules": [], "func_owner": {}})
+            if not funcs:
+                entry["whole_file_modules"].append(name)
+            else:
+                for fn in funcs:
+                    entry["func_owner"].setdefault(fn, []).append(name)
+
+        for file_path, entry in per_file.items():
+            whole = entry["whole_file_modules"]
+            func_modules = sorted({m for owners in entry["func_owner"].values() for m in owners})
+            if whole and func_modules:
+                violations.append({
+                    "type": "whole_file_vs_function_conflict",
+                    "source_file": file_path,
+                    "whole_file_modules": sorted(whole),
+                    "function_modules": func_modules,
+                    "reason": (
+                        f"檔案 `{file_path}` 同時被整檔登記（{sorted(whole)}）與逐函式登記"
+                        f"（{func_modules}）混用，反查會產生歧義，請統一成同一種登記方式。"
+                    )
+                })
+            if len(whole) > 1:
+                violations.append({
+                    "type": "duplicate_source",
+                    "source": file_path,
+                    "modules": sorted(whole),
+                    "reason": f"檔案 `{file_path}` 被多個模組整檔登記：{sorted(whole)}。"
+                })
+            for fn, owners in entry["func_owner"].items():
+                if len(owners) > 1:
+                    violations.append({
+                        "type": "duplicate_function_binding",
+                        "source_file": file_path,
+                        "function": fn,
+                        "modules": sorted(owners),
+                        "reason": (
+                            f"函式 `{fn}`（檔案 `{file_path}`）被多個模組同時登記："
+                            f"{sorted(owners)}。"
+                        )
+                    })
+
+        unbound = sorted(
+            name for name, info in modules.items()
+            if not (info.get("source") or "").strip()
+        )
+
+        return {"passed": len(violations) == 0, "violations": violations, "unbound": unbound}
+
+    def check_task_readiness(self, node_name):
+        """確認一個模組是否已具備可核發 Coding Task 的最小、可機械判斷規格。"""
+        node = self.get_node(node_name)
+        if not node:
+            return {"ready": False, "blockers": [f"找不到節點: {node_name}"]}
+
+        blockers = []
+        for field in ("type", "description", "source"):
+            if not isinstance(node.get(field), str) or not node[field].strip():
+                blockers.append(f"缺少非空白的 `{field}` 宣告")
+        for field in ("input", "output"):
+            if not isinstance(node.get(field), dict):
+                blockers.append(f"`{field}` 必須是 object")
+        for field in ("invariants", "verification", "algorithm"):
+            if not isinstance(node.get(field), list):
+                blockers.append(f"`{field}` 必須是 array（可為空，代表明確無額外約束）")
+
+        complexity = node.get("complexity")
+        if complexity not in {"low", "medium", "high"}:
+            blockers.append("`complexity` 必須是 low、medium 或 high")
+        elif complexity == "high" and not node.get("algorithm"):
+            blockers.append("Complexity: high 必須提供至少一個 Algorithm 步驟")
+
+        binding = self.check_source_binding()
+        if any(node_name in str(v) for v in binding["violations"]):
+            blockers.append("Source 綁定有歧義，無法可靠地套用 Gate 與驗證")
+
+        return {"ready": not blockers, "blockers": blockers}
+
     def analyze_dirty_cascade(self, target_node):
         """智慧髒點依賴分析 (DAG 逆向遞迴追蹤)"""
         modules = self.data.get("modules", {})
@@ -1041,6 +1206,14 @@ class ADADCore:
         if not node:
             return {"success": False, "error": f"找不到節點: {node_name}"}
 
+        readiness = self.check_task_readiness(node_name)
+        if not readiness["ready"]:
+            return {
+                "success": False,
+                "error": f"[NOT READY] 模組 `{node_name}` 尚未具備可核發 Task 的完整規格。",
+                "readiness_blockers": readiness["blockers"],
+            }
+
         state = node.get("state", "unknown")
         if state not in ALLOWED_EDIT_STATES:
             return {
@@ -1136,7 +1309,76 @@ class ADADCore:
         if state in ("pending_review", "planned", "dirty"):
             self.transit_state(node_name, "validated")
 
-    def task_approve(self, node_name, confirm_suffix):
+    def _write_checkpoint_audit(self, node_name, task_data, action, reviewer, comment=""):
+        """原子寫入 CP-2 審批紀錄；成功後才回傳可供 Task history 引用的資訊。"""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        stamp = now.strftime("%Y%m%dT%H%M%S%fZ")
+        checkpoint_id = f"CP-2-{stamp}-{node_name}"
+        filename = f"{checkpoint_id}-{action}.yaml"
+        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+        path = os.path.join(CHECKPOINT_DIR, filename)
+        payload = {
+            "checkpoint_payload": {
+                "id": checkpoint_id,
+                "phase": 2,
+                "timestamp": now.isoformat(),
+                "triggered_by": "human",
+                "status": action,
+                "target": {
+                    "node_name": node_name,
+                    "task_id": task_data["task_id"],
+                    "system_map_version": task_data["system_map_version"],
+                    "source_hash": task_data["source_hash"],
+                },
+                "decision": {
+                    "action": action,
+                    "reviewer": reviewer,
+                    "comment": comment,
+                },
+            }
+        }
+        tmp_path = f"{path}.tmp-{os.getpid()}"
+        try:
+            with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+                yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
+            os.replace(tmp_path, path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
+        return {"id": checkpoint_id, "path": path, "timestamp": now.isoformat()}
+
+    def _commit_checkpoint_decision(self, node_name, task_data, action, reviewer, comment=""):
+        """將 Task、模組狀態與 audit 視為一筆交易；audit 失敗時不保留狀態推進。"""
+        original_data = copy.deepcopy(self.data)
+        original_task = copy.deepcopy(task_data)
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        try:
+            if action == "approved":
+                task_data["status"] = "approved"
+                self._advance_module_to_validated(node_name)
+            else:
+                task_data["status"] = "assigned"
+            task_data.setdefault("history", []).append({
+                "event": action, "at": now, "reviewer": reviewer, "reason": comment,
+            })
+            self._save_task(node_name, task_data)
+            self.save()
+            audit = self._write_checkpoint_audit(node_name, task_data, action, reviewer, comment)
+            task_data["history"][-1]["checkpoint_id"] = audit["id"]
+            task_data["history"][-1]["checkpoint_path"] = audit["path"]
+            self._save_task(node_name, task_data)
+            return audit
+        except Exception as exc:
+            self.data = original_data
+            try:
+                self._save_task(node_name, original_task)
+                self.save()
+            except Exception:
+                pass
+            raise RuntimeError(f"Checkpoint 交易失敗，已回復狀態：{exc}") from exc
+
+    def task_approve(self, node_name, confirm_suffix, reviewer):
         """
         人類核准 CP-2。呼叫端（adad_task.py）必須先確認是真人在互動終端機
         執行這個指令（sys.stdin.isatty()），這裡只負責核對核准依據字串是否
@@ -1153,16 +1395,16 @@ class ADADCore:
         expected_suffix = task_data.get("task_id", "")[-6:]
         if confirm_suffix.strip() != expected_suffix:
             return {"success": False, "error": "核准依據不符（task_id 後 6 碼對不上），未核准。"}
+        if not reviewer or not reviewer.strip():
+            return {"success": False, "error": "核准必須提供非空白的 reviewer，才能留下審批留痕。"}
 
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        task_data["status"] = "approved"
-        task_data.setdefault("history", []).append({"event": "approved", "at": now})
-        self._save_task(node_name, task_data)
-        self._advance_module_to_validated(node_name)
-        self.save()
-        return {"success": True, "task_id": task_data["task_id"], "status": "approved"}
+        try:
+            audit = self._commit_checkpoint_decision(node_name, task_data, "approved", reviewer.strip())
+        except RuntimeError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "task_id": task_data["task_id"], "status": "approved", "checkpoint": audit}
 
-    def task_reject(self, node_name, reason):
+    def task_reject(self, node_name, reason, reviewer):
         """人類駁回 CP-2，任務退回 assigned 讓 coding 端重做，駁回原因留在
         history 裡——下次 coding 端讀 Task 快照時看得到這次為什麼被打回。"""
         task_data = self.load_task(node_name)
@@ -1173,12 +1415,14 @@ class ADADCore:
                 "success": False,
                 "error": f"[BLOCKED] 任務狀態為 `{task_data.get('status')}`，只有 `submitted` 才能駁回。"
             }
+        if not reviewer or not reviewer.strip():
+            return {"success": False, "error": "駁回必須提供非空白的 reviewer，才能留下審批留痕。"}
 
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        task_data["status"] = "assigned"
-        task_data.setdefault("history", []).append({"event": "rejected", "at": now, "reason": reason})
-        self._save_task(node_name, task_data)
-        return {"success": True, "task_id": task_data["task_id"], "status": "assigned", "reason": reason}
+        try:
+            audit = self._commit_checkpoint_decision(node_name, task_data, "rejected", reviewer.strip(), reason)
+        except RuntimeError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "task_id": task_data["task_id"], "status": "assigned", "reason": reason, "checkpoint": audit}
 
     def check_task_gate(self, rel_path):
         """

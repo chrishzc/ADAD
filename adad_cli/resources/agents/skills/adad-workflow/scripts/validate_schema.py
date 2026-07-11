@@ -103,6 +103,9 @@ class _MinimalValidator:
         if "enum" in schema and data not in schema["enum"]:
             errors.append((path or "(root)", f"值必須是 {schema['enum']} 之一，實際是 {data!r}"))
 
+        if "minLength" in schema and isinstance(data, str) and len(data) < schema["minLength"]:
+            errors.append((path or "(root)", f"字串長度至少必須是 {schema['minLength']}，實際是 {len(data)}"))
+
         if isinstance(data, dict):
             for req in schema.get("required", []):
                 if req not in data:

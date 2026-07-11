@@ -418,6 +418,22 @@ def main():
             pass  # 載入失敗不阻斷，僅跳過需要 YAML 的檢查
 
     try:
+        # 0. Source 綁定完整性檢查（代辦事項 #8）：src_map 是下面所有檢查反查
+        # 模組的唯一依據，若映射本身有歧義（重複綁定、整檔/逐函式混用），
+        # 之後的 RULE-02/03/04、Invariants、Verification、Domain Boundary
+        # 全部會依附在錯的（或不完整的）映射上靜默失效，因此在使用 src_map
+        # 之前就先擋下來，而不是等結果算錯了才發現。
+        if tmp_map_path:
+            from adad_core import ADADCore
+            try:
+                _core_for_binding = ADADCore(tmp_map_path, check_validity=False)
+                binding_result = _core_for_binding.check_source_binding()
+                if not binding_result["passed"]:
+                    for v in binding_result["violations"]:
+                        errors.append(f"[SOURCE BINDING] {v['reason']}")
+            except Exception:
+                pass  # 無法載入時不阻斷其他檢查，交由後續檢查各自 best-effort
+
         # 2-8. 各項檢查
         if src_map:
             errors.extend(check_state_gate(staged_all, modules, src_map))

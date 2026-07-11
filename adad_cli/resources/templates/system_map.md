@@ -4,6 +4,10 @@
 - Version: 1
 - Status: planning
 
+## Environment
+- State: not_required
+- Services: []
+
 ## Domains
 
 ### Domain: Calculation

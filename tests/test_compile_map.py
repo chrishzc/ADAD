@@ -9,6 +9,10 @@ VALID_MD = """# ADAD Architecture Source
 - Version: 1
 - Status: planning
 
+## Environment
+- State: not_required
+- Services: []
+
 ## Domains
 
 ### Domain: TestDomain
@@ -70,6 +74,18 @@ def test_compile_map_produces_valid_yaml(project_dir):
     compiled = read_yaml(project_dir)
     assert "sample_tool" in compiled["modules"]
     assert compiled["modules"]["sample_tool"]["state"] == "planned"  # 全新模組預設 planned
+    assert compiled["environment"] == {"state": "not_required", "services": []}
+
+
+def test_compile_map_rejects_high_complexity_without_algorithm(project_dir):
+    high_complexity = VALID_MD.replace(
+        "- Preferred Pattern: none\n", "- Preferred Pattern: none\n- Complexity: high\n"
+    )
+    _write_md(project_dir, high_complexity)
+    code, data, out, err = run_script("compile_map.py", [], cwd=project_dir)
+    assert code == 1
+    assert data["success"] is False
+    assert "MISSING ALGORITHM" in data["error"]
 
 
 def test_compile_map_preserves_state_when_structure_unchanged(project_dir):

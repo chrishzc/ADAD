@@ -9,8 +9,8 @@ submit（coding 端可自行呼叫）:
   不是 Agent 自己說了算。
 
 approve / reject（只能由人類在真正的互動終端機執行）:
-  python adad_task.py approve <node_name> <task_id 後6碼>
-  python adad_task.py reject  <node_name> "<駁回原因>"
+  python adad_task.py approve <node_name> <task_id 後6碼> --reviewer "姓名"
+  python adad_task.py reject  <node_name> "<駁回原因>" --reviewer "姓名"
 
   這兩個指令一開始就會檢查 sys.stdin.isatty()——如果不是真正的互動終端機
   （例如 Agent 透過工具呼叫、或用管線餵資料進來），直接拒絕執行並印出
@@ -50,25 +50,25 @@ def cmd_submit(args):
 
 
 def cmd_approve(args):
-    if len(args) < 2:
-        print(json.dumps({"success": False, "error": "用法: python adad_task.py approve <node_name> <task_id後6碼>"}, ensure_ascii=False))
+    if len(args) != 4 or args[2] != "--reviewer":
+        print(json.dumps({"success": False, "error": "用法: python adad_task.py approve <node_name> <task_id後6碼> --reviewer <姓名>"}, ensure_ascii=False))
         sys.exit(1)
     _require_human_tty("核准任務（approve）")
-    node_name, confirm_suffix = args[0], args[1]
+    node_name, confirm_suffix, reviewer = args[0], args[1], args[3]
     core = ADADCore()
-    res = core.task_approve(node_name, confirm_suffix)
+    res = core.task_approve(node_name, confirm_suffix, reviewer)
     print(json.dumps(res, ensure_ascii=False, indent=2))
     sys.exit(0 if res.get("success") else 1)
 
 
 def cmd_reject(args):
-    if len(args) < 2:
-        print(json.dumps({"success": False, "error": "用法: python adad_task.py reject <node_name> \"<駁回原因>\""}, ensure_ascii=False))
+    if len(args) != 4 or args[2] != "--reviewer":
+        print(json.dumps({"success": False, "error": "用法: python adad_task.py reject <node_name> \"<駁回原因>\" --reviewer <姓名>"}, ensure_ascii=False))
         sys.exit(1)
     _require_human_tty("駁回任務（reject）")
-    node_name, reason = args[0], args[1]
+    node_name, reason, reviewer = args[0], args[1], args[3]
     core = ADADCore()
-    res = core.task_reject(node_name, reason)
+    res = core.task_reject(node_name, reason, reviewer)
     print(json.dumps(res, ensure_ascii=False, indent=2))
     sys.exit(0 if res.get("success") else 1)
 

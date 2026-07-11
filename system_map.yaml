@@ -134,11 +134,12 @@ modules:
     complexity: low
     algorithm: []
     state: planned
-    fan_in_snapshot: 10
+    fan_in_snapshot: 11
     known_symbols:
     - ADADCore.__init__
     - ADADCore._advance_module_to_validated
     - ADADCore._bigrams
+    - ADADCore._commit_checkpoint_decision
     - ADADCore._extract_adr_summary
     - ADADCore._extract_pattern_summary
     - ADADCore._load_function_from_file
@@ -147,12 +148,15 @@ modules:
     - ADADCore._resolve_verify_target_func
     - ADADCore._save_task
     - ADADCore._task_path
+    - ADADCore._write_checkpoint_audit
     - ADADCore.analyze_dirty_cascade
     - ADADCore.check_domain_boundary
     - ADADCore.check_draft_debt
     - ADADCore.check_invariants
     - ADADCore.check_ir_validity
+    - ADADCore.check_source_binding
     - ADADCore.check_task_gate
+    - ADADCore.check_task_readiness
     - ADADCore.evaluate_normalization
     - ADADCore.generate_task
     - ADADCore.get_fan_in_map
@@ -437,6 +441,35 @@ modules:
     - cmd_reject
     - cmd_submit
     - main
+  check_source_binding:
+    type: tool
+    description: 檢查 Module 的 Source 綁定是否存在重複、整檔與逐函式混用、或同一函式多重歸屬等歧義；歧義會使後續 Gate 無法可靠反查模組，因此編譯與
+      commit 前皆須阻斷。
+    source: .agents/skills/adad-workflow/scripts/check_source_binding.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      cwd_system_map_yaml: file（無 CLI 參數，掃描整份 system_map.yaml）
+    output:
+      passed: boolean
+      violations: array
+      unbound: array
+    invariants: []
+    preferred_pattern: pure_function
+    verification: []
+    decisions: []
+    todo: []
+    checkpoint:
+    - '[ ] CP-1-017 (planned)'
+    complexity: low
+    algorithm: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
   check_domain_boundary:
     type: tool
     description: 檢查模組是否只依賴同一 Domain 內的模組，除非該 Domain 已用 Allowed Dependencies 明確宣告允許跨
@@ -537,3 +570,6 @@ domains:
           的軟性規則轉成硬規則。
         map_file: system_map.md
     map_file: system_map.md
+environment:
+  state: not_required
+  services: []

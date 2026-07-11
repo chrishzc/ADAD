@@ -4,6 +4,10 @@
 - Version: 1
 - Status: planning
 
+## Environment
+- State: not_required
+- Services: []
+
 ## Domains
 
 ### Domain: ADAD_Workflow
@@ -263,6 +267,25 @@
   - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
 - Checkpoint:
   - [ ] CP-1-013 (planned)
+
+##### Module: check_source_binding
+- Type: tool
+- Description: 檢查 Module 的 Source 綁定是否存在重複、整檔與逐函式混用、或同一函式多重歸屬等歧義；歧義會使後續 Gate 無法可靠反查模組，因此編譯與 commit 前皆須阻斷。
+- Source: .agents/skills/adad-workflow/scripts/check_source_binding.py
+- Preferred Pattern: pure_function
+- Decisions: []
+- Invariants: []
+- Verification: []
+- Dependencies: [adad_core]
+- Input:
+  - cwd_system_map_yaml: file（無 CLI 參數，掃描整份 system_map.yaml）
+- Output:
+  - passed: boolean
+  - violations: array
+  - unbound: array
+- TODO: []
+- Checkpoint:
+  - [ ] CP-1-017 (planned)
 
 ##### Module: check_domain_boundary
 - Type: tool

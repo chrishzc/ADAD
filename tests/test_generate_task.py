@@ -30,6 +30,16 @@ def test_generate_task_blocks_when_state_not_editable(project_dir, base_modules)
     assert data["error"].startswith("[BLOCKED]")
 
 
+def test_generate_task_blocks_incomplete_spec(project_dir, base_modules):
+    base_modules["modules"]["sample_tool"]["source"] = ""
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("generate_task.py", ["sample_tool"], cwd=project_dir)
+    assert code == 1
+    assert data["error"].startswith("[NOT READY]")
+    assert any("source" in item for item in data["readiness_blockers"])
+
+
 def test_generate_task_blocks_duplicate_without_force(project_dir, base_modules):
     base_modules["modules"]["sample_tool"]["state"] = "planned"
     write_yaml(project_dir, base_modules)

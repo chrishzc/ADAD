@@ -5,6 +5,11 @@ import json
 from adad_core import ADADCore, parse_markdown
 from validate_schema import validate_schema_conformance
 
+# Windows 傳統主控台的 cp950 無法輸出既有的 emoji 警告文字；採 UTF-8 可讓
+# CLI、CI 與 subprocess 測試都取得一致且不會中途崩潰的輸出。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 def main():
     md_path = "system_map.md"
     yaml_path = "system_map.yaml"
@@ -61,10 +66,25 @@ def main():
     # 3. 寫入並更新 YAML
     core.data["version"] = compiled_data.get("version", 1)
     core.data["modules"] = compiled_data.get("modules", {})
+    core.data["environment"] = compiled_data.get("environment")
     # ponytail-fix: 原本編譯只寫回 modules，domains（含 Domain/Subsystem 的
     # map_file 落點資訊）解析完就被丟棄，導致 resolve_target_file.py 與
     # find_misplaced_modules 永遠查不到任何 Domain。必須一併持久化進 YAML。
     core.data["domains"] = compiled_data.get("domains", {})
+
+    # 高複雜度節點的 Algorithm 是 Task Readiness 的必要條件；若在這裡
+    # 放過，後續任務只能等到 coding 前才發現規格不完整，違反 fail-fast。
+    high_complexity_missing_algorithm = [
+        name for name, info in core.data["modules"].items()
+        if info.get("complexity") == "high" and not info.get("algorithm")
+    ]
+    if high_complexity_missing_algorithm:
+        print(json.dumps({
+            "success": False,
+            "error": "[MISSING ALGORITHM] Complexity: high 的模組必須提供 Algorithm 步驟大綱。",
+            "modules": high_complexity_missing_algorithm,
+        }, ensure_ascii=False, indent=2))
+        sys.exit(1)
 
     # 3.5 Draft Debt Ledger 偵測
     debt_result = core.check_draft_debt()
@@ -96,22 +116,12 @@ def main():
             print(f"   - {o}")
         print("   請確認是否忘記在對應的父地圖加上 <!-- include ... --> ，否則這些內容不會被編譯進架構。\n")
 
-    # 高複雜度節點缺 Algorithm 偵測（不阻斷編譯，僅提示）：
+    # 高複雜度節點缺 Algorithm 偵測：上方已阻斷，保留此資料欄位供成功輸出使用。
     # Complexity: high 的意義是「這個函式光靠 Input/Output/Invariants 契約，
     # 能力較弱的模型大概率一次生成不對」，Algorithm 步驟大綱就是為了補這個縫。
     # 如果分級成 high 卻沒填 Algorithm，等於白標記，Phase 2 拿到的 context
     # 跟 low complexity 的節點沒有實質差異——這裡只給警告、不阻斷編譯，因為
     # Plan 階段本來就可能分批填寫，先讓人/Agent 看得到還沒補的節點即可。
-    high_complexity_missing_algorithm = [
-        name for name, info in core.data["modules"].items()
-        if info.get("complexity") == "high" and not info.get("algorithm")
-    ]
-    if high_complexity_missing_algorithm:
-        print("\n⚠️  [MISSING ALGORITHM] 以下模組標記為 Complexity: high，但尚未填寫 Algorithm 步驟大綱：")
-        for name in high_complexity_missing_algorithm:
-            print(f"   - {name}")
-        print("   高複雜度節點若缺乏步驟大綱，Phase 2 實作階段容易一次生成邏輯出錯，"
-              "建議在 system_map.md 補上 Algorithm 欄位後再進入原子生成。\n")
 
     # 模組落點偵測（不阻斷編譯，僅提示；commit 前會由 adad_pre_commit.py 硬性阻擋）
     from adad_core import find_misplaced_modules
@@ -210,6 +220,29 @@ def main():
         print("\n⚠️  [NO SCHEMA] 找不到 system_map.schema.json，跳過正式 schema 驗證這道防線。"
               "建議從新版 ADAD 範本補上這份檔案（放在專案根目錄，與 system_map.yaml 同層）。\n")
 
+    # Source 綁定完整性檢查（代辦事項 #8）：阻斷編譯，而不是只印警告。
+    # 這份映射是後面所有機械強制（RULE-02/03/04、Invariants、Verification、
+    # 跨 Domain 邊界檢查）反查模組的唯一依據，一旦有歧義，其他檢查全部會
+    # 靜默失效卻不自知，因此比照 Schema 違規的嚴重度處理，而不是比照
+    # MISPLACED MODULE / UNTRACKED SYMBOL 這類只提示的項目。
+    binding_result = core.check_source_binding()
+    if not binding_result["passed"]:
+        print("\n🚫 [SOURCE BINDING] 以下 Source 綁定有歧義，反查會靜默失效：")
+        for v in binding_result["violations"]:
+            print(f"   - [{v['type']}] {v['reason']}")
+        print("   請修正 system_map.md 對應節點的 Source 欄位後重新編譯。\n")
+        print(json.dumps({
+            "success": False,
+            "error": "system_map.yaml 的 Source 綁定存在歧義，編譯已阻斷。",
+            "source_binding_violations": binding_result["violations"]
+        }, ensure_ascii=False, indent=2))
+        sys.exit(1)
+    if binding_result["unbound"]:
+        print("\n⚠️  [UNBOUND SOURCE] 以下模組尚未填寫 Source，機械強制對它們完全不生效：")
+        for name in binding_result["unbound"]:
+            print(f"   - {name}")
+        print("   請盡快在 system_map.md 補上對應的 - Source: 欄位。\n")
+
     print(json.dumps({
         "success": True,
         "message": f"編譯成功！已將 {md_path} 編譯為 {yaml_path}，並完成狀態合併。",
@@ -218,7 +251,8 @@ def main():
         "misplaced_modules": misplaced,
         "untracked_symbols": untracked,
         "high_complexity_missing_algorithm": high_complexity_missing_algorithm,
-        "precommit_hook_installed": hook_status["hook_installed"]
+        "precommit_hook_installed": hook_status["hook_installed"],
+        "unbound_source_modules": binding_result["unbound"]
     }, ensure_ascii=False, indent=2))
     sys.exit(0)
 

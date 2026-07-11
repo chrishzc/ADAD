@@ -134,6 +134,7 @@ def base_modules():
     """一份只有一個模組 `sample_tool` 的最小 system_map 資料，個別測試依需求覆蓋擴充。"""
     return {
         "version": 1,
+        "environment": {"state": "not_required", "services": []},
         "modules": {
             "sample_tool": make_module(),
         },

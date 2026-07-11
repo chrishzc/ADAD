@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install project and test dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Run ADAD guardrail
+        run: python .agents/skills/adad-workflow/scripts/adad_pre_commit.py
+      - name: Compile architecture map
+        run: python .agents/skills/adad-workflow/scripts/compile_map.py
+      - name: Run test suite
+        run: python -m pytest -q

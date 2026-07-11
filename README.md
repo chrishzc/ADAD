@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2DD4BF">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.1.0-38BDF8">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.2.0-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
@@ -16,6 +16,15 @@
 本專案源自為 **Antigravity AI Agent** 開發的 Workspace Customization 擴充套件，旨在實行 **ADAD (架構驅動型智能體開發)** 開發模式；目前已擴展支援 **Claude Code**、**Codex CLI / 桌面 App** 等其他 Agent 平台，可依需求選擇要套用的一個或多個 Agent。
 
 ADAD 的核心理念是：**將「系統設計（架構）」與「程式碼實作（邏輯）」徹底解耦**。由人類把持高價值的架構與驗收 Checkpoint，並指派 Agent 在最小 Context 的約束下進行高精度的原子程式碼生成，以防範 AI 開發中的架構失控與 Context 膨脹問題。
+
+## ✨ 1.2.0 更新重點
+
+- **可驗證的施工規格**：`environment` 成為必填架構宣告；Task 核發前會檢查規格完整性；高複雜度模組缺少 `Algorithm` 會直接阻斷編譯。
+- **Source 綁定防線**：新增 `check_source_binding.py`，阻擋重複 Source、整檔／逐函式混用與函式多重歸屬，避免 Gate 靜默失效。
+- **CP-2 審批留痕**：`adad_task.py approve/reject` 要求 `--reviewer`，自動建立可追溯的 checkpoint audit；寫入失敗會回復狀態。
+- **持續驗證**：新增 GitHub Actions，在每次 push／pull request 執行 ADAD guardrail、架構編譯與完整測試套件。
+
+完整變更請見 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 🧭 為什麼你會需要 ADAD
 
@@ -339,6 +348,7 @@ adad upgrade
 | `verify_implementation.py` | 執行代碼實現驗證條件（`must_have_assertions` 靜態檢查，或 `case` 動態執行實際比對 Input/Output） | 原子代碼生成完畢後進行自檢驗證 |
 | `check_invariants.py` | 執行不變量約束（如 deny_imports）校驗 | 原子代碼生成完畢後進行靜態 AST 檢查 |
 | `validate_schema.py` | 驗證 `system_map.yaml` 是否符合正式 `system_map.schema.json` 規格 | 已整合進 `compile_map.py` 每次編譯自動執行；也可獨立對其他 yaml 檔案手動呼叫 |
+| `check_source_binding.py` | 檢查 `Source` 欄位反查映射有無歧義（重複綁定、整檔/逐函式混用、函式撞名） | 已整合進 `compile_map.py`（阻斷編譯）與 `adad_pre_commit.py`（阻斷 commit）；也可獨立手動呼叫 |
 | `adad_pre_commit.py` | Pre-Commit Hook（機械強制 5 項檢查） | 每次 `git commit` 自動執行，或手動呼叫 |
 | `adad_pretooluse_gate.py` | Claude Code PreToolUse Hook，動手改代碼前擋下狀態違規 | `adad init --agents claude` 自動註冊，Edit/Write/MultiEdit 呼叫前自動觸發 |
 
@@ -399,6 +409,8 @@ adad upgrade
 ## 🚧 Checkpoint Review Payload 標準格式
 
 每個 Checkpoint 由三個部分組成：**系統呈現給人類的內容**、**人類的決策選項**、**決策後系統的行為**。每個 Checkpoint 無論結果如何，完整 Payload 都必須存檔於：`checkpoints/CP-{phase}-{序號}-{approved|rejected|modified}.yaml`。
+
+CP-2 的 `adad_task.py approve/reject` 會自動建立此留痕；人類必須在互動終端機提供 `--reviewer "姓名"`。紀錄會固定保存 reviewer、時間、Task ID、架構版本、source hash、結果與註解，audit 寫入失敗時會回復 Task 與模組狀態。
 
 ### 共用信封格式（所有 Checkpoint 通用）
 
@@ -741,7 +753,7 @@ checkpoint_payload:
 
 ### 10. Complexity 分級與 Algorithm 步驟大綱（v1.1.0）
 *   **背景**：Module 的契約（Input/Output/Invariants）只描述「對外承諾什麼」，沒描述「內部該怎麼做」。函式邏輯一旦複雜（多分支、多步驟、有演算法），能力較弱的模型光靠契約常常一次生成邏輯就出錯，或反覆撞 Verification 失敗卻收斂不了。
-*   **改善邏輯**：新增 `Complexity: low/medium/high` 分級欄位（Plan 階段標注），以及 `Algorithm` 步驟大綱欄位（僅描述步驟，不是完整程式碼）。高複雜度節點若缺 `Algorithm`，`compile_map.py` 會印出 `[MISSING ALGORITHM]` 警告提醒補上。有了步驟大綱，Phase 2 只需要把每一小段「翻譯」成程式碼，而不必自己重新「設計」邏輯。
+*   **改善邏輯**：新增 `Complexity: low/medium/high` 分級欄位（Plan 階段標注），以及 `Algorithm` 步驟大綱欄位（僅描述步驟，不是完整程式碼）。高複雜度節點若缺 `Algorithm`，`compile_map.py` 會以 `[MISSING ALGORITHM]` 阻斷編譯；施工規格必須先補齊。有了步驟大綱，Phase 2 只需要把每一小段「翻譯」成程式碼，而不必自己重新「設計」邏輯。
 
 ### 11. Verification 從靜態斷言升級為可執行測試（v1.1.0）
 *   **背景**：原本的 `must_have_assertions` 只用 AST 掃描「檔案裡有沒有寫 assert」，不執行程式碼、不知道斷言內容對不對——即使邏輯整個寫反，只要塞一行 `assert True` 照樣「通過」。

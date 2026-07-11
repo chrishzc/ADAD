@@ -4,7 +4,7 @@
   "title": "ADAD Compiled Architecture IR (system_map.yaml)",
   "description": "由 compile_map.py 從 system_map.md 編譯出來的架構中間表示 (IR) 的正式結構規格。這份 schema 刻意獨立於 adad_core.py 的 Python 實作之外——任何工具（IDE 外掛、CI pipeline、甚至非 Python 語言寫的工具）都可以直接拿這份檔案對 system_map.yaml 做結構驗證，不需要理解 system_map.md 的 Markdown 語法，也不需要理解 parse_markdown 的實作細節。",
   "type": "object",
-  "required": ["version", "modules", "domains"],
+  "required": ["version", "modules", "domains", "environment"],
   "properties": {
     "version": {
       "type": "integer",
@@ -40,6 +40,27 @@
         }
       }
     },
+    "environment": {
+      "type": "object",
+      "required": ["state", "services"],
+      "properties": {
+        "state": { "enum": ["planned", "validated", "deployed", "not_required"] },
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "image": { "type": "string" },
+              "command": { "type": "string" },
+              "ports": { "type": "array", "items": { "type": "string" } },
+              "environment": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
     "modules": {
       "type": "object",
       "description": "所有 Module 節點，key 是全域唯一的模組名稱。",
@@ -49,15 +70,15 @@
   "$defs": {
     "module": {
       "type": "object",
-      "required": ["type", "description", "source", "state", "input", "output"],
+      "required": ["type", "description", "source", "state", "input", "output", "invariants", "verification", "complexity", "algorithm"],
       "properties": {
         "type": {
-          "type": "string",
+          "type": "string", "minLength": 1,
           "description": "模組類型，例如 function / tool。對應 `- Type:` 欄位，Type 是必填欄位（compile_map.py 會在此之前就先擋下缺漏的情況）。"
         },
-        "description": { "type": "string" },
+        "description": { "type": "string", "minLength": 1 },
         "source": {
-          "type": "string",
+          "type": "string", "minLength": 1,
           "description": "實作檔案路徑，可帶 `::func_name` 或 `::f1,f2` 逐函式標註。空字串代表尚未填寫（機械強制大部分會失效，詳見 SKILL.md）。"
         },
         "domain": { "type": ["string", "null"] },
