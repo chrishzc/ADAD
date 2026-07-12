@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2DD4BF">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.2.0-38BDF8">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.3.0-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
@@ -17,12 +17,12 @@
 
 ADAD 的核心理念是：**將「系統設計（架構）」與「程式碼實作（邏輯）」徹底解耦**。由人類把持高價值的架構與驗收 Checkpoint，並指派 Agent 在最小 Context 的約束下進行高精度的原子程式碼生成，以防範 AI 開發中的架構失控與 Context 膨脹問題。
 
-## ✨ 1.2.0 更新重點
+## ✨ 1.3.0 更新重點
 
-- **可驗證的施工規格**：`environment` 成為必填架構宣告；Task 核發前會檢查規格完整性；高複雜度模組缺少 `Algorithm` 會直接阻斷編譯。
-- **Source 綁定防線**：新增 `check_source_binding.py`，阻擋重複 Source、整檔／逐函式混用與函式多重歸屬，避免 Gate 靜默失效。
-- **CP-2 審批留痕**：`adad_task.py approve/reject` 要求 `--reviewer`，自動建立可追溯的 checkpoint audit；寫入失敗會回復狀態。
-- **持續驗證**：新增 GitHub Actions，在每次 push／pull request 執行 ADAD guardrail、架構編譯與完整測試套件。
+- **Task 規格驗證系列**：引進結構化 Semantic Contract、Non-goals、以前後條件強化的 Verification case、Assumptions 約束，以及 per-task Input/Output JSON Schema 遞迴驗證，全方位限制 Agent 施工範圍與預期行為。
+- **說明文件對齊與重構**：補齊 `generate_task`、`adad_task` 等關鍵 CLI 的使用說明，重構 Phase 2 與 CP-2 工作流描述，並將長篇歷史演進轉移至 CHANGELOG。
+- **Source 綁定防線與 audit 留痕**：新增重複 Source 阻斷與 git 暫存區 (staged blob) 安全校驗，CP-2 審查正式強制 `--reviewer` 審計留痕。
+- **測試覆蓋**：新增 105 個測試案例，100% 通過 pytest 驗證。
 
 完整變更請見 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -383,53 +383,16 @@ adad upgrade
 | `compile_map.py` | 編譯 `system_map.md` ➔ `system_map.yaml` + Draft Debt / 模組落點偵測 | 修改 Markdown 架構源後首要執行 |
 | `resolve_target_file.py` | 查詢新模組該寫進哪個實體檔案（含子地圖落點） | Phase 1 新增模組前，先查再動筆 |
 | `resume_analysis.py` | 分析架構進度、Draft Debt Ledger 與智能推薦下一步 | 開發重啟、或人類要求進度概覽時執行 |
-| `read_context.py` | 讀取單一節點最小上下文 (已包含 ADR & 模式注入) | Phase 2 開始編寫代碼前，獲取目標簽章 |
-| `check_normalization.py` | 執行 Rule of Two 檢查 | Phase 1 架構規劃期，檢測是否重複造輪子 |
-| `analyze_cascade.py` | 執行髒點依賴分析 (DAG 走查) | Phase 3 反向同步，架構變更時級聯標記 `dirty` |
-| `transit_state.py` | 推進/變更模組生命週期狀態（硬化版：非法轉移阻斷） | CP 審查通過、Lint 通過或被退回時更新狀態 |
-| `verify_implementation.py` | 執行代碼實現驗證條件（`must_have_assertions` 靜態檢查，或 `case` 動態執行實際比對 Input/Output） | 原子代碼生成完畢後進行自檢驗證 |
-| `check_invariants.py` | 執行不變量約束（如 deny_imports）校驗 | 原子代碼生成完畢後進行靜態 AST 檢查 |
-| `validate_schema.py` | 驗證 `system_map.yaml` 是否符合正式 `system_map.schema.json` 規格 | 已整合進 `compile_map.py` 每次編譯自動執行；也可獨立對其他 yaml 檔案手動呼叫 |
-| `check_source_binding.py` | 檢查 `Source` 欄位反查映射有無歧義（重複綁定、整檔/逐函式混用、函式撞名） | 已整合進 `compile_map.py`（阻斷編譯）與 `adad_pre_commit.py`（阻斷 commit）；也可獨立手動呼叫 |
-| `adad_pre_commit.py` | Pre-Commit Hook（機械強制 5 項檢查） | 每次 `git commit` 自動執行，或手動呼叫 |
-| `adad_pretooluse_gate.py` | Claude Code PreToolUse Hook，動手改代碼前擋下狀態違規 | `adad init --agents claude` 自動註冊，Edit/Write/MultiEdit 呼叫前自動觸發 |
+| `generate_task.py` | 核發單一模組的凍結快照，鎖定 source 檔案，建立明確合約 | Phase 2 開發前核發 Task |
+| `read_context.py` | 讀取單一節點## 📈 版本演進與改善紀錄
 
-> 💡 **`validate_schema.py` 想要最完整的驗證，額外安裝一次即可（不裝也能運作，見下方說明）**：
-> ```bash
-> pip install jsonschema
-> # 或者，如果你是用本專案的 pip install .／pip install -e . 安裝方式：
-> pip install .[schema]
-> ```
-> 沒安裝 `jsonschema` 時，`validate_schema.py` 會自動退回一個只實作用得到的子集的純標準庫驗證器（型別檢查、必填欄位、enum 合法值、`case` 結構），一樣能擋下常見的結構性錯誤，只是沒有完整 JSON Schema 規範那麼齊全（例如不支援 `patternProperties`）。裝了 `jsonschema` 後，`validate_schema.py` 會自動偵測並優先使用，不需要額外設定。
+詳細的版本演進、功能改善以及歷史變更紀錄，請參閱專案根目錄下的 [CHANGELOG.md](CHANGELOG.md)。
 
----
-
-## 🔄 ADAD 人機協作工作流 (Human-Agent Workflow)
-
-此工作流以**人類（架構師/開發者）**為主動驅動者，**Agent** 則作為被動呼叫的原子執行單元。整體流程透過多個 **Checkpoint** 由人類進行決策與狀態推進。
-
-```
-[ Phase 1: 架構規劃與逐步展開 (Architecture Growth) ]
-  1. 人類啟動規劃，依序小步展開系統架構 (Domain ➔ Subsystem ➔ Module ➔ Interface)。
-  2. Agent 執行分析並呼叫 `check_normalization` 確保符合 Rule of Two。
-  3. Agent 將規劃草案寫入 `system_map.md` (節點狀態標記為 planned)。
-  4. 🚧 【人工 Checkpoint 1】：人類審查架構草案，確認無誤後批准。
-  5. 執行 `compile_map.py` 編譯產生 `system_map.yaml`。
-       │
-       ▼
-[ Phase 1.5: 環境與容器規劃 ]
-  5.1. Agent 根據系統架構，於 `system_map.md` 的 `environment` 區塊規劃 Docker Compose 容器服務（狀態標記為 planned）。
-  5.2. 🚧 【人工 Checkpoint 1.5】：人類審查多容器架構配置，確認無誤後批准，自動產生實體環境配置。
-       │
-       ▼
-[ Phase 2: 原子生成 ]
-  6. 人類指派特定節點進行開發，系統呼叫 `read_context` 為 Agent 準備最小上下文。
-  7. 人類呼叫 Agent，Agent 依照上下文與規範生成單一原子代碼。
-  8. 系統自動執行 Lint & Type Check 驗證代碼。
+--- Lint & Type Check 驗證代碼。
   9. Agent 呼叫 `check_invariants` 與 `verify_implementation` 進行架構與自檢約束校驗。
      ├── ❌ 失敗：系統呼叫 Agent 讀取 Error，進行自我修正迴圈 (Self-Fix Loop)。
-     └──  成功：系統將節點狀態更新為 [linted/tested]。
-  10. 🚧 【人工 Checkpoint 2】：人類審查產生的程式碼與實作，確認無誤後批准，推進狀態為 [deployed]。
+     └──  成功：Agent 呼叫 `adad_task.py submit` 提報任務（狀態變為 submitted）。
+  10. 🚧 【人工 Checkpoint 2】：人類審查產生的程式碼與實作，確認無誤後執行 `adad_task.py approve` 批准，解除 source 鎖定，推進模組狀態為 [deployed]。若駁回則執行 `adad_task.py reject`，保留檔案變更供後續修正。
        │
        ▼
 [ Phase 3: 反向同步 ] ─── (若 Agent 在 Phase 2 實作期發現架構缺陷...)
@@ -619,8 +582,8 @@ checkpoint_payload:
       - node: "calculate_tax"
         instruction: ""
 
-  on_approve: "transit_module_state(calculate_tax, deployed)"
-  on_reject: "transit_module_state(calculate_tax, dirty)，Agent 重新生成"
+  on_approve: "adad_task.py approve（解開 source 鎖，寫入 audit 紀錄，推進狀態為 deployed）"
+  on_reject: "adad_task.py reject（保留修改，留待後續修正），Agent 重新生成"
   on_modify: "Agent 依照 modify_targets 修正後重新觸發 CP-2"
 ```
 
@@ -740,72 +703,9 @@ checkpoint_payload:
 
 ---
 
-## 📈 ADAD 演進與優化改善邏輯 (Improvements)
+## 📈 版本演進與改善紀錄
 
-相較於 ADAD 第一版純 YAML facts 與硬性依賴校驗的設計，當前專案整合了以下幾項重大改善與升級：
-
-### 1. 設計抉擇 (ADR) 智慧注入與 Context 裁剪
-*   **改善邏輯**：為防止 Context 膨脹，架構引擎實作了 [docs/adr/](docs/adr/) 文件智慧解析器。當 Agent 調用 `read_context` 讀取節點時，引擎會提取模組關聯的 ADR 文件（如 `ADR-001`）中的**標題、狀態、以及決策要點**，智慧裁減為 2~3 行摘要後寫入 Context，為 Agent 在多種寫法中做出設計決策提供 why 的歷史引導。
-
-### 2. 首選設計模式 (Preferred Pattern) 落地
-*   **改善邏輯**：引進模式約束（例如 [pure_function.md](docs/patterns/pure_function.md) 模式）。可在架構中聲明模組首選模式，Context 會隨之注入模式規範（如 "輸入引數必須為 immutable" 等指引），直接回答 Agent「有多種寫法時應該選哪一種」的實踐方式。
-
-### 3. 架構邊界靜態不變量 (Invariants) AST 校驗
-*   **改善邏輯**：新增了基於 Python AST（抽象語法樹）的靜態檢查器 `check_invariants`。能讀取 `system_map.yaml` 中配置的 `invariants` 約束（如 `deny_imports: [pymysql]`），在代碼生成後對 Imports 與 ImportsFrom 進行靜態分析並自動阻斷違規導入，守護系統解耦意圖（如分層隔離、防腐界限）。
-
-### 4. 代碼實現驗證限制 (Verification)
-*   **改善邏輯**：新增了 `verify_implementation` 檢驗器，支援在節點上配置 `verification` 約束（例如 `must_have_assertions`），強制 Agent 在撰寫原子程式碼時必須至少包含一個 `assert` 自檢斷言，從而限制程式碼實踐的品質。
-
-### 5. 智慧狀態繼承與編譯重置
-*   **改善邏輯**：引入 Compiler (`compile_map.py`) 在從 `system_map.md` 編譯為中間表示 YAML 時，會自動進行結構比對。
-    *   **無變動繼承**：如果模組的 input, output, dependencies 未改變，自動繼承舊的狀態（如 deployed）。
-    *   **變動重置**：如果模組發生了結構性改變，狀態會智慧重置為 `dirty`。
-
-### 6. 思路重啟 (Resume) 與下一步智能推薦
-*   **改善邏輯**：為解決 Agent 中途接手難以恢復設計思路的痛點，實作了 `resume_analysis.py`。能輸出詳細 TODO 與 Checkpoints 進度報告。更基於 DAG 拓撲分析，篩選出**依賴項均已 deployed 但自身尚未 deployed 的模組**，智能推薦最合理的下一步開發重點。
-
-### 7. Draft Debt Ledger（草稿債務追蹤）
-*   **改善邏輯**：新增 `draft` 與 `pending_review` 兩個生命週期狀態，專為 Leaf 模式（demo 期、快速原型）設計。
-    *   **draft 狀態**：Leaf 模式下生成的模組標記為 `draft`，進入 `resume_analysis.py` 的待補清單。
-    *   **自動升級**：當 draft 模組的 **fan-in**（被依賴次數）從 0 變為 ≥2 時，系統自動將其及所有新依賴它的節點標記為 `pending_review`，強制觸發一次補做 Checkpoint（含 ADR）。
-    *   **結構訊號驅動**：觸發條件是結構性的（依賴關係變化），不依賴人類記憶。這比「定期手動回顧 demo 期代碼」可靠得多。
-
-### 8. 軟規則硬化（Pre-Commit Hook 機械強制）
-*   **改善邏輯**：將原本只存在於 `AGENTS.md` 文字中的軟規則，轉為 `git pre-commit hook` 機械執行：
-
-    | 檢查項目 | 對應規則 | 失敗行為 |
-    |---------|---------|----------|
-    | Staleness 阻斷 | RULE-01 SSOT | ❌ 阻斷 commit |
-    | 狀態門禁（含刪除檔案） | RULE-02 先架構後程式 | ❌ 阻斷 commit |
-    | 原子範圍 | RULE-03 原子化操作 | ⚠️ 警告（不阻斷） |
-    | Invariants (deny_imports) | 架構邊界 | ❌ 阻斷 commit |
-    | Verification (must_have_assertions) | 實作品質 | ❌ 阻斷 commit |
-    | 跨 Domain 依賴邊界 | 架構邊界 | ❌ 阻斷 commit |
-
-    核心保證由機器全程強制，分級只影響「需不需要人類額外審查文件」，不影響「會不會真的改A壞B」這個底線。
-
-    **2026-07 安全強化**：所有檢查項目已改為讀取 `git show :0:<path>`（暫存區 staged blob）而非磁碟工作目錄，防止「先 git add 違規版本 → 改乾淨但忘記重新 add」的繞過攻擊向量。額外修正：
-    - 相對 import（`from . import x`）漏檢問題（`deny_imports` 現可攔截所有 import 形式）
-    - `check_invariants` / `verify_implementation` 未讀取節點 `source` 欄位路徑的問題
-    - git 執行失敗時靜默放行的問題（現改為阻斷 commit）
-    - 刪除（D）檔案不受 RULE-02 狀態門禁管轄的問題
-
-### 9. 狀態轉移硬化
-*   **改善邏輯**：`transit_state()` 從原本的 WARNING（允許非法轉移）改為 ERROR + 阻斷。非法的狀態轉移會直接返回錯誤，不再允許執行，確保狀態機的完整性。
-
-### 10. Complexity 分級與 Algorithm 步驟大綱（v1.1.0）
-*   **背景**：Module 的契約（Input/Output/Invariants）只描述「對外承諾什麼」，沒描述「內部該怎麼做」。函式邏輯一旦複雜（多分支、多步驟、有演算法），能力較弱的模型光靠契約常常一次生成邏輯就出錯，或反覆撞 Verification 失敗卻收斂不了。
-*   **改善邏輯**：新增 `Complexity: low/medium/high` 分級欄位（Plan 階段標注），以及 `Algorithm` 步驟大綱欄位（僅描述步驟，不是完整程式碼）。高複雜度節點若缺 `Algorithm`，`compile_map.py` 會以 `[MISSING ALGORITHM]` 阻斷編譯；施工規格必須先補齊。有了步驟大綱，Phase 2 只需要把每一小段「翻譯」成程式碼，而不必自己重新「設計」邏輯。
-
-### 11. Verification 從靜態斷言升級為可執行測試（v1.1.0）
-*   **背景**：原本的 `must_have_assertions` 只用 AST 掃描「檔案裡有沒有寫 assert」，不執行程式碼、不知道斷言內容對不對——即使邏輯整個寫反，只要塞一行 `assert True` 照樣「通過」。
-*   **改善邏輯**：`Verification` 新增 `case: {"input": {...}, "expect": ...}` 語法（嚴格 JSON），`verify_implementation.py` 會動態 import 對應函式、用 `input` 當 kwargs 實際呼叫、比對 `expect`，失敗時回傳每組 case 的 `input`/`expect`/`actual`，agent 自己就能看到具體哪裡算錯。`case` 語法寫錯會在編譯期直接失敗並指出哪個模組哪一段，不留到執行期才含糊報錯。
-
-### 12. system_map.yaml 正式 JSON Schema 化（v1.1.0）
-*   **背景**：`system_map.yaml` 的結構規範原本只活在 `parse_markdown` 的 Python 邏輯裡，是隱性規則——「產生者」跟「檢查者」是同一段程式碼，自身邏輯 bug 不會被自己抓到，其他語言/工具也無法脫離這份 Python 實作去驗證。
-*   **改善邏輯**：新增獨立的 `system_map.schema.json`（標準 JSON Schema，定義必要欄位、`state`/`complexity` 合法 enum、`verification.case` 結構），以及 `validate_schema.py` 驗證器，已整合進 `compile_map.py` 每次編譯後自動執行，不符合直接中止編譯。優先使用 `jsonschema`（若已安裝），沒裝則自動退回純標準庫實作的子集驗證器，開箱即用不強迫多裝套件。
-
----
+詳細的版本演進、功能改善以及歷史變更紀錄，請參閱專案根目錄下的 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 🙏 致謝與開發方式說明
 

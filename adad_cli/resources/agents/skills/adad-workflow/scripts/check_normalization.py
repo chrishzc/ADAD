@@ -1,25 +1,47 @@
 # -*- coding: utf-8 -*-
 import sys
 import json
+import argparse
 from adad_core import ADADCore
 
 def main():
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "請提供提議節點的 JSON 字串。用法: python check_normalization.py '<json_string>'"}, ensure_ascii=False))
+    parser = argparse.ArgumentParser(description="執行 ADAD Rule of Two 邊界檢查")
+    parser.add_argument("proposal_json", nargs="?", help="向後相容的提議節點 JSON 字串")
+    parser.add_argument("--file", dest="proposal_file", help="包含提議節點的 UTF-8 JSON 檔案")
+    args = parser.parse_args()
+
+    if args.proposal_json is not None and args.proposal_file is not None:
+        print(json.dumps({"error": "proposal_json 與 --file 只能擇一提供。"}, ensure_ascii=False))
         sys.exit(1)
-        
+
+    if args.proposal_file is not None:
+        try:
+            with open(args.proposal_file, "r", encoding="utf-8") as proposal_file:
+                raw_proposal = proposal_file.read()
+        except (OSError, UnicodeError) as e:
+            print(json.dumps({"error": f"JSON 檔案讀取失敗: {e}"}, ensure_ascii=False))
+            sys.exit(1)
+    elif args.proposal_json is not None:
+        raw_proposal = args.proposal_json
+    else:
+        if sys.stdin.isatty():
+            print(json.dumps({"error": "請透過 positional JSON、--file 或 stdin 提供提議節點。"}, ensure_ascii=False))
+            sys.exit(1)
+        raw_proposal = sys.stdin.read()
+        if not raw_proposal.strip():
+            print(json.dumps({"error": "stdin 未提供 JSON 內容。"}, ensure_ascii=False))
+            sys.exit(1)
+
+    assert isinstance(raw_proposal, str), "提議節點輸入必須是文字"
     try:
-        data = json.loads(sys.argv[1])
+        data = json.loads(raw_proposal)
     except Exception as e:
         print(json.dumps({"error": f"JSON 解析失敗: {e}"}, ensure_ascii=False))
         sys.exit(1)
 
-    # ponytail-fix: system_map.md 宣告本模組的 Verification 為 must_have_assertions，
-    # 但實作裡原本一個 assert 都沒有——導致全新專案第一次 commit 就會被自己的
-    # pre-commit hook 卡住。這裡補一個真正有意義的自檢斷言：合法 JSON 不代表一定是
-    # 物件（例如可能是陣列、字串、數字），若不是 dict，後面的 data.get(...) 會
-    # 得到不明確的 AttributeError；用 assert 把這個前提條件明確表達出來。
-    assert isinstance(data, dict), "提議節點的 JSON 必須解析為物件（dict），而非陣列或純值"
+    if not isinstance(data, dict):
+        print(json.dumps({"error": "提議節點的 JSON 必須解析為物件（dict），而非陣列或純值。"}, ensure_ascii=False))
+        sys.exit(1)
 
     name = data.get("name")
     proposed_input = data.get("input", {})
