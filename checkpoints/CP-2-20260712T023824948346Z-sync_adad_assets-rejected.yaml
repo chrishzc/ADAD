@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260712T023824948346Z-sync_adad_assets
+  phase: 2
+  timestamp: '2026-07-12T02:38:24.948346+00:00'
+  triggered_by: human
+  status: rejected
+  target:
+    node_name: sync_adad_assets
+    task_id: sync_adad_assets@v1@499d25
+    system_map_version: 1
+    source_hash: 499d253c11cffcc2a782060ef68b64fc4878ec607fb193bbd5296530a36e1c19
+  decision:
+    action: rejected
+    reviewer: TMP-214
+    comment: CP-3-002：同步器必須排除並清理 Python __pycache__／*.pyc，避免生成資產一致性假失敗。

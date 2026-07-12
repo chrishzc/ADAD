@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adad.dev/schema/system_map.schema.json",
+  "title": "ADAD Compiled Architecture IR (system_map.yaml)",
+  "description": "由 compile_map.py 從 system_map.md 編譯出來的架構中間表示 (IR) 的正式結構規格。這份 schema 刻意獨立於 adad_core.py 的 Python 實作之外——任何工具（IDE 外掛、CI pipeline、甚至非 Python 語言寫的工具）都可以直接拿這份檔案對 system_map.yaml 做結構驗證，不需要理解 system_map.md 的 Markdown 語法，也不需要理解 parse_markdown 的實作細節。",
+  "type": "object",
+  "required": ["version", "modules", "domains", "environment"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "架構版本號，對應 system_map.md 的 `- Version:` Metadata 欄位。"
+    },
+    "domains": {
+      "type": "object",
+      "description": "所有 Domain 的中繼資料，key 是 Domain 名稱。",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description", "map_file"],
+        "properties": {
+          "description": { "type": "string" },
+          "map_file": {
+            "type": "string",
+            "description": "這個 Domain 標頭實際寫在哪個實體 .md 檔案（支援 include 分區地圖）。"
+          },
+          "allowed_dependencies": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "subsystems": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "description": { "type": "string" },
+                "map_file": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "required": ["state", "services"],
+      "properties": {
+        "state": { "enum": ["planned", "validated", "deployed", "not_required"] },
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "image": { "type": "string" },
+              "command": { "type": "string" },
+              "ports": { "type": "array", "items": { "type": "string" } },
+              "environment": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "modules": {
+      "type": "object",
+      "description": "所有 Module 節點，key 是全域唯一的模組名稱。",
+      "additionalProperties": { "$ref": "#/$defs/module" }
+    }
+  },
+  "$defs": {
+    "module": {
+      "type": "object",
+      "required": ["type", "description", "source", "state", "input", "output", "invariants", "verification", "complexity", "algorithm"],
+      "properties": {
+        "type": {
+          "type": "string", "minLength": 1,
+          "description": "模組類型，例如 function / tool。對應 `- Type:` 欄位，Type 是必填欄位（compile_map.py 會在此之前就先擋下缺漏的情況）。"
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "source": {
+          "type": "string", "minLength": 1,
+          "description": "實作檔案路徑，可帶 `::func_name` 或 `::f1,f2` 逐函式標註。空字串代表尚未填寫（機械強制大部分會失效，詳見 SKILL.md）。"
+        },
+        "domain": { "type": ["string", "null"] },
+        "subsystem": { "type": ["string", "null"] },
+        "map_file": {
+          "type": "string",
+          "description": "這個 Module 節點實際寫在哪個實體 .md 檔案。"
+        },
+        "state": {
+          "enum": ["planned", "draft", "dirty", "validated", "pending_review", "deployed"],
+          "description": "生命週期狀態，只有 planned/draft/dirty/validated 允許自由修改程式碼（RULE-02）。"
+        },
+        "complexity": {
+          "enum": ["low", "medium", "high"],
+          "description": "Plan 階段對函式複雜度的分級。high 應搭配 algorithm 步驟大綱一起填。"
+        },
+        "algorithm": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "複雜函式的步驟大綱（僅描述步驟，不是完整程式碼），讓 Phase 2 只需要「翻譯」而不必重新「設計」。"
+        },
+        "preferred_pattern": { "type": "string" },
+        "dependencies": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "decisions": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "外部化 ADR 決策檔案的 ID 清單。"
+        },
+        "invariants": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "架構不變量規則字串，例如 'deny_imports: [pymysql]'。"
+        },
+        "verification": {
+          "type": "array",
+          "description": "驗證條件清單，可混用純字串標籤（例如 must_have_assertions）與結構化可執行測試案例（case）。",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "required": ["case"],
+                "additionalProperties": false,
+                "properties": {
+                  "case": {
+                    "type": "object",
+                    "required": ["input", "expect"],
+                    "properties": {
+                      "input": {
+                        "type": "object",
+                        "description": "以 kwargs 形式呼叫實作函式時使用的具名參數。"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "todo": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "checkpoint": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "known_symbols": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "compile_map.py 的靜默脫鉤偵測用來記錄上次編譯掃到的 top-level 函式/方法名稱基準線（僅整檔登記模組才會有）。"
+        },
+        "input": {
+          "type": "object",
+          "description": "參數名稱 → 型別描述字串的對應（型別描述目前是自由文字，不強制列舉）。"
+        },
+        "output": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

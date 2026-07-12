@@ -16,10 +16,46 @@
 #### Subsystem: Core_Engine
 - Description: 負責架構地圖讀寫、狀態推進、DAG 依賴分析與 Invariants 校驗的核心模組。
 
+##### Module: sync_adad_assets
+- Type: tool
+- Description: 以 adad_source 作為唯一可編輯來源，同步產生本 repo 的 .agents 與發佈給 adad init 的 resources 資產；Python 快取不是受管理資產，必須排除於複製與一致性比較之外。
+- Source: adad_cli/sync_assets.py
+- Preferred Pattern: pure_function
+- Decisions:
+  - 根目錄 system_map.md 是 ADAD 本體的架構 SSOT，不屬於可同步範本。
+  - adad_source/agents 與 adad_source/templates 是 workflow 規則與新專案範本的唯一可編輯來源。
+  - .agents 與 adad_cli/resources 是受管理產物，僅能透過本工具更新。
+  - __pycache__/ 與 *.pyc 是執行期快取，不得複製、不得納入 --check 比較；--write 必須清除受管理輸出中的既有快取。
+- Invariants:
+  - deny_imports: [yaml]
+- Verification:
+  - must_have_assertions
+- Algorithm:
+  - 收集與比較檔案樹時，排除路徑任一層為 __pycache__ 的檔案及副檔名為 .pyc 的檔案。
+  - --write 前先從受管理輸出樹移除上述快取，再只複製 canonical 的非快取檔案。
+  - --check 只比較受管理檔案，Python 執行期產生的快取不得造成不一致。
+  - 擴充測試，驗證 canonical 與輸出任一側出現 .pyc 時，資產檢查仍只評估受管理檔案且 --write 可清理輸出快取。
+- Dependencies: []
+- Input:
+  - source_file: adad_cli/sync_assets.py
+  - test_file: tests/test_sync_assets.py
+  - allowed_symbols: [_tree_files, _compare_tree, _copy_tree, sync_assets]
+  - forbidden_files: [system_map.md, adad_source, adad_cli/resources, .agents/AGENTS.md, README.md]
+  - --write: flag（將唯一來源同步至所有產物）
+  - --check: flag（驗證所有產物與唯一來源一致）
+- Output:
+  - result: object（同步或檢查結果；不一致時列出相對路徑）
+- TODO:
+  - [ ] 規格總覽 #50：排除並清理 Python 快取，避免同步一致性假失敗
+- Checkpoint:
+  - [x] CP-1-018 (validated)
+  - [x] CP-3-002 (validated：生成資產快取排除)
+- Complexity: medium
+
 ##### Module: read_context
 - Type: tool
 - Description: 讀取單一節點最小上下文的輔助工具
-- Source: .agents/skills/adad-workflow/scripts/read_context.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/read_context.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -37,9 +73,16 @@
 
 ##### Module: check_normalization
 - Type: tool
-- Description: 執行 Rule of Two 邊界檢查，防範重複設計的工具
-- Source: .agents/skills/adad-workflow/scripts/check_normalization.py
+- Description: 執行 Rule of Two 邊界檢查；支援舊 positional JSON、UTF-8 JSON 檔案與 stdin，避免 Windows shell quoting 破壞 JSON。
+- Source: adad_source/agents/skills/adad-workflow/scripts/check_normalization.py::main
 - Preferred Pattern: pure_function
+- Complexity: medium
+- Algorithm:
+  - 使用 argparse 定義可選 positional `proposal_json` 與 `--file <path>`；兩者同時提供時輸出結構化錯誤並 exit 1。
+  - 若提供 `--file`，以 UTF-8 讀取完整內容；否則若有 positional 則沿用舊行為；兩者皆無時從 stdin 讀取，stdin 為互動終端或內容空白時輸出用法錯誤。
+  - 將取得的文字交給 json.loads；解析失敗、檔案讀取失敗或根節點不是 object 時，都輸出單一 JSON error object 並 exit 1，不輸出 traceback。
+  - 保留 name 必填與既有 ADADCore.evaluate_normalization 呼叫，不改 Rule of Two 判斷邏輯及成功輸出格式。
+  - 僅修改 canonical source 的 main；生成副本由 sync_adad_assets 更新，不直接手改。
 - Decisions: []
 - Invariants:
   - deny_imports: [pymysql]
@@ -47,7 +90,12 @@
   - must_have_assertions
 - Dependencies: []
 - Input:
-  - proposed_function: string
+  - target_file: adad_source/agents/skills/adad-workflow/scripts/check_normalization.py
+  - allowed_symbols: [main]
+  - forbidden_files: [system_map.md, adad_cli/core.py, adad_cli/sync_assets.py, adad_cli/resources, .agents, README.md]
+  - proposal_json: string（向後相容的 positional JSON，可選）
+  - --file: path（UTF-8 JSON 檔案，可選）
+  - stdin: string（未提供 positional 與 --file 時使用）
 - Output:
   - result: object
 - TODO:
@@ -55,11 +103,12 @@
 - Checkpoint:
   - [x] CP-1-002 (validated)
   - [x] CP-2-002 (deployed)
+  - [x] CP-3-001 (validated：改善 Windows quoting 輸入邊界)
 
 ##### Module: analyze_cascade
 - Type: tool
 - Description: 執行髒點級聯依賴分析的 DAG 走查工具
-- Source: .agents/skills/adad-workflow/scripts/analyze_cascade.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/analyze_cascade.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -78,7 +127,7 @@
 ##### Module: transit_state
 - Type: tool
 - Description: 推進或變更模組生命週期狀態的狀態機工具
-- Source: .agents/skills/adad-workflow/scripts/transit_state.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/transit_state.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -98,7 +147,7 @@
 ##### Module: adad_core
 - Type: library
 - Description: 核心引擎，提供 system_map 讀寫、DAG 依賴分析、狀態推進、Invariants/Domain 邊界檢查等共用邏輯，被本檔案登記的其餘所有工具 import 使用；本身不是獨立執行的 CLI 工具，沒有對外的輸入輸出介面。
-- Source: .agents/skills/adad-workflow/scripts/adad_core.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -115,7 +164,7 @@
 ##### Module: compile_map
 - Type: tool
 - Description: 將 system_map.md（含 include 分區地圖）編譯為機讀 IR system_map.yaml，並執行智慧狀態合併（結構未變沿用舊狀態、結構有變標記 dirty）與 Draft Debt Ledger 偵測。
-- Source: .agents/skills/adad-workflow/scripts/compile_map.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/compile_map.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -134,7 +183,7 @@
 ##### Module: generate_task
 - Type: tool
 - Description: 從 system_map.yaml 匯出一份含 source_hash 的 Task 快照給 coding 端讀取；Task 與 Module 分離，可偵測架構是否在執行期間被更動過。
-- Source: .agents/skills/adad-workflow/scripts/generate_task.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/generate_task.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -153,7 +202,7 @@
 ##### Module: resolve_target_file
 - Type: tool
 - Description: Phase 1 新增模組前，查表回答「這個 Domain/Subsystem 目前該寫進哪個實體子地圖檔案」，取代 Agent 憑印象追蹤 include 鏈猜落點。
-- Source: .agents/skills/adad-workflow/scripts/resolve_target_file.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/resolve_target_file.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -175,7 +224,7 @@
 ##### Module: resume_analysis
 - Type: tool
 - Description: 比對 system_map.md 與 system_map.yaml，產出模組完成度進度報告（completed / dirty / planned 分類統計），供人類快速掌握目前施工進度。
-- Source: .agents/skills/adad-workflow/scripts/resume_analysis.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/resume_analysis.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -193,7 +242,7 @@
 ##### Module: validate_schema
 - Type: tool
 - Description: 獨立於 parse_markdown/compile_map.py 之外的第二層防線，用標準 JSON Schema（system_map.schema.json）驗證 system_map.yaml 的結構正確性；未安裝 jsonschema 套件時退回純標準庫的最小驗證器。
-- Source: .agents/skills/adad-workflow/scripts/validate_schema.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/validate_schema.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -214,7 +263,7 @@
 ##### Module: adad_pre_commit
 - Type: tool
 - Description: Git pre-commit hook，將 AGENTS.md 的軟規則轉為 commit 階段的機械硬閘門：Staleness 阻斷、狀態門禁、原子範圍警告、Invariants/Verification 校驗、跨 Domain 依賴邊界、未登記函式掃描、懸空依賴、模組落點校驗。
-- Source: .agents/skills/adad-workflow/scripts/adad_pre_commit.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -233,7 +282,7 @@
 ##### Module: adad_pretooluse_gate
 - Type: tool
 - Description: 掛在 Claude Code 的 PreToolUse hook 上，在 Edit/Write/MultiEdit 工具呼叫「執行前」攔截：目標檔案對應的 Task 快照狀態不允許編輯時直接 exit 2 擋下，避免 agent 白花 token 寫出會被丟棄的程式碼；無法判斷的情況一律放行，不取代 pre-commit/CI 的完整檢查。
-- Source: .agents/skills/adad-workflow/scripts/adad_pretooluse_gate.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/adad_pretooluse_gate.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -251,7 +300,7 @@
 ##### Module: adad_task
 - Type: tool
 - Description: Task 快照生命週期操作：submit（coding 端自行呼叫，就地重跑 check_invariants + verify_implementation 都過才允許轉 submitted）、approve/reject（僅限人類在真正互動終端機執行，非 tty 一律拒絕，防止 Agent 透過工具呼叫自我核准）。
-- Source: .agents/skills/adad-workflow/scripts/adad_task.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/adad_task.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -271,7 +320,7 @@
 ##### Module: check_source_binding
 - Type: tool
 - Description: 檢查 Module 的 Source 綁定是否存在重複、整檔與逐函式混用、或同一函式多重歸屬等歧義；歧義會使後續 Gate 無法可靠反查模組，因此編譯與 commit 前皆須阻斷。
-- Source: .agents/skills/adad-workflow/scripts/check_source_binding.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/check_source_binding.py
 - Preferred Pattern: pure_function
 - Decisions: []
 - Invariants: []
@@ -290,7 +339,7 @@
 ##### Module: check_domain_boundary
 - Type: tool
 - Description: 檢查模組是否只依賴同一 Domain 內的模組，除非該 Domain 已用 Allowed Dependencies 明確宣告允許跨 Domain 依賴。
-- Source: .agents/skills/adad-workflow/scripts/check_domain_boundary.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/check_domain_boundary.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -309,7 +358,7 @@
 ##### Module: check_invariants
 - Type: tool
 - Description: 校驗指定節點的實作是否違反其宣告的 Invariants（例如 deny_imports）。
-- Source: .agents/skills/adad-workflow/scripts/check_invariants.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/check_invariants.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -329,7 +378,7 @@
 ##### Module: verify_implementation
 - Type: tool
 - Description: 校驗指定節點的實作是否符合其宣告的 Verification 條件（例如 must_have_assertions、結構化 case）。
-- Source: .agents/skills/adad-workflow/scripts/verify_implementation.py
+- Source: adad_source/agents/skills/adad-workflow/scripts/verify_implementation.py
 - Preferred Pattern: none
 - Decisions: []
 - Invariants: []
@@ -345,4 +394,6 @@
   - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
 - Checkpoint:
   - [ ] CP-1-016 (planned)
+
+<!-- include docs/domains/adad_roadmap.md -->
  
