@@ -24,6 +24,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input:
   - amount: float

@@ -7,8 +7,10 @@ def test_read_context_returns_target_node_fields(project_dir, base_modules):
     code, data, out, err = run_script("read_context.py", ["sample_tool"], cwd=project_dir)
     assert code == 0, err
     assert data["target_node"]["name"] == "sample_tool"
+    assert data["target_node"]["source"] == "sample_tool.py"
     assert data["target_node"]["input"] == {"x": "int"}
     assert data["target_node"]["output"] == {"y": "int"}
+    assert data["target_node"]["observability"] == {"mode": "not_required", "signals": []}
     assert data["dependency_interfaces"] == {}
 
 

@@ -27,6 +27,7 @@ MD = """# ADAD Architecture Source
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input: {}
 - Output: {}
@@ -43,6 +44,7 @@ MD = """# ADAD Architecture Source
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input: {}
 - Output: {}

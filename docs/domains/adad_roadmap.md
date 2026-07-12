@@ -7,6 +7,7 @@
 
 ##### Module: architecture_inventory
 - Type: documentation
+- Observability: not_required
 - Description: 已完成既有 workflow 腳本的架構登記與 Domain/Subsystem 分層（規格總覽 #4）。
 - Source: system_map.md
 - Preferred Pattern: ssot_document
@@ -25,6 +26,7 @@
 
 ##### Module: automated_test_suite
 - Type: test_suite
+- Observability: not_required
 - Description: 已建立 pytest 黑箱測試與 dev extra，涵蓋既有 workflow 工具（規格總覽 #5）。
 - Source: pyproject.toml
 - Preferred Pattern: black_box_test
@@ -46,6 +48,7 @@
 
 ##### Module: environment_contract
 - Type: schema
+- Observability: not_required
 - Description: 將 environment 宣告納入 Markdown parser、IR schema 與編譯 gate（#3）。
 - Source: adad_cli/workflow/environment_contract.py
 - Preferred Pattern: schema_first
@@ -64,6 +67,7 @@
 
 ##### Module: module_contract_schema
 - Type: schema
+- Observability: not_required
 - Description: 補強模組的 Pattern、Complexity/Algorithm、Invariants、Verification、生命週期與觀測契約（#9-16）。
 - Source: adad_cli/workflow/module_contract_schema.py
 - Preferred Pattern: schema_first
@@ -82,6 +86,7 @@
 
 ##### Module: rollback_and_concurrency_contract
 - Type: schema
+- Observability: not_required
 - Description: 宣告 Task 重試失敗後的 rollback 策略與平行修改衝突處理（#17-18）。
 - Source: adad_cli/workflow/execution_policy.py
 - Preferred Pattern: explicit_contract
@@ -100,6 +105,7 @@
 
 ##### Module: task_contract_schema
 - Type: schema
+- Observability: not_required
 - Description: 將 Task 的 semantic contract、non-goal、assumptions 與 Input/Output JSON Schema 納入快照（#19-23）。
 - Source: adad_cli/workflow/task_contract_schema.py
 - Preferred Pattern: schema_first
@@ -118,6 +124,7 @@
 
 ##### Module: execution_contracts
 - Type: schema
+- Observability: not_required
 - Description: 宣告並逐步驗證 side effect、determinism、idempotency、state change、purity、resource 與 concurrency 契約（#24-32）。
 - Source: adad_cli/workflow/execution_contracts.py
 - Preferred Pattern: executable_contract
@@ -136,6 +143,7 @@
 
 ##### Module: dependency_and_retry_contract
 - Type: schema
+- Observability: not_required
 - Description: 宣告相依模組的契約摘要與逐 Task retry budget，並控制 Task 快照的 context 膨脹（#33-35）。
 - Source: adad_cli/workflow/dependency_contract.py
 - Preferred Pattern: bounded_context
@@ -154,6 +162,7 @@
 
 ##### Module: verification_strategy
 - Type: verifier
+- Observability: not_required
 - Description: 擴充 case 的 boundary、invalid input、exception、fixture、determinism 與 golden/property 驗證策略（#36-39）。
 - Source: adad_cli/workflow/verification_strategy.py
 - Preferred Pattern: executable_specification
@@ -172,6 +181,7 @@
 
 ##### Module: task_readiness_and_audit
 - Type: gate
+- Observability: not_required
 - Description: 將 required field/readiness score、模型可執行的複雜度預算、Task 分解門禁與可追溯審批留痕納入核發及 CP-2 流程（#40-42、#49）。
 - Source: adad_cli/workflow/task_readiness.py
 - Preferred Pattern: fail_fast_gate
@@ -197,6 +207,7 @@
 
 ##### Module: task_complexity_policy
 - Type: function
+- Observability: not_required
 - Description: 以純函式判定一份施工 Task 應直接核發、補齊規格、拆分，或經人工 override 後核發；此節點只實作決策矩陣，不接線 generate_task（#49 第一階段）。
 - Source: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py::evaluate_task_complexity
 - Preferred Pattern: pure_function
@@ -241,6 +252,7 @@
 
 ##### Module: context_policy
 - Type: policy
+- Observability: not_required
 - Description: 宣告 required/forbidden context、priority 與來源，並讓 Task 快照遵循裁剪策略（#43-47）。
 - Source: adad_cli/workflow/context_policy.py
 - Preferred Pattern: least_context
@@ -262,6 +274,7 @@
 
 ##### Module: documentation_alignment
 - Type: documentation
+- Observability: not_required
 - Description: 對齊 README 的 CLI 工具表與 Phase/Checkpoint 文件，使其反映 Task 快照工作流（#1-2）。
 - Source: README.md
 - Preferred Pattern: documentation_as_contract
@@ -279,6 +292,7 @@
 
 ##### Module: continuous_integration
 - Type: pipeline
+- Observability: not_required
 - Description: 在 push 與 pull request 執行架構編譯、資產同步檢查、ADAD gate 與 pytest（#6）。
 - Source: .github/workflows/verify.yml
 - Preferred Pattern: continuous_verification
@@ -297,6 +311,7 @@
 
 ##### Module: release_changelog
 - Type: documentation
+- Observability: not_required
 - Description: 以 CHANGELOG 維護版本化改善紀錄，取代 README 尾端長篇變更文字（#7）。
 - Source: CHANGELOG.md
 - Preferred Pattern: keep_a_changelog
@@ -315,6 +330,7 @@
 
 ##### Module: project_virtual_environment
 - Type: lifecycle
+- Observability: not_required
 - Description: 統一 adad init、upgrade、remove 的虛擬環境生命週期；專案只管理 .venv，Git hook 永遠使用專案 .venv 的直譯器，舊 venv 只提示而不自動搬移或刪除（#48）。
 - Source: adad_cli/core.py::_project_venv_python,init_project,upgrade_project,clean_project
 - Preferred Pattern: single_owner_resource
@@ -350,6 +366,7 @@
 
 ##### Module: blocked_task_reporting
 - Type: integration
+- Observability: not_required
 - Description: 提供 task_block 到 blocked 報告的結構化 MCP 與文字備援流程（規格能力 1-4）。
 - Source: adad_cli/integrations/blocked_reporting.py
 - Preferred Pattern: structured_failure
@@ -368,6 +385,7 @@
 
 ##### Module: platform_instruction_renderer
 - Type: generator
+- Observability: not_required
 - Description: 從單一 instruction source 產生 Claude、Antigravity 與 Codex 的平台格式指示檔（規格第 2 節）。
 - Source: adad_cli/platform_instructions.py
 - Preferred Pattern: generate_from_ssot
@@ -386,6 +404,7 @@
 
 ##### Module: platform_compatibility_assessment
 - Type: checklist
+- Observability: not_required
 - Description: 對新 Kernel/平台記錄 MCP、hooks、ACL、structured output 與本地 CLI 可用性，避免宣稱不存在的強制保證（規格第 4 節）。
 - Source: docs/platform_compatibility.md
 - Preferred Pattern: explicit_capability_matrix

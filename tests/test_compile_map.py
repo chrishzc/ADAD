@@ -29,6 +29,7 @@ VALID_MD = """# ADAD Architecture Source
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input:
   - x: int
@@ -49,6 +50,7 @@ DUPLICATE_MODULE_MD = VALID_MD + """
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input:
   - x: int
@@ -86,6 +88,24 @@ def test_compile_map_rejects_high_complexity_without_algorithm(project_dir):
     assert code == 1
     assert data["success"] is False
     assert "MISSING ALGORITHM" in data["error"]
+
+
+def test_compile_map_parses_observability_signals(project_dir):
+    observed = VALID_MD.replace(
+        "- Observability: not_required",
+        "- Observability:\n  - metric: request_latency_ms\n  - alert: request_error_rate_high",
+    )
+    _write_md(project_dir, observed)
+    code, data, out, err = run_script("compile_map.py", [], cwd=project_dir)
+    assert code == 0, err
+    compiled = read_yaml(project_dir)
+    assert compiled["modules"]["sample_tool"]["observability"] == {
+        "mode": "required",
+        "signals": [
+            {"kind": "metric", "name": "request_latency_ms"},
+            {"kind": "alert", "name": "request_error_rate_high"},
+        ],
+    }
 
 
 def test_compile_map_preserves_state_when_structure_unchanged(project_dir):
