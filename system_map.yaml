@@ -890,16 +890,17 @@ modules:
     type: function
     description: 以純函式判定一份施工 Task 應直接核發、補齊規格、拆分，或經人工 override 後核發；此節點只實作決策矩陣，不接線 generate_task（#49
       第一階段）。
-    source: adad_cli/task_complexity.py::evaluate_task_complexity
+    source: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py::evaluate_task_complexity
     domain: ADAD_Roadmap
     subsystem: Contract_Evolution
     map_file: docs\domains\adad_roadmap.md
     dependencies: []
     input:
-      target_file: adad_cli/task_complexity.py
+      target_file: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py
+      legacy_file: adad_cli/task_complexity.py
       allowed_symbols: '[evaluate_task_complexity]'
       forbidden_files: '[adad_cli/core.py, adad_cli/sync_assets.py, system_map.md,
-        adad_source, adad_cli/resources, tests, README.md]'
+        tests, README.md]'
       complexity: string
       has_algorithm: boolean
       has_boundaries: boolean
@@ -988,7 +989,7 @@ modules:
     - complexity=high 時，只有 model_capability=high、override_approved=true 且 override_reason
       去除空白後非空，才回傳 `issue_override`。
     - 其餘 high 情況一律回傳 `split`；不得讀寫檔案、環境變數、全域狀態或呼叫外部服務。
-    state: validated
+    state: deployed
     fan_in_snapshot: 1
   context_policy:
     type: policy

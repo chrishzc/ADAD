@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260712T070943475587Z-task_complexity_policy
+  phase: 2
+  timestamp: '2026-07-12T07:09:43.475587+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: task_complexity_policy
+    task_id: task_complexity_policy@v1@d61303
+    system_map_version: 1
+    source_hash: d61303da6d960ca8d7dee7fd433a16705a93c8bd94ba71619b4a531dcfc0992f
+  decision:
+    action: approved
+    reviewer: TMP-214
+    comment: ''

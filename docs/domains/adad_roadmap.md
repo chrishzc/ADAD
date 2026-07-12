@@ -198,7 +198,7 @@
 ##### Module: task_complexity_policy
 - Type: function
 - Description: 以純函式判定一份施工 Task 應直接核發、補齊規格、拆分，或經人工 override 後核發；此節點只實作決策矩陣，不接線 generate_task（#49 第一階段）。
-- Source: adad_cli/task_complexity.py::evaluate_task_complexity
+- Source: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py::evaluate_task_complexity
 - Preferred Pattern: pure_function
 - Complexity: medium
 - Algorithm:
@@ -221,9 +221,10 @@
   - case: {"input": {"complexity": "high", "has_algorithm": true, "has_boundaries": true, "has_verification": true, "model_capability": "standard", "override_approved": true, "override_reason": "atomic external transaction"}, "expect": "split"}
 - Dependencies: []
 - Input:
-  - target_file: adad_cli/task_complexity.py
+  - target_file: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py
+  - legacy_file: adad_cli/task_complexity.py
   - allowed_symbols: [evaluate_task_complexity]
-  - forbidden_files: [adad_cli/core.py, adad_cli/sync_assets.py, system_map.md, adad_source, adad_cli/resources, tests, README.md]
+  - forbidden_files: [adad_cli/core.py, adad_cli/sync_assets.py, system_map.md, tests, README.md]
   - complexity: string
   - has_algorithm: boolean
   - has_boundaries: boolean
