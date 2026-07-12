@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260712T133559619394Z-task_semantic_contract
+  phase: 2
+  timestamp: '2026-07-12T13:35:59.619394+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: task_semantic_contract
+    task_id: task_semantic_contract@v3@a29fb0
+    system_map_version: 3
+    source_hash: a29fb052edcf6159710370dbbbc79c71fce392e5ac95fe833d9f53e69fdffd58
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

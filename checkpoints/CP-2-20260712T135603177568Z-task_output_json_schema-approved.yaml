@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260712T135603177568Z-task_output_json_schema
+  phase: 2
+  timestamp: '2026-07-12T13:56:03.177568+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: task_output_json_schema
+    task_id: task_output_json_schema@v3@8ad233
+    system_map_version: 3
+    source_hash: 8ad233a251f3f7f46981cf5797f23dff3e5ced10d798e5032256e54ffd0ca7e9
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

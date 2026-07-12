@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260712T131228732129Z-ensure_project_virtual_environment
+  phase: 2
+  timestamp: '2026-07-12T13:12:28.732129+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: ensure_project_virtual_environment
+    task_id: ensure_project_virtual_environment@v2@e5a5ef
+    system_map_version: 2
+    source_hash: e5a5ef624413673e52108aea945d10d9cc7ccb3c2a5ca40d7250b3646abf918d
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''
