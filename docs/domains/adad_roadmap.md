@@ -201,14 +201,14 @@
 - TODO:
   - [ ] 規格總覽 #40、#42：Readiness 與 audit 契約
   - [x] 規格總覽 #41：high complexity 缺 Algorithm 已阻斷編譯
-  - [ ] 規格總覽 #49：將 task_complexity_policy 整合進 Task 核發門禁
+  - [x] 規格總覽 #49：Task 核發門禁已套用 complexity policy；high 必須拆分，人工 override 待後續契約。
 - Checkpoint:
   - [ ] CP-1-028 (planned)
 
 ##### Module: task_complexity_policy
 - Type: function
 - Observability: not_required
-- Description: 以純函式判定一份施工 Task 應直接核發、補齊規格、拆分，或經人工 override 後核發；此節點只實作決策矩陣，不接線 generate_task（#49 第一階段）。
+- Description: 以純函式判定施工 Task 應直接核發、補齊規格或拆分；已接線 generate_task，high complexity 一律要求拆分，人工 override 待後續契約實作（#49）。
 - Source: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py::evaluate_task_complexity
 - Preferred Pattern: pure_function
 - Complexity: medium

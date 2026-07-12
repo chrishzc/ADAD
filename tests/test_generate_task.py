@@ -52,6 +52,26 @@ def test_generate_task_blocks_required_observability_without_signals(project_dir
     assert any("Observability" in item for item in data["readiness_blockers"])
 
 
+def test_generate_task_enforces_complexity_budget(project_dir, base_modules):
+    base_modules["modules"]["sample_tool"]["complexity"] = "medium"
+    write_yaml(project_dir, base_modules)
+    code, data, _, _ = run_script("generate_task.py", ["sample_tool"], cwd=project_dir)
+    assert code == 1
+    assert any("Complexity: medium" in item for item in data["readiness_blockers"])
+
+    base_modules["modules"]["sample_tool"]["algorithm"] = ["validate input"]
+    base_modules["modules"]["sample_tool"]["verification"] = [{"must_have_assertions": True}]
+    write_yaml(project_dir, base_modules)
+    code, data, _, err = run_script("generate_task.py", ["sample_tool"], cwd=project_dir)
+    assert code == 0, err
+
+    base_modules["modules"]["sample_tool"]["complexity"] = "high"
+    write_yaml(project_dir, base_modules)
+    code, data, _, _ = run_script("generate_task.py", ["sample_tool", "--force"], cwd=project_dir)
+    assert code == 1
+    assert any("Complexity: high" in item for item in data["readiness_blockers"])
+
+
 def test_generate_task_blocks_duplicate_without_force(project_dir, base_modules):
     base_modules["modules"]["sample_tool"]["state"] = "planned"
     write_yaml(project_dir, base_modules)

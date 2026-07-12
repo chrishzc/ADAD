@@ -11,6 +11,7 @@
 - `deny_calls` AST invariant 與 `expect_exception` Verification case，擴充危險呼叫與例外路徑的機械驗收。
 - 獨立 `task_schema.json` 與 Task Snapshot 完整性驗證，明確切開長期架構文件與單次施工快照。
 - `preserve_diff` rollback contract：拒絕或驗證失敗時保留工作區差異，並記錄施工前後的實作檔 hash。
+- Task Complexity Policy 已接入核發 Gate：medium 需完整施工規格，high 一律要求拆分。
 
 ### Changed
 

@@ -14,6 +14,7 @@ import hashlib
 import datetime
 import copy
 from collections import Counter
+from task_complexity import evaluate_task_complexity
 
 # 自動安裝 PyYAML 依賴以確保跨裝置開箱即用
 try:
@@ -1113,6 +1114,24 @@ class ADADCore:
             blockers.append("`complexity` 必須是 low、medium 或 high")
         elif complexity == "high" and not node.get("algorithm"):
             blockers.append("Complexity: high 必須提供至少一個 Algorithm 步驟")
+        else:
+            decision = evaluate_task_complexity(
+                complexity=complexity,
+                has_algorithm=bool(node.get("algorithm")),
+                has_boundaries=bool(node.get("input")) and bool(node.get("output")),
+                has_verification=bool(node.get("verification")),
+                model_capability="standard",
+                override_approved=False,
+                override_reason="",
+            )
+            if decision == "complete_spec":
+                blockers.append(
+                    "Complexity: medium 必須同時提供 Algorithm、非空 Input/Output 邊界與 Verification case"
+                )
+            elif decision == "split":
+                blockers.append(
+                    "Complexity: high 預設不得直接核發，請拆分為 low/medium 子任務（人工 override 將於後續契約欄位提供）"
+                )
 
         binding = self.check_source_binding()
         if any(node_name in str(v) for v in binding["violations"]):
