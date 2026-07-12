@@ -53,6 +53,23 @@ def test_verify_implementation_case_pass_and_fail(project_dir, base_modules):
     assert results[1]["passed"] is False and results[1]["actual"] == 6
 
 
+def test_verify_implementation_accepts_expected_exception(project_dir, base_modules):
+    src = project_dir / "exception_tool.py"
+    src.write_text(
+        "def sample_tool(x):\n    if x < 0:\n        raise ValueError('x must be positive')\n    return x\n",
+        encoding="utf-8",
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "exception_tool.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"case": {"input": {"x": -1}, "expect_exception": "ValueError"}},
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
+    assert code == 0, err
+    assert data["case_results"][0]["actual_exception"] == "ValueError"
+
+
 def test_verify_implementation_no_verification_defined_is_noop(project_dir, base_modules):
     base_modules["modules"]["sample_tool"]["verification"] = []
     write_yaml(project_dir, base_modules)

@@ -118,6 +118,7 @@ def make_module(**overrides):
         "invariants": [],
         "preferred_pattern": "none",
         "verification": [],
+        "observability": {"mode": "not_required", "signals": []},
         "decisions": [],
         "todo": [],
         "checkpoint": [],

@@ -70,7 +70,7 @@
   "$defs": {
     "module": {
       "type": "object",
-      "required": ["type", "description", "source", "state", "input", "output", "invariants", "verification", "complexity", "algorithm"],
+      "required": ["type", "description", "source", "state", "input", "output", "invariants", "verification", "complexity", "algorithm", "observability"],
       "properties": {
         "type": {
           "type": "string", "minLength": 1,
@@ -113,7 +113,7 @@
         "invariants": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "架構不變量規則字串，例如 'deny_imports: [pymysql]'。"
+          "description": "架構不變量規則字串，例如 'deny_imports: [pymysql]' 或 'deny_calls: [subprocess.run]'。"
         },
         "verification": {
           "type": "array",
@@ -128,17 +128,41 @@
                 "properties": {
                   "case": {
                     "type": "object",
-                    "required": ["input", "expect"],
+                    "required": ["input"],
                     "properties": {
                       "input": {
                         "type": "object",
                         "description": "以 kwargs 形式呼叫實作函式時使用的具名參數。"
-                      }
-                    }
+                      },
+                      "expect": {},
+                      "expect_exception": { "type": "string", "minLength": 1 }
+                    },
+                    "oneOf": [
+                      { "required": ["expect"] },
+                      { "required": ["expect_exception"] }
+                    ]
                   }
                 }
               }
             ]
+          }
+        },
+        "observability": {
+          "type": "object",
+          "required": ["mode", "signals"],
+          "properties": {
+            "mode": { "enum": ["required", "not_required"] },
+            "signals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["kind", "name"],
+                "properties": {
+                  "kind": { "enum": ["metric", "log", "trace", "alert"] },
+                  "name": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
           }
         },
         "todo": {

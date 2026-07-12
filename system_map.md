@@ -24,6 +24,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input:
   - node_name: string
@@ -45,6 +46,7 @@
   - deny_imports: [pymysql]
 - Verification:
   - must_have_assertions
+- Observability: not_required
 - Dependencies: []
 - Input:
   - proposed_function: string
@@ -64,6 +66,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input:
   - changed_node_name: string
@@ -83,6 +86,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input:
   - node_name: string
@@ -103,6 +107,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input: {}
 - Output: {}
@@ -120,6 +125,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - cwd_system_map_md: file（無 CLI 參數，讀取當前目錄的 system_map.md）
@@ -139,6 +145,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - node_name: string
@@ -158,6 +165,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - domain: string
@@ -180,6 +188,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - cwd_system_map_md: file（無 CLI 參數，讀取當前目錄檔案）
@@ -198,6 +207,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: []
 - Input:
   - cwd_system_map_yaml: file（預設驗證 system_map.yaml 對照 system_map.schema.json）
@@ -219,6 +229,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - git_staged_files: file（讀取 git staged diff，無 CLI 參數）
@@ -238,6 +249,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - stdin: object（Claude Code hook payload，含 tool_input.file_path）
@@ -256,6 +268,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - command: string（submit｜approve｜reject）
@@ -276,6 +289,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - cwd_system_map_yaml: file（無 CLI 參數，掃描整份 system_map.yaml）
@@ -295,6 +309,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - cwd_system_map_yaml: file（無 CLI 參數，掃描整份 system_map.yaml）
@@ -314,6 +329,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - node_name: string
@@ -334,6 +350,7 @@
 - Decisions: []
 - Invariants: []
 - Verification: []
+- Observability: not_required
 - Dependencies: [adad_core]
 - Input:
   - node_name: string

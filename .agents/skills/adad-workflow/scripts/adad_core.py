@@ -31,7 +31,10 @@ except ImportError:
 
 MAP_FILE = "system_map.yaml"
 TASK_DIR = os.path.join(".agents", "tasks")
+SOURCE_LOCK_DIR = os.path.join(TASK_DIR, ".source_locks")
 CHECKPOINT_DIR = "checkpoints"
+TASK_SCHEMA_VERSION = 2
+TASK_STATUSES = {"assigned", "in_progress", "submitted", "approved", "rejected"}
 
 # ponytail: 原本 RULE-02 允許修改的狀態集合，在 adad_core.py / adad_pre_commit.py /
 # adad_pretooluse_gate.py 三處各自寫了一份一模一樣的 {"planned","dirty","validated","draft"}，
@@ -286,6 +289,7 @@ def parse_markdown(md_content):
                 "decisions": [],
                 "todo": [],
                 "checkpoint": [],
+                "observability": None,
                 # ponytail: Complexity/Algorithm 兩個欄位是為了解決「Module 契約
                 # (Input/Output/Invariants) 只描述對外承諾，卻沒描述內部該怎麼做」
                 # 這個縫隙——複雜函式光靠契約，能力較弱的模型常常一次生成就邏輯出錯，
@@ -343,13 +347,23 @@ def parse_markdown(md_content):
                 if kv_match:
                     k, v = kv_match.group(1), kv_match.group(2).strip()
                     data["modules"][current_module][current_section][k] = v
-            elif current_section in ["invariants", "verification", "todo", "checkpoint", "algorithm"]:
+            elif current_section in ["invariants", "verification", "todo", "checkpoint", "algorithm", "observability"]:
                 # ponytail: Verification 底下的 `case: {...}` 是可執行測試案例（JSON 語法），
                 # 跟 `must_have_assertions` 這種純字串標籤混用在同一個清單裡。
                 # 這裡在編譯期就把它解析成結構化 dict、而不是留到執行期才發現格式錯誤——
                 # 寫錯 JSON（漏引號、多逗號）現在會讓 compile_map.py 直接失敗並指出是哪個
                 # 模組、哪一行寫錯，而不是等到 verify_implementation.py 執行時才含糊報錯。
-                if current_section == "verification" and sub_content.lower().startswith("case:"):
+                if current_section == "observability":
+                    signal_match = re.match(r'^(metric|log|trace|alert):\s*(.+)$', sub_content, re.IGNORECASE)
+                    if not signal_match:
+                        raise ValueError(
+                            f"編譯失敗：模組 '{current_module}' 的 Observability signal 必須是 "
+                            "metric/log/trace/alert: <name>。"
+                        )
+                    data["modules"][current_module]["observability"]["signals"].append({
+                        "kind": signal_match.group(1).lower(), "name": signal_match.group(2).strip()
+                    })
+                elif current_section == "verification" and sub_content.lower().startswith("case:"):
                     case_json_str = sub_content.split(":", 1)[1].strip()
                     try:
                         case_obj = json.loads(case_json_str)
@@ -361,10 +375,11 @@ def parse_markdown(md_content):
                             f"case 語法必須是嚴格 JSON（雙引號、不可有多餘逗號），"
                             f"例如：case: {{\"input\": {{\"x\": 1}}, \"expect\": 2}}"
                         )
-                    if not isinstance(case_obj, dict) or "input" not in case_obj or "expect" not in case_obj:
+                    if (not isinstance(case_obj, dict) or "input" not in case_obj
+                            or ("expect" not in case_obj and "expect_exception" not in case_obj)):
                         raise ValueError(
                             f"編譯失敗：模組 '{current_module}' 的 Verification case 缺少必要欄位 "
-                            f"'input'/'expect'：{sub_content}"
+                            f"'input' 與 'expect' 或 'expect_exception'：{sub_content}"
                         )
                     data["modules"][current_module][current_section].append({"case": case_obj})
                 else:
@@ -374,6 +389,8 @@ def parse_markdown(md_content):
         lh_match = list_header_regex.match(line_strip)
         if lh_match:
             current_section = lh_match.group(1).strip().lower().replace(" ", "_")
+            if current_section == "observability":
+                data["modules"][current_module]["observability"] = {"mode": "required", "signals": []}
             continue
             
         f_match = field_regex.match(line_strip)
@@ -399,6 +416,14 @@ def parse_markdown(md_content):
                 data["modules"][current_module]["complexity"] = (
                     normalized if normalized in ("low", "medium", "high") else "low"
                 )
+            elif key == "observability":
+                normalized = val.strip().lower()
+                if normalized not in ("required", "not_required"):
+                    raise ValueError(
+                        f"編譯失敗：模組 '{current_module}' 的 Observability 必須是 "
+                        "required、not_required，或以巢狀清單宣告 signals。"
+                    )
+                data["modules"][current_module]["observability"] = {"mode": normalized, "signals": []}
             elif key == "dependencies":
                 if val.startswith("[") and val.endswith("]"):
                     items = [x.strip() for x in val[1:-1].split(",") if x.strip()]
@@ -745,6 +770,7 @@ class ADADCore:
                 "name": node_name,
                 "type": node.get("type"),
                 "state": node.get("state"),
+                "source": node.get("source", ""),
                 "input": node.get("input", {}),
                 "output": node.get("output", {}),
                 "dependencies": node.get("dependencies", []),
@@ -757,6 +783,7 @@ class ADADCore:
                 # 就完整，而不是靠事後檢查才發現。
                 "invariants": node.get("invariants", []),
                 "verification": node.get("verification", []),
+                "observability": node.get("observability"),
                 # ponytail: Complexity/Algorithm——複雜函式的步驟大綱，讓實作階段
                 # 只需要「翻譯」步驟而不是重新「設計」邏輯，詳見 parse_markdown 的說明。
                 "complexity": node.get("complexity", "low"),
@@ -1071,6 +1098,16 @@ class ADADCore:
             if not isinstance(node.get(field), list):
                 blockers.append(f"`{field}` 必須是 array（可為空，代表明確無額外約束）")
 
+        observability = node.get("observability")
+        if not isinstance(observability, dict):
+            blockers.append("缺少結構化 `observability` 契約")
+        elif observability.get("mode") not in {"required", "not_required"}:
+            blockers.append("`observability.mode` 必須是 required 或 not_required")
+        elif not isinstance(observability.get("signals"), list):
+            blockers.append("`observability.signals` 必須是 array")
+        elif observability["mode"] == "required" and not observability["signals"]:
+            blockers.append("Observability: required 至少必須宣告一個 signal")
+
         complexity = node.get("complexity")
         if complexity not in {"low", "medium", "high"}:
             blockers.append("`complexity` 必須是 low、medium 或 high")
@@ -1167,6 +1204,24 @@ class ADADCore:
         canonical = json.dumps(node, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _file_hash(file_path):
+        """回傳檔案目前內容 hash；檔案尚未建立時明確以 None 表示。"""
+        if not file_path or not os.path.exists(file_path):
+            return None
+        with open(file_path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    def _rollback_metadata(self, node_name):
+        node = self.get_node(node_name) or {}
+        source_path = (node.get("source") or "").split("::", 1)[0]
+        return {
+            "strategy": "preserve_diff",
+            "source_path": source_path,
+            "baseline_file_hash": self._file_hash(source_path),
+            "instruction": "駁回或驗證失敗時保留工作區 diff；僅記錄狀態，絕不自動 reset 或刪除檔案。",
+        }
+
     def load_task(self, node_name):
         """讀取 Task 快照檔，不存在或解析失敗回傳 None（呼叫端自行判斷後續行為）。"""
         path = self._task_path(node_name)
@@ -1178,12 +1233,124 @@ class ADADCore:
         except (json.JSONDecodeError, OSError):
             return None
 
+    def validate_task_snapshot(self, task_data, expected_node_name=None):
+        """驗證施工快照的最小契約，避免長期架構文件與臨時 Task 格式混在一起。"""
+        errors = []
+        if not isinstance(task_data, dict):
+            return {"valid": False, "errors": ["Task 快照必須是 JSON object。"]}
+        for field in ("schema_version", "task_id", "node_name", "exported_at", "system_map_version", "source_hash", "status", "source_lock", "rollback", "history", "spec"):
+            if field not in task_data:
+                errors.append(f"缺少必要欄位 `{field}`")
+        if task_data.get("schema_version") != TASK_SCHEMA_VERSION:
+            errors.append(f"不支援的 task schema version：{task_data.get('schema_version')!r}")
+        if expected_node_name and task_data.get("node_name") != expected_node_name:
+            errors.append(f"Task node_name 與預期節點不一致：{task_data.get('node_name')!r}")
+        if task_data.get("status") not in TASK_STATUSES:
+            errors.append(f"非法 Task status：{task_data.get('status')!r}")
+        if not isinstance(task_data.get("history"), list):
+            errors.append("`history` 必須是 array")
+        rollback = task_data.get("rollback")
+        if rollback is not None:
+            if not isinstance(rollback, dict):
+                errors.append("`rollback` 必須是 object")
+            elif rollback.get("strategy") != "preserve_diff":
+                errors.append("目前只支援 `rollback.strategy = preserve_diff`")
+        source_lock = task_data.get("source_lock")
+        if not isinstance(source_lock, dict):
+            errors.append("`source_lock` must be an object")
+        elif (source_lock.get("node_name") != task_data.get("node_name")
+              or source_lock.get("task_id") != task_data.get("task_id")
+              or not source_lock.get("source_path")):
+            errors.append("`source_lock` does not match this Task")
+        spec = task_data.get("spec")
+        target = spec.get("target_node") if isinstance(spec, dict) else None
+        if not isinstance(target, dict):
+            errors.append("`spec.target_node` 必須是 object")
+        elif target.get("name") != task_data.get("node_name"):
+            errors.append("`spec.target_node.name` 必須與 `node_name` 一致")
+        return {"valid": not errors, "errors": errors}
+
     def _save_task(self, node_name, task_data):
         os.makedirs(TASK_DIR, exist_ok=True)
         path = self._task_path(node_name)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(task_data, f, ensure_ascii=False, indent=2)
             f.write("\n")
+
+    def _source_path_for_node(self, node_name):
+        node = self.get_node(node_name) or {}
+        return node.get("source", "").split("::", 1)[0].strip().replace("\\", "/")
+
+    def _source_lock_path(self, source_path):
+        digest = hashlib.sha256(source_path.encode("utf-8")).hexdigest()
+        return os.path.join(SOURCE_LOCK_DIR, f"{digest}.lock.json")
+
+    def _read_source_lock(self, source_path):
+        path = self._source_lock_path(source_path)
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {"invalid": True, "path": path}
+
+    def _release_source_lock(self, task_data):
+        lock = task_data.get("source_lock") or {}
+        source_path = lock.get("source_path")
+        if not source_path:
+            return
+        path = self._source_lock_path(source_path)
+        existing = self._read_source_lock(source_path)
+        if existing and existing.get("task_id") == task_data.get("task_id"):
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+
+    def _acquire_source_lock(self, node_name, task_id):
+        """Atomically reserve one source file for one open Task."""
+        source_path = self._source_path_for_node(node_name)
+        if not source_path:
+            return {"success": False, "error": "[SOURCE LOCK] Task has no source path."}
+        os.makedirs(SOURCE_LOCK_DIR, exist_ok=True)
+        path = self._source_lock_path(source_path)
+        payload = {
+            "source_path": source_path,
+            "node_name": node_name,
+            "task_id": task_id,
+            "acquired_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        try:
+            with open(path, "x", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            return {"success": True, "lock": payload}
+        except FileExistsError:
+            existing = self._read_source_lock(source_path)
+            if existing and existing.get("node_name") == node_name:
+                # --force reissues the same module's Task with a new task_id.
+                # Refresh its own lock so the snapshot and lock remain consistent.
+                tmp_path = f"{path}.tmp-{os.getpid()}"
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                    f.write("\n")
+                os.replace(tmp_path, path)
+                return {"success": True, "lock": payload}
+            if existing and not existing.get("invalid"):
+                return {
+                    "success": False,
+                    "error": (
+                        f"[SOURCE LOCK] `{source_path}` is reserved by Task "
+                        f"`{existing.get('task_id', 'unknown')}` for module "
+                        f"`{existing.get('node_name', 'unknown')}`."
+                    ),
+                    "conflict": existing,
+                }
+            return {
+                "success": False,
+                "error": f"[SOURCE LOCK] `{source_path}` has an unreadable lock; resolve it before issuing another Task.",
+            }
 
     def task_is_expired(self, node_name, task_data=None):
         """任務快照的 source_hash 是否已經對不上目前的 system_map.yaml。"""
@@ -1239,17 +1406,26 @@ class ADADCore:
         version = self.data.get("version", 1)
         task_id = f"{node_name}@v{version}@{source_hash[:6]}"
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        lock_result = self._acquire_source_lock(node_name, task_id)
+        if not lock_result["success"]:
+            return lock_result
 
         task_data = {
+            "schema_version": TASK_SCHEMA_VERSION,
             "task_id": task_id,
             "node_name": node_name,
             "exported_at": now,
             "system_map_version": version,
             "source_hash": source_hash,
             "status": "assigned",
+            "source_lock": lock_result["lock"],
+            "rollback": self._rollback_metadata(node_name),
             "history": [{"event": "generated", "at": now}],
             "spec": self.read_context(node_name),
         }
+        validation = self.validate_task_snapshot(task_data, node_name)
+        if not validation["valid"]:
+            return {"success": False, "error": "[INVALID TASK] 無法產生合格 Task 快照。", "task_errors": validation["errors"]}
         self._save_task(node_name, task_data)
         return {"success": True, "task_id": task_id, "path": self._task_path(node_name)}
 
@@ -1265,6 +1441,9 @@ class ADADCore:
         task_data = self.load_task(node_name)
         if not task_data:
             return {"success": False, "error": f"模組 `{node_name}` 尚未核發任務，請先執行 generate_task。"}
+        validation = self.validate_task_snapshot(task_data, node_name)
+        if not validation["valid"]:
+            return {"success": False, "error": "[INVALID TASK] Task 快照格式不合規。", "task_errors": validation["errors"]}
 
         if task_data.get("status") not in TASK_EDITABLE_STATUSES:
             return {
@@ -1368,6 +1547,8 @@ class ADADCore:
             task_data["history"][-1]["checkpoint_id"] = audit["id"]
             task_data["history"][-1]["checkpoint_path"] = audit["path"]
             self._save_task(node_name, task_data)
+            if action == "approved":
+                self._release_source_lock(task_data)
             return audit
         except Exception as exc:
             self.data = original_data
@@ -1387,6 +1568,9 @@ class ADADCore:
         task_data = self.load_task(node_name)
         if not task_data:
             return {"success": False, "error": f"模組 `{node_name}` 沒有待審的任務。"}
+        validation = self.validate_task_snapshot(task_data, node_name)
+        if not validation["valid"]:
+            return {"success": False, "error": "[INVALID TASK] Task 快照格式不合規。", "task_errors": validation["errors"]}
         if task_data.get("status") != "submitted":
             return {
                 "success": False,
@@ -1410,6 +1594,9 @@ class ADADCore:
         task_data = self.load_task(node_name)
         if not task_data:
             return {"success": False, "error": f"模組 `{node_name}` 沒有待審的任務。"}
+        validation = self.validate_task_snapshot(task_data, node_name)
+        if not validation["valid"]:
+            return {"success": False, "error": "[INVALID TASK] Task 快照格式不合規。", "task_errors": validation["errors"]}
         if task_data.get("status") != "submitted":
             return {
                 "success": False,
@@ -1417,6 +1604,13 @@ class ADADCore:
             }
         if not reviewer or not reviewer.strip():
             return {"success": False, "error": "駁回必須提供非空白的 reviewer，才能留下審批留痕。"}
+
+        rollback = task_data.setdefault("rollback", self._rollback_metadata(node_name))
+        rollback["rejected_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        rollback["rejected_file_hash"] = self._file_hash(rollback.get("source_path"))
+        rollback["source_changed_since_issue"] = (
+            rollback.get("baseline_file_hash") != rollback.get("rejected_file_hash")
+        )
 
         try:
             audit = self._commit_checkpoint_decision(node_name, task_data, "rejected", reviewer.strip(), reason)
@@ -1441,11 +1635,25 @@ class ADADCore:
         for name, info in (self.data.get("modules", {}) or {}).items():
             src = (info or {}).get("source", "")
             if src:
-                src_map[src.split("::", 1)[0].strip().replace("\\", "/")] = name
+                source_path = src.split("::", 1)[0].strip().replace("\\", "/")
+                src_map.setdefault(source_path, []).append(name)
 
-        node_name = src_map.get(rel_path.replace("\\", "/"))
-        if node_name is None:
+        source_path = rel_path.replace("\\", "/")
+        node_names = src_map.get(source_path)
+        if node_names is None:
             return {"allow": True, "reason": "檔案未對應任何已登記模組", "node_name": None}
+
+        lock = self._read_source_lock(source_path)
+        if lock and lock.get("invalid"):
+            return {"allow": False, "node_name": None,
+                    "reason": f"[SOURCE LOCK] `{source_path}` has an unreadable lock; resolve it before editing."}
+        if lock:
+            node_name = lock.get("node_name")
+            if node_name not in node_names:
+                return {"allow": False, "node_name": node_name,
+                        "reason": f"[SOURCE LOCK] `{source_path}` is locked by unknown module `{node_name}`."}
+        else:
+            node_name = node_names[0]
 
         task_data = self.load_task(node_name)
         if task_data is None:
@@ -1455,6 +1663,14 @@ class ADADCore:
                 "reason": f"模組 `{node_name}` 尚未核發過任何 Task 快照，建議先執行 "
                           f"generate_task.py {node_name}（目前為過渡期，暫不阻斷，僅提醒）。",
                 "soft_warning": True,
+            }
+
+        validation = self.validate_task_snapshot(task_data, node_name)
+        if not validation["valid"]:
+            return {
+                "allow": False,
+                "reason": "Task 快照格式不合規，拒絕編輯：" + "；".join(validation["errors"]),
+                "node_name": node_name,
             }
 
         if self.task_is_expired(node_name, task_data):
@@ -1545,16 +1761,20 @@ class ADADCore:
         if not os.path.exists(file_path):
             return {"success": False, "error": f"找不到實作檔案: {file_path}"}
 
-        # 解析 invariants 規則，取得 deny_imports 清單
+        # 解析 invariants 規則，取得 deny_imports / deny_calls 清單。
         deny_list = []
+        deny_calls = []
         for inv in invariants:
             match = re.search(r"deny_imports:\s*\[(.*?)\]", inv)
             if match:
                 pkgs = [p.strip() for p in match.group(1).split(",") if p.strip()]
                 deny_list.extend(pkgs)
+            match = re.search(r"deny_calls:\s*\[(.*?)\]", inv)
+            if match:
+                deny_calls.extend([c.strip() for c in match.group(1).split(",") if c.strip()])
 
-        if not deny_list:
-            return {"success": True, "message": "未偵測到有效的 deny_imports 規則。"}
+        if not deny_list and not deny_calls:
+            return {"success": True, "message": "未偵測到有效的 deny_imports 或 deny_calls 規則。"}
 
         # 讀取並解析檔案 AST
         try:
@@ -1567,6 +1787,7 @@ class ADADCore:
         class ImportVisitor(ast.NodeVisitor):
             def __init__(self):
                 self.imports = [] # 包含 (module_name, line_number)
+                self.calls = []   # 包含 (qualified_call_name, line_number)
 
             def visit_Import(self, node_visitor):
                 for alias in node_visitor.names:
@@ -1594,6 +1815,20 @@ class ADADCore:
                         self.imports.append((f"{node_visitor.module}.{alias.name}", node_visitor.lineno))
                 self.generic_visit(node_visitor)
 
+            def visit_Call(self, node_visitor):
+                def qualified_name(expr):
+                    if isinstance(expr, ast.Name):
+                        return expr.id
+                    if isinstance(expr, ast.Attribute):
+                        parent = qualified_name(expr.value)
+                        return f"{parent}.{expr.attr}" if parent else expr.attr
+                    return None
+
+                name = qualified_name(node_visitor.func)
+                if name:
+                    self.calls.append((name, node_visitor.lineno))
+                self.generic_visit(node_visitor)
+
         visitor = ImportVisitor()
         visitor.visit(tree)
 
@@ -1611,10 +1846,22 @@ class ADADCore:
                             "line": lineno
                         })
 
+        for denied_call in deny_calls:
+            for call_name, lineno in visitor.calls:
+                if call_name == denied_call:
+                    v_key = ("call", denied_call, call_name, lineno)
+                    if v_key not in seen_violations:
+                        seen_violations.add(v_key)
+                        violations.append({
+                            "rule": f"deny_calls: {denied_call}",
+                            "called": call_name,
+                            "line": lineno,
+                        })
+
         if violations:
             return {
                 "success": False,
-                "error": f"違反架構不變量 (Invariants) 邊界約束！檔案 {file_path} 包含了禁止的 import。",
+                "error": f"違反架構不變量 (Invariants) 邊界約束！檔案 {file_path} 包含了禁止的 import 或 call。",
                 "violations": violations
             }
 
@@ -1748,6 +1995,7 @@ class ADADCore:
             for idx, case in enumerate(cases):
                 case_input = case.get("input", {})
                 expect = case.get("expect")
+                expect_exception = case.get("expect_exception")
                 if load_error:
                     case_results.append({
                         "case_index": idx, "passed": False,
@@ -1756,15 +2004,27 @@ class ADADCore:
                     continue
                 try:
                     actual = func(**case_input) if isinstance(case_input, dict) else func(case_input)
-                    case_results.append({
-                        "case_index": idx, "passed": actual == expect,
-                        "input": case_input, "expect": expect, "actual": actual
-                    })
+                    if expect_exception:
+                        case_results.append({
+                            "case_index": idx, "passed": False, "input": case_input,
+                            "expect_exception": expect_exception, "actual": actual,
+                            "error": "預期拋出例外，但函式正常回傳。",
+                        })
+                    else:
+                        case_results.append({
+                            "case_index": idx, "passed": actual == expect,
+                            "input": case_input, "expect": expect, "actual": actual
+                        })
                 except Exception as e:
+                    actual_exception = type(e).__name__
                     case_results.append({
-                        "case_index": idx, "passed": False,
-                        "input": case_input, "expect": expect,
-                        "error": f"執行時發生例外：{type(e).__name__}: {e}"
+                        "case_index": idx,
+                        "passed": bool(expect_exception and actual_exception == expect_exception),
+                        "input": case_input,
+                        "expect_exception": expect_exception,
+                        "actual_exception": actual_exception,
+                        "error": None if expect_exception and actual_exception == expect_exception
+                                 else f"執行時發生例外：{actual_exception}: {e}"
                     })
 
         all_cases_passed = all(c["passed"] for c in case_results)

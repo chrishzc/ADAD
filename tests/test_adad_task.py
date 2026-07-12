@@ -109,6 +109,31 @@ def test_approval_writes_auditable_checkpoint(project_dir, base_modules):
     assert read_yaml(project_dir)["modules"]["sample_tool"]["state"] == "validated"
 
 
+def test_source_lock_blocks_parallel_tasks_and_releases_after_approval(project_dir, base_modules):
+    (project_dir / "sample_tool.py").write_text(
+        "def sample_tool(x):\n    return x\n\ndef other_tool(x):\n    return x\n",
+        encoding="utf-8",
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "sample_tool.py::sample_tool"
+    other = dict(base_modules["modules"]["sample_tool"])
+    other["source"] = "sample_tool.py::other_tool"
+    base_modules["modules"]["other_tool"] = other
+    write_yaml(project_dir, base_modules)
+    core = ADADCore(project_dir / "system_map.yaml", check_validity=False)
+
+    first = core.generate_task("sample_tool")
+    assert first["success"] is True
+    conflict = core.generate_task("other_tool")
+    assert conflict["success"] is False
+    assert conflict["error"].startswith("[SOURCE LOCK]")
+    assert conflict["conflict"]["node_name"] == "sample_tool"
+
+    assert core.task_submit("sample_tool")["success"] is True
+    assert core.task_approve("sample_tool", first["task_id"][-6:], "Chris")["success"] is True
+    assert not list((project_dir / ".agents" / "tasks" / ".source_locks").glob("*.lock.json"))
+    assert core.generate_task("other_tool")["success"] is True
+
+
 def test_audit_failure_rolls_back_approval(project_dir, base_modules, monkeypatch):
     (project_dir / "sample_tool.py").write_text(
         "def sample_tool(x):\n    return x\n", encoding="utf-8"
@@ -123,6 +148,23 @@ def test_audit_failure_rolls_back_approval(project_dir, base_modules, monkeypatc
     assert result["success"] is False
     assert core.load_task("sample_tool")["status"] == "submitted"
     assert read_yaml(project_dir)["modules"]["sample_tool"]["state"] == "planned"
+
+
+def test_rejection_preserves_diff_and_records_hashes(project_dir, base_modules):
+    source = project_dir / "sample_tool.py"
+    source.write_text("def sample_tool(x):\n    return x\n", encoding="utf-8")
+    write_yaml(project_dir, base_modules)
+    core = ADADCore(project_dir / "system_map.yaml", check_validity=False)
+    generated = core.generate_task("sample_tool")
+    assert core.task_submit("sample_tool")["success"] is True
+    source.write_text("def sample_tool(x):\n    return x + 1\n", encoding="utf-8")
+
+    result = core.task_reject("sample_tool", "請修正回傳值", "Chris")
+    assert result["success"] is True
+    assert source.read_text(encoding="utf-8").endswith("return x + 1\n")
+    rollback = core.load_task("sample_tool")["rollback"]
+    assert rollback["strategy"] == "preserve_diff"
+    assert rollback["source_changed_since_issue"] is True
 
 
 def test_unknown_subcommand_errors(project_dir, base_modules):

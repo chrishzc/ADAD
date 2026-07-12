@@ -21,6 +21,9 @@ modules:
     checkpoint:
     - '[x] CP-1-001 (validated)'
     - '[x] CP-2-001 (deployed)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -50,6 +53,9 @@ modules:
     checkpoint:
     - '[x] CP-1-002 (validated)'
     - '[x] CP-2-002 (deployed)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -77,6 +83,9 @@ modules:
     checkpoint:
     - '[x] CP-1-003 (validated)'
     - '[x] CP-2-003 (deployed)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -105,6 +114,9 @@ modules:
     checkpoint:
     - '[x] CP-1-004 (validated)'
     - '[x] CP-2-004 (deployed)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -131,22 +143,32 @@ modules:
     - '[ ] 依賴此檔案的腳本改動共用邏輯時，目前沒有自動化的跨檔案影響分析'
     checkpoint:
     - '[ ] CP-1-005 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
     fan_in_snapshot: 11
     known_symbols:
     - ADADCore.__init__
+    - ADADCore._acquire_source_lock
     - ADADCore._advance_module_to_validated
     - ADADCore._bigrams
     - ADADCore._commit_checkpoint_decision
     - ADADCore._extract_adr_summary
     - ADADCore._extract_pattern_summary
+    - ADADCore._file_hash
     - ADADCore._load_function_from_file
     - ADADCore._load_map
     - ADADCore._node_source_hash
+    - ADADCore._read_source_lock
+    - ADADCore._release_source_lock
     - ADADCore._resolve_verify_target_func
+    - ADADCore._rollback_metadata
     - ADADCore._save_task
+    - ADADCore._source_lock_path
+    - ADADCore._source_path_for_node
     - ADADCore._task_path
     - ADADCore._write_checkpoint_audit
     - ADADCore.analyze_dirty_cascade
@@ -169,6 +191,7 @@ modules:
     - ADADCore.task_reject
     - ADADCore.task_submit
     - ADADCore.transit_state
+    - ADADCore.validate_task_snapshot
     - ADADCore.verify_implementation
     - build_file_to_registered_functions
     - check_precommit_hook_status
@@ -202,6 +225,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-006 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -230,6 +256,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-007 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -262,6 +291,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-008 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -290,6 +322,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-009 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -317,6 +352,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-010 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -353,6 +391,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-011 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -396,6 +437,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-012 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -431,6 +475,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-013 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -464,6 +511,9 @@ modules:
     todo: []
     checkpoint:
     - '[ ] CP-1-017 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -493,6 +543,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-014 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -522,6 +575,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-015 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
@@ -551,6 +607,9 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-016 (planned)'
+    observability:
+      mode: not_required
+      signals: []
     complexity: low
     algorithm: []
     state: planned
