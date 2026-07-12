@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 1
+- Version: 3
 - Status: planning
 
 ## Environment

@@ -106,13 +106,14 @@
 ##### Module: task_contract_schema
 - Type: schema
 - Observability: not_required
-- Description: 將 Task 的 semantic contract、non-goal、assumptions 與 Input/Output JSON Schema 納入快照（#19-23）。
-- Source: adad_cli/workflow/task_contract_schema.py
-- Preferred Pattern: schema_first
+- Description: 聚合 #19～#23 的原子契約驗證結果，產生完整的 per-task contract 快照。
+- Source: adad_cli/workflow/task_contract_schema.py::validate_task_contract
+- Preferred Pattern: thin_orchestrator
+- Complexity: low
 - Decisions: [Preconditions/Postconditions 擴充 Verification case，不建立重複欄位]
 - Invariants: []
 - Verification: []
-- Dependencies: [generate_task, validate_schema]
+- Dependencies: [generate_task, task_semantic_contract, task_non_goals_contract, task_verification_conditions, task_assumptions_contract, task_input_json_schema, task_output_json_schema]
 - Input:
   - task_contract: object
 - Output:
@@ -120,7 +121,127 @@
 - TODO:
   - [ ] 規格總覽 #19-23：Task 規格化
 - Checkpoint:
-  - [ ] CP-1-024 (planned)
+  - [x] CP-1-024 (validated)
+
+##### Module: task_semantic_contract
+- Type: schema
+- Observability: not_required
+- Description: 將 Task 的自然語言 description 升級為可驗證的結構化 Semantic Contract（#19）。
+- Source: adad_cli/workflow/task_contract_schema.py::validate_semantic_contract
+- Preferred Pattern: schema_first
+- Complexity: low
+- Decisions: [Semantic Contract 必須保留人類可讀摘要，並提供機器可驗證的目標與完成條件]
+- Invariants: []
+- Verification: []
+- Dependencies: [validate_schema]
+- Input:
+  - description: string
+- Output:
+  - semantic_contract: object
+- TODO:
+  - [ ] 規格總覽 #19：結構化 Semantic Contract
+- Checkpoint:
+  - [x] CP-1-024-A (validated)
+
+##### Module: task_non_goals_contract
+- Type: schema
+- Observability: not_required
+- Description: 為 Task 增加明確的 Non-goal 清單，限制 Agent 不得自行擴張的工作範圍（#20）。
+- Source: adad_cli/workflow/task_contract_schema.py::validate_non_goals
+- Preferred Pattern: explicit_contract
+- Complexity: low
+- Decisions: [空陣列代表已明確確認沒有額外 Non-goal，不得以缺少欄位代替]
+- Invariants: []
+- Verification: []
+- Dependencies: [validate_schema]
+- Input:
+  - non_goals: array
+- Output:
+  - validated_non_goals: array
+- TODO:
+  - [ ] 規格總覽 #20：Non-goal 契約
+- Checkpoint:
+  - [x] CP-1-024-B (validated)
+
+##### Module: task_verification_conditions
+- Type: schema
+- Observability: not_required
+- Description: 以既有 Verification case 的 input、expect 與 expect_exception 表達 Preconditions/Postconditions，不新增重複欄位（#21）。
+- Source: adad_cli/workflow/task_contract_schema.py::validate_verification_conditions
+- Preferred Pattern: extend_existing_contract
+- Complexity: low
+- Decisions: [Preconditions 由 case input 與前置狀態表達；Postconditions 由 expect 或 expect_exception 表達]
+- Invariants: []
+- Verification: []
+- Dependencies: [verify_implementation]
+- Input:
+  - verification_cases: array
+- Output:
+  - validated_verification_cases: array
+- TODO:
+  - [ ] 規格總覽 #21：以前後條件強化 Verification case
+- Checkpoint:
+  - [x] CP-1-024-C (validated)
+
+##### Module: task_assumptions_contract
+- Type: schema
+- Observability: not_required
+- Description: 為 Task 增加可快照、可審核的 Assumptions 清單（#22）。
+- Source: adad_cli/workflow/task_contract_schema.py::validate_assumptions
+- Preferred Pattern: explicit_contract
+- Complexity: low
+- Decisions: [Assumption 只描述 Task 成立所依賴的外部事實，不得重複 Preconditions 或 Non-goal]
+- Invariants: []
+- Verification: []
+- Dependencies: [validate_schema]
+- Input:
+  - assumptions: array
+- Output:
+  - validated_assumptions: array
+- TODO:
+  - [ ] 規格總覽 #22：Assumptions 契約
+- Checkpoint:
+  - [x] CP-1-024-D (validated)
+
+##### Module: task_input_json_schema
+- Type: schema
+- Observability: not_required
+- Description: 將既有通用 schema 驗證能力套用至 per-task Input JSON Schema（#23）。
+- Source: adad_cli/workflow/task_contract_schema.py::validate_task_input_schema
+- Preferred Pattern: schema_first
+- Complexity: low
+- Decisions: [沿用 validate_schema 的支援子集與錯誤格式，不建立第二套 JSON Schema 引擎]
+- Invariants: []
+- Verification: []
+- Dependencies: [validate_schema]
+- Input:
+  - input_schema: object
+- Output:
+  - validated_input_schema: object
+- TODO:
+  - [ ] 規格總覽 #23-A：per-task Input JSON Schema
+- Checkpoint:
+  - [x] CP-1-024-E (validated)
+
+##### Module: task_output_json_schema
+- Type: schema
+- Observability: not_required
+- Description: 將既有通用 schema 驗證能力套用至 per-task Output JSON Schema（#23）。
+- Source: adad_cli/workflow/task_contract_schema.py::validate_task_output_schema
+- Preferred Pattern: schema_first
+- Complexity: low
+- Decisions: [沿用 validate_schema 的支援子集與錯誤格式，不建立第二套 JSON Schema 引擎]
+- Invariants: []
+- Verification: []
+- Dependencies: [validate_schema]
+- Input:
+  - output_schema: object
+- Output:
+  - validated_output_schema: object
+- TODO:
+  - [ ] 規格總覽 #23-B：per-task Output JSON Schema
+- Checkpoint:
+  - [x] CP-1-024-F (validated)
 
 ##### Module: execution_contracts
 - Type: schema
@@ -328,38 +449,159 @@
 - Checkpoint:
   - [ ] CP-1-032 (planned)
 
-##### Module: project_virtual_environment
-- Type: lifecycle
+##### Module: project_venv_python
+- Type: function
 - Observability: not_required
-- Description: 統一 adad init、upgrade、remove 的虛擬環境生命週期；專案只管理 .venv，Git hook 永遠使用專案 .venv 的直譯器，舊 venv 只提示而不自動搬移或刪除（#48）。
-- Source: adad_cli/core.py::_project_venv_python,init_project,upgrade_project,clean_project
-- Preferred Pattern: single_owner_resource
-- Complexity: high
-- Algorithm:
-  - 新增 `_project_venv_python(project_root)`，只依作業系統回傳 `<root>/.venv/Scripts/python.exe` 或 `<root>/.venv/bin/python`，不得讀取 shell PATH。
-  - `init_project` 僅建立 `.venv`；若已存在則保留，若只存在舊 `venv` 則顯示遷移警告但仍建立新的 `.venv`，不得複製或刪除舊環境。
-  - 建立 pre-commit hook 前確認專案 `.venv` 直譯器存在，hook 必須固定指向該路徑，不得使用執行 `adad` 當下的 `sys.executable`。
-  - `upgrade_project` 不建立環境；若 `.venv` 不存在則顯示可操作錯誤並跳過 hook 重寫，若存在則將 hook 更新為專案 `.venv` 直譯器。
-  - `clean_project` 只移除 `.venv`；若舊 `venv` 存在則保留並提示人工處理，不得自動刪除。
-  - 修改範圍限於 `adad_cli/core.py` 中登記的四個符號；不得修改 README、templates、system_map、測試或其他節點。
-- Decisions:
-  - 本 repo 已手動完成單一 .venv 整理；本 Task 只修正 CLI 的未來行為。
-  - 舊 venv 可能含使用者資料，遷移採提示優先，不做破壞性自動清理。
+- Description: 依專案根目錄與作業系統決定唯一受管理的 `.venv` Python 直譯器路徑（#48）。
+- Source: adad_cli/core.py::_project_venv_python
+- Preferred Pattern: pure_function
+- Complexity: low
+- Decisions: [不讀取 shell PATH；`.venv` 是唯一受管理的環境名稱]
 - Invariants:
   - deny_imports: [virtualenv]
 - Verification: []
 - Dependencies: []
 - Input:
   - project_root: path
-  - target_file: adad_cli/core.py
-  - allowed_symbols: [_project_venv_python, init_project, upgrade_project, clean_project]
-  - forbidden_files: [README.md, system_map.md, adad_source, adad_cli/resources, tests]
+- Output:
+  - python_path: path
+- TODO:
+  - [ ] 規格總覽 #48-1：解析專案 `.venv` 直譯器路徑
+- Checkpoint:
+  - [x] CP-1-033-A (validated)
+
+##### Module: init_project_virtual_environment
+- Type: lifecycle
+- Observability: not_required
+- Description: `adad init` 編排已拆分的 `.venv` 建立與 pre-commit hook 寫入節點（#48）。
+- Source: adad_cli/core.py::init_project
+- Preferred Pattern: thin_orchestrator
+- Complexity: low
+- Decisions: [本 repo 已手動完成單一 .venv 整理；本節點只修正 CLI 的未來 init 行為, 舊 venv 可能含使用者資料，遷移採提示優先]
+- Invariants:
+  - deny_imports: [virtualenv]
+- Verification: []
+- Dependencies: [ensure_project_virtual_environment, write_project_pre_commit_hook]
+- Input:
+  - project_root: path
+  - agents: array
 - Output:
   - environment_status: object
 - TODO:
-  - [ ] 規格總覽 #48：CLI 單一 .venv 生命週期
+  - [ ] 規格總覽 #48-2：初始化唯一 `.venv` 與 hook
 - Checkpoint:
-  - [x] CP-1-033 (validated)
+  - [x] CP-1-033-B (validated)
+  - [x] CP-3-048-F (validated)
+
+##### Module: ensure_project_virtual_environment
+- Type: function
+- Observability: not_required
+- Description: 建立或保留專案唯一受管理的 `.venv`，舊 `venv` 僅提示而不搬移或刪除（#48）。
+- Source: adad_cli/core.py::_ensure_project_virtual_environment
+- Preferred Pattern: idempotent_resource
+- Complexity: low
+- Decisions: [舊 venv 可能含使用者資料，遷移採提示優先]
+- Invariants:
+  - deny_imports: [virtualenv]
+- Verification: []
+- Dependencies: []
+- Input:
+  - project_root: path
+- Output:
+  - environment_status: object
+- TODO:
+  - [ ] 規格總覽 #48-2A：建立或保留唯一 `.venv`
+- Checkpoint:
+  - [x] CP-3-048-E (validated)
+
+##### Module: write_project_pre_commit_hook
+- Type: function
+- Observability: not_required
+- Description: 使用專案 `.venv` 直譯器寫入 pre-commit hook，供 init 與 upgrade 共用（#48）。
+- Source: adad_cli/core.py::_write_project_pre_commit_hook
+- Preferred Pattern: shared_resource_writer
+- Complexity: low
+- Decisions: [Rule of Two 要求 init 與 upgrade 共用相同 hook 寫入邏輯]
+- Invariants:
+  - deny_imports: [virtualenv]
+- Verification: []
+- Dependencies: [project_venv_python]
+- Input:
+  - project_root: path
+  - hook_src: path
+- Output:
+  - hook_status: object
+- TODO:
+  - [ ] 規格總覽 #48-2B：以專案 `.venv` 寫入 hook
+- Checkpoint:
+  - [x] CP-3-048-A (validated)
+
+##### Module: upgrade_project_virtual_environment
+- Type: lifecycle
+- Observability: not_required
+- Description: `adad upgrade` 僅在 `.venv` 存在時委派共享節點更新 pre-commit hook（#48）。
+- Source: adad_cli/core.py::upgrade_project
+- Preferred Pattern: thin_orchestrator
+- Complexity: low
+- Decisions: [upgrade 不得以隱含方式建立虛擬環境]
+- Invariants:
+  - deny_imports: [virtualenv]
+- Verification: []
+- Dependencies: [write_project_pre_commit_hook]
+- Input:
+  - project_root: path
+  - agents: array
+- Output:
+  - environment_status: object
+- TODO:
+  - [ ] 規格總覽 #48-3：升級時重寫既有 `.venv` hook
+- Checkpoint:
+  - [x] CP-1-033-C (validated)
+  - [x] CP-3-048-B (validated)
+
+##### Module: remove_project_virtual_environment
+- Type: function
+- Observability: not_required
+- Description: 只移除專案受管理的 `.venv`；舊 `venv` 保留並提示人工處理（#48）。
+- Source: adad_cli/core.py::_remove_project_virtual_environment
+- Preferred Pattern: safe_cleanup
+- Complexity: low
+- Decisions: [舊 venv 可能含使用者資料，因此禁止破壞性自動清理]
+- Invariants:
+  - deny_imports: [virtualenv]
+- Verification: []
+- Dependencies: []
+- Input:
+  - project_root: path
+- Output:
+  - environment_status: object
+- TODO:
+  - [ ] 規格總覽 #48-4A：安全移除唯一 `.venv`
+- Checkpoint:
+  - [x] CP-3-048-C (validated)
+
+##### Module: clean_project_virtual_environment
+- Type: lifecycle
+- Observability: not_required
+- Description: `adad remove` 委派安全清理節點處理 `.venv`，並保留其他既有清理職責（#48）。
+- Source: adad_cli/core.py::clean_project
+- Preferred Pattern: thin_orchestrator
+- Complexity: low
+- Decisions: [舊 venv 可能含使用者資料，因此禁止破壞性自動清理]
+- Invariants:
+  - deny_imports: [virtualenv]
+- Verification: []
+- Dependencies: [remove_project_virtual_environment]
+- Input:
+  - project_root: path
+  - purge_docs: boolean
+- Output:
+  - environment_status: object
+- TODO:
+  - [ ] 規格總覽 #48-4：安全清理唯一 `.venv`
+- Checkpoint:
+  - [x] CP-1-033-D (validated)
+  - [x] CP-3-048-D (validated)
 
 #### Subsystem: Platform_Integration
 - Description: 將跨平台指示與平台能力降級情況變成可追蹤的產品資產。

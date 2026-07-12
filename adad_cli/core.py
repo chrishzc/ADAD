@@ -317,13 +317,8 @@ def _ensure_codex_root_agents_md(root_agents_md: str = ROOT_AGENTS_MD) -> None:
             print(f"  - [Codex] [警告] 建立 {root_agents_md} 失敗（symlink: {e}；複製 fallback: {copy_err}）")
 
 
-def init_project(agents=None) -> None:
-    """在當前目錄初始化 ADAD 模式（自我完備：連同 adad-workflow skill 一起複製進來）。
-
-    agents: 要設定的 agent 清單（例如 ["antigravity", "claude"]）。
-            傳 None 時預設全部 agent 都設定（供非互動/程式呼叫使用；
-            互動選單本身在 cli.py 裡問，問完才把結果傳進來）。
-    """
+def init_project(agents=None, project_root: str = ".") -> dict:
+    """在當前目錄初始化 ADAD 模式（自我完備：連同 adad-workflow skill 一起複製進來）。"""
     if agents is None:
         agents = list(AGENT_CHOICES.keys())
     agents = _normalize_agents(agents)
@@ -331,10 +326,8 @@ def init_project(agents=None) -> None:
     print(f"[ADAD] 正在初始化當前專案（目標 agent: {', '.join(AGENT_CHOICES[a] for a in agents)}）...")
     tpl = templates_dir()
 
-    # 0. 複製 adad-workflow skill 到本專案（.agents/ 是 ADAD 的核心工作目錄，
-    #    不管選了哪個 agent 都一定要有這份，因為 pre-commit hook 與
-    #    compile_map.py 都是從這裡讀取原始檔）
-    local_skill_dir = os.path.join(".agents", "skills", "adad-workflow")
+    # 0. 複製 adad-workflow skill 到本專案
+    local_skill_dir = os.path.join(project_root, ".agents", "skills", "adad-workflow")
     if not os.path.exists(local_skill_dir):
         os.makedirs(os.path.dirname(local_skill_dir), exist_ok=True)
         shutil.copytree(agents_dir() / "skills" / "adad-workflow", local_skill_dir)
@@ -342,118 +335,105 @@ def init_project(agents=None) -> None:
     else:
         print("  - .agents/skills/adad-workflow 已存在，跳過")
 
-    local_agents_md = os.path.join(".agents", "AGENTS.md")
+    local_agents_md = os.path.join(project_root, ".agents", "AGENTS.md")
     _copy_file_if_absent(agents_dir() / "AGENTS.md", local_agents_md)
 
     # 0.5 針對個別 agent 的額外設定
     if "claude" in agents:
         _setup_claude_project_skill(local_skill_dir)
-        _ensure_claude_md_import("CLAUDE.md")
-        _ensure_claude_pretooluse_hook()
+        _ensure_claude_md_import(os.path.join(project_root, "CLAUDE.md"))
+        _ensure_claude_pretooluse_hook(os.path.join(project_root, ".claude", "settings.json"))
     if "antigravity" in agents:
         print("  - [Antigravity] 會自動讀取 .agents/AGENTS.md 與 .agents/skills/，不需要額外設定")
     if "codex" in agents:
         print("  - [Codex] .agents/skills/ 原生共用，不需要額外複製 skill")
-        _ensure_codex_root_agents_md()
+        _ensure_codex_root_agents_md(os.path.join(project_root, ROOT_AGENTS_MD))
 
     # 1. 建立 checkpoints 目錄
-    if not os.path.exists("checkpoints"):
-        os.makedirs("checkpoints")
-        print("  - 建立 checkpoints/ 目錄成功")
+    checkpoints_dir = os.path.join(project_root, "checkpoints")
+    if not os.path.exists(checkpoints_dir):
+        os.makedirs(checkpoints_dir)
+        print(f"  - 建立 {checkpoints_dir}/ 目錄成功")
     else:
-        print("  - checkpoints/ 目錄已存在，跳過")
+        print(f"  - {checkpoints_dir}/ 目錄已存在，跳過")
 
     # 1.2 建立 docs/adr 目錄與範本
-    adr_dir = os.path.join("docs", "adr")
+    adr_dir = os.path.join(project_root, "docs", "adr")
     os.makedirs(adr_dir, exist_ok=True)
     _copy_file_if_absent(tpl / "ADR-000_template.md", os.path.join(adr_dir, "ADR-000_template.md"))
 
     # 1.3 建立 docs/patterns 目錄與範本
-    patterns_dir = os.path.join("docs", "patterns")
+    patterns_dir = os.path.join(project_root, "docs", "patterns")
     os.makedirs(patterns_dir, exist_ok=True)
     _copy_file_if_absent(tpl / "pure_function.md", os.path.join(patterns_dir, "pure_function.md"))
 
     # 2. 建立 system_map.md 初始範本
-    if not os.path.exists("system_map.md"):
-        shutil.copyfile(tpl / "system_map.md", "system_map.md")
-        print("  - 建立 system_map.md 初始範本成功")
+    system_map_md_path = os.path.join(project_root, "system_map.md")
+    system_map_schema_path = os.path.join(project_root, "system_map.schema.json")
+    if not os.path.exists(system_map_md_path):
+        shutil.copyfile(tpl / "system_map.md", system_map_md_path)
+        print(f"  - 建立 {system_map_md_path} 初始範本成功")
 
-        # 2.1 建立正式 JSON Schema（system_map.yaml 的獨立結構規格，見 validate_schema.py）
-        _copy_file_if_absent(tpl / "system_map.schema.json", "system_map.schema.json")
+        _copy_file_if_absent(tpl / "system_map.schema.json", system_map_schema_path)
 
-        # 自動執行編譯以產生 system_map.yaml (IR)，使用剛複製進本專案的 compile_map.py
+        # 自動執行編譯以產生 system_map.yaml (IR)
         compile_script = os.path.join(local_skill_dir, "scripts", "compile_map.py")
         try:
             print("  - 正在自動編譯架構源檔案...")
-            subprocess.run([sys.executable, compile_script], check=True)
+            subprocess.run([sys.executable, compile_script], cwd=project_root, check=True)
             print("  - 自動編譯成功，已產生 system_map.yaml")
         except Exception as e:
             print(f"  - [警告] 自動編譯架構源檔案失敗: {e}")
     else:
-        print("  - system_map.md 已存在，跳過")
-        # 既有專案升級 adad-cli 版本重跑 init 時，也該補上這份新加入的 schema 檔案，
-        # 不能只靠「全新專案」那個分支，否則舊專案永遠拿不到。
-        _copy_file_if_absent(tpl / "system_map.schema.json", "system_map.schema.json")
+        print(f"  - {system_map_md_path} 已存在，跳過")
+        _copy_file_if_absent(tpl / "system_map.schema.json", system_map_schema_path)
 
     # 3. 建立 Docker 相關範本與 .gitignore
-    _copy_file_if_absent(tpl / "gitignore", ".gitignore")
-    _copy_file_if_absent(tpl / "Dockerfile", "Dockerfile")
-    _copy_file_if_absent(tpl / "docker-compose.yml", "docker-compose.yml")
-    _copy_file_if_absent(tpl / "dockerignore", ".dockerignore")
-    _copy_file_if_absent(tpl / "requirements.txt", "requirements.txt")
+    _copy_file_if_absent(tpl / "gitignore", os.path.join(project_root, ".gitignore"))
+    _copy_file_if_absent(tpl / "Dockerfile", os.path.join(project_root, "Dockerfile"))
+    _copy_file_if_absent(tpl / "docker-compose.yml", os.path.join(project_root, "docker-compose.yml"))
+    _copy_file_if_absent(tpl / "dockerignore", os.path.join(project_root, ".dockerignore"))
+    _copy_file_if_absent(tpl / "requirements.txt", os.path.join(project_root, "requirements.txt"))
 
     # 4. Git 初始化
-    if not os.path.exists(".git"):
+    git_dir = os.path.join(project_root, ".git")
+    if not os.path.exists(git_dir):
         try:
-            subprocess.run(["git", "init"], check=True)
+            subprocess.run(["git", "init"], cwd=project_root, check=True)
             print("  - Git 初始化成功")
         except Exception as e:
             print(f"  - [警告] Git 初始化失敗 (可能系統未安裝 Git): {e}")
     else:
-        print("  - .git 已存在，跳過")
+        print(f"  - {git_dir} 已存在，跳過")
 
-    # 5. 建立 venv 虛擬環境
-    if not os.path.exists("venv"):
-        print("  - 正在建立 Python 虛擬環境 (venv)...")
-        try:
-            subprocess.run([sys.executable, "-m", "venv", "venv"], check=True)
-            print("  - Python 虛擬環境 (venv) 建立成功")
-        except Exception as e:
-            print(f"  - [警告] 建立 Python 虛擬環境失敗: {e}")
-    else:
-        print("  - venv 虛擬環境已存在，跳過")
+    # 5. 建立 venv 虛擬環境 (委派安全建立節點處理)
+    venv_status = _ensure_project_virtual_environment(project_root)
 
-    # 6. 安裝 pre-commit hook（來源現在保證存在，因為第 0 步已把 skill 複製進本專案）
-    #    這一步跟選了哪個 agent 完全無關：git hook 是由 git 本身觸發，
-    #    不管是哪個 coding agent 寫的程式碼，commit 時都一樣會被擋下來檢查。
+    # 6. 安裝 pre-commit hook (委派共享節點處理)
     hook_src = os.path.join(local_skill_dir, "scripts", "adad_pre_commit.py")
-    hook_dst = os.path.join(".git", "hooks", "pre-commit")
-    if os.path.exists(".git") and os.path.exists(hook_src):
-        os.makedirs(os.path.dirname(hook_dst), exist_ok=True)
-        try:
-            # ponytail-fix: 寫死呼叫 "python" 在多數現代 Linux / macOS 上
-            # 沒有這個指令（只有 python3），會導致 git commit 時 hook
-            # 回傳 127 (command not found)，擋下所有 commit 且無明確錯誤訊息。
-            # 改用 adad init 當下實際執行的直譯器絕對路徑，不依賴 commit
-            # 當下 shell 的 PATH。
-            hook_content = f"""#!/bin/sh
-"{sys.executable}" "{hook_src}"
-"""
-            with open(hook_dst, "w", encoding="utf-8") as f:
-                f.write(hook_content)
-            try:
-                os.chmod(hook_dst, 0o755)
-            except Exception:
-                pass
-            print("  - 建立 pre-commit hook 成功")
-        except Exception as e:
-            print(f"  - [警告] 建立 pre-commit hook 失敗: {e}")
+    hook_status = _write_project_pre_commit_hook(project_root, hook_src)
+    if hook_status.get("success"):
+        print("  - 建立 pre-commit hook 成功")
+    else:
+        print(f"  - [警告] 建立 pre-commit hook 失敗: {hook_status.get('error')}")
 
-    # 7. 記錄這個專案選了哪些 agent，之後 `adad upgrade` 才不用每次都重問
-    save_project_agents(agents)
-    print(f"  - 已記錄本專案的 agent 選擇至 {PROJECT_AGENT_CONFIG}")
+    # 7. 記錄這個專案選了哪些 agent
+    project_agent_config = os.path.join(project_root, ".agents", ".adad-agents.json")
+    try:
+        os.makedirs(os.path.dirname(project_agent_config) or ".", exist_ok=True)
+        with open(project_agent_config, "w", encoding="utf-8") as f:
+            json.dump({"agents": agents}, f, ensure_ascii=False, indent=2)
+        print(f"  - 已記錄本專案的 agent 選擇至 {project_agent_config}")
+    except Exception as e:
+        print(f"  - [警告] 記錄 agent 選擇失敗: {e}")
 
     print("[ADAD] 專案初始化完成！")
+
+    return {
+        "success": True,
+        "venv_status": venv_status,
+        "hook_status": hook_status
+    }
 
 
 def _iter_relative_files(base: Path):
@@ -491,7 +471,7 @@ def _sync_file(src: Path, dst: str, report: dict) -> None:
         report["unchanged"].append(dst)
 
 
-def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
+def upgrade_project(agents=None, force_agents_md: bool = False, project_root: str = ".") -> dict:
     """安全地把「目前已安裝的 ADAD 套件版本」同步到一個已經 `adad init`
     過的既有專案，不會動到使用者自己的資產。
 
@@ -509,11 +489,20 @@ def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
     （system_map.md、checkpoints/、docs/adr、docs/patterns 等）完全不觸碰；
     AGENTS.md 屬於灰色地帶，預設也不覆蓋，只提示差異。
     """
+    project_agent_config = os.path.join(project_root, ".agents", ".adad-agents.json")
     if agents is None:
-        agents = load_project_agents() or list(AGENT_CHOICES.keys())
+        if os.path.exists(project_agent_config):
+            try:
+                with open(project_agent_config, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                agents = [a for a in data.get("agents", []) if a in AGENT_CHOICES]
+            except Exception:
+                pass
+        if not agents:
+            agents = list(AGENT_CHOICES.keys())
     agents = _normalize_agents(agents)
 
-    local_skill_dir = os.path.join(".agents", "skills", "adad-workflow")
+    local_skill_dir = os.path.join(project_root, ".agents", "skills", "adad-workflow")
     if not os.path.exists(local_skill_dir):
         print("[ADAD ERROR] 找不到 .agents/skills/adad-workflow，這個專案似乎還沒執行過 `adad init`。")
         print("             請先執行 `adad init`，之後才有東西可以升級。")
@@ -533,57 +522,39 @@ def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
         dst_file = os.path.join(local_skill_dir, str(rel_path))
         _sync_file(src_file, dst_file, report)
 
-    # 1.5 若專案有選 Claude Code，.claude/skills/adad-workflow 也要跟著同步，
-    #     否則套件更新後兩邊的 skill 內容會兜不起來。
+    # 1.5 若專案有選 Claude Code，.claude/skills/adad-workflow 也要跟著同步
     if "claude" in agents:
-        claude_skill_dir = os.path.join(".claude", "skills", "adad-workflow")
+        claude_skill_dir = os.path.join(project_root, ".claude", "skills", "adad-workflow")
         for rel_path in _iter_relative_files(src_skill_dir):
             src_file = src_skill_dir / rel_path
             dst_file = os.path.join(claude_skill_dir, str(rel_path))
             _sync_file(src_file, dst_file, report)
-        _ensure_claude_md_import("CLAUDE.md")
-        # 這個專案有可能是「加入 PreToolUse gate 這個功能之前」就 init 過的，
-        # upgrade 時順便補上，不需要使用者自己手動編輯 settings.json。
-        _ensure_claude_pretooluse_hook()
+        _ensure_claude_md_import(os.path.join(project_root, "CLAUDE.md"))
+        _ensure_claude_pretooluse_hook(os.path.join(project_root, ".claude", "settings.json"))
 
-    # 1.6 若專案有選 Codex，重新確認根目錄 AGENTS.md 這個 symlink
-    #     還在（例如使用者不小心刪掉，或這個專案是加入 Codex 支援前
-    #     `adad init` 的，這次 upgrade 順便補上）。
+    # 1.6 若專案有選 Codex，重新確認根目錄 AGENTS.md 這個 symlink 還在
     if "codex" in agents:
-        _ensure_codex_root_agents_md()
+        _ensure_codex_root_agents_md(os.path.join(project_root, ROOT_AGENTS_MD))
 
-    # 2. 重新產生 pre-commit hook：即使腳本內容沒變，也順便修正
-    #    sys.executable 路徑可能因為換了 Python 版本、搬動 venv 而失效的問題。
+    # 2. 僅在 .venv 存在時更新 pre-commit hook
     hook_src = os.path.join(local_skill_dir, "scripts", "adad_pre_commit.py")
-    hook_dst = os.path.join(".git", "hooks", "pre-commit")
-    if os.path.exists(".git") and os.path.exists(hook_src):
-        try:
-            hook_content = f"""#!/bin/sh
-"{sys.executable}" "{hook_src}"
-"""
-            old_content = None
-            if os.path.exists(hook_dst):
-                with open(hook_dst, "r", encoding="utf-8") as f:
-                    old_content = f.read()
-            if old_content != hook_content:
-                if old_content is not None:
-                    shutil.copyfile(hook_dst, hook_dst + ".bak")
-                os.makedirs(os.path.dirname(hook_dst), exist_ok=True)
-                with open(hook_dst, "w", encoding="utf-8") as f:
-                    f.write(hook_content)
-                try:
-                    os.chmod(hook_dst, 0o755)
-                except Exception:
-                    pass
+    hook_status = None
+    if os.path.isdir(os.path.join(project_root, ".venv")):
+        hook_status = _write_project_pre_commit_hook(project_root, hook_src)
+        if hook_status.get("success"):
+            status = hook_status.get("status")
+            hook_dst = hook_status.get("path")
+            if status in ("created", "updated"):
                 report["updated"].append(hook_dst)
             else:
                 report["unchanged"].append(hook_dst)
-        except Exception as e:
-            print(f"  - [警告] 重新產生 pre-commit hook 失敗: {e}")
+        else:
+            print(f"  - [警告] 重新產生 pre-commit hook 失敗: {hook_status.get('error')}")
+    else:
+        print("  - .venv 虛擬環境不存在，跳過更新 pre-commit hook（upgrade 不會自動建立虛擬環境）")
 
-    # 3. AGENTS.md 屬於灰色地帶：使用者可能已經客製化過規則內容，
-    #    預設不覆蓋，只提示差異，避免無聲蓋掉使用者的客製規則。
-    local_agents_md = os.path.join(".agents", "AGENTS.md")
+    # 3. AGENTS.md 屬於灰色地帶
+    local_agents_md = os.path.join(project_root, ".agents", "AGENTS.md")
     src_agents_md = agents_dir() / "AGENTS.md"
     if os.path.exists(local_agents_md) and os.path.exists(src_agents_md):
         with open(src_agents_md, "rb") as fa, open(local_agents_md, "rb") as fb:
@@ -598,7 +569,7 @@ def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
                 print("           預設不覆蓋。若確定要用套件最新版本覆蓋，重新執行：")
                 print("           adad upgrade --force-agents-md")
 
-    # 4. 寫入版本戳記，方便之後追蹤這個專案目前對應套件的哪個版本。
+    # 4. 寫入版本戳記
     version_file = os.path.join(local_skill_dir, ".adad_version")
     try:
         with open(version_file, "w", encoding="utf-8") as f:
@@ -606,11 +577,15 @@ def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
     except Exception:
         pass
 
-    # 5. 確保這次用到的 agent 選擇也被寫回設定檔（涵蓋「舊專案沒有設定檔、
-    #    這次 fallback 用了全部 agent」的情況，讓下次 upgrade 不用再重新推算）。
-    save_project_agents(agents)
+    # 5. 確保這次用到的 agent 選擇也被寫回設定檔
+    try:
+        os.makedirs(os.path.dirname(project_agent_config) or ".", exist_ok=True)
+        with open(project_agent_config, "w", encoding="utf-8") as f:
+            json.dump({"agents": agents}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
-    # 6. 輸出報告，讓使用者清楚知道實際發生了什麼事，而不是靜默覆蓋。
+    # 6. 輸出報告
     print()
     if report["added"]:
         print(f"[新增] {len(report['added'])} 個檔案：")
@@ -626,20 +601,18 @@ def upgrade_project(agents=None, force_agents_md: bool = False) -> None:
     print(f"\n[ADAD] 升級完成，目前套件版本：{__version__}")
     print("       使用者資產（system_map.md、checkpoints/、docs/adr、docs/patterns 等）完全未被觸碰。")
 
+    return {
+        "success": True,
+        "venv_exists": os.path.isdir(os.path.join(project_root, ".venv")),
+        "hook_status": hook_status
+    }
 
-def clean_project(purge_docs: bool = False) -> None:
-    """復原/清理當前專案中的 ADAD 相關產出與環境。
 
-    ponytail-fix: 原本無差別刪除 system_map.md / system_map.yaml /
-    checkpoints/，但這些是使用者手寫的架構藍圖與決策歷程，跟 venv、
-    pre-commit hook 這種「隨時可用 adad init 重新生成」的東西不是同一類，
-    一旦刪除無法復原。改成預設只清理「環境/工具產出」，使用者資產
-    （system_map.md/.yaml、checkpoints/、docs/adr、docs/patterns）預設保留，
-    除非明確傳入 purge_docs=True（CLI 對應 `adad remove --purge-docs`）。
-    """
+def clean_project(purge_docs: bool = False, project_root: str = ".") -> dict:
+    """復原/清理當前專案中的 ADAD 相關產出與環境。"""
     print("[ADAD] 正在還原專案環境並清理 ADAD 檔案...")
 
-    hook_dst = os.path.join(".git", "hooks", "pre-commit")
+    hook_dst = os.path.join(project_root, ".git", "hooks", "pre-commit")
     if os.path.exists(hook_dst):
         try:
             os.remove(hook_dst)
@@ -647,14 +620,10 @@ def clean_project(purge_docs: bool = False) -> None:
         except Exception as e:
             print(f"  - 移除 pre-commit hook 失敗: {e}")
 
-    if os.path.exists("venv"):
-        try:
-            shutil.rmtree("venv")
-            print("  - 移除 venv 虛擬環境成功")
-        except Exception as e:
-            print(f"  - 移除 venv 虛擬環境失敗: {e}")
+    # 委派安全清理節點處理 .venv
+    venv_status = _remove_project_virtual_environment(project_root)
 
-    local_skill_dir = os.path.join(".agents", "skills", "adad-workflow")
+    local_skill_dir = os.path.join(project_root, ".agents", "skills", "adad-workflow")
     if os.path.exists(local_skill_dir):
         try:
             shutil.rmtree(local_skill_dir)
@@ -662,61 +631,66 @@ def clean_project(purge_docs: bool = False) -> None:
         except Exception as e:
             print(f"  - 移除 adad-workflow skill 副本失敗: {e}")
 
-    # 同步清掉 Claude Code 那份 skill 副本，避免留下孤兒檔案。
-    # CLAUDE.md 保留不動，因為使用者可能在裡面加了自己的其他規則，
-    # 只提示一句，不擅自修改/刪除。
-    claude_skill_dir = os.path.join(".claude", "skills", "adad-workflow")
+    claude_skill_dir = os.path.join(project_root, ".claude", "skills", "adad-workflow")
     if os.path.exists(claude_skill_dir):
         try:
             shutil.rmtree(claude_skill_dir)
             print("  - 移除本專案內的 Claude Code adad-workflow skill 副本成功")
         except Exception as e:
             print(f"  - 移除 Claude Code adad-workflow skill 副本失敗: {e}")
-    if os.path.exists("CLAUDE.md"):
+    if os.path.exists(os.path.join(project_root, "CLAUDE.md")):
         print("  - [提示] CLAUDE.md 可能包含你自己的其他規則，未自動刪除，如需清除請手動處理")
-    _remove_claude_pretooluse_hook()
+    _remove_claude_pretooluse_hook(os.path.join(project_root, ".claude", "settings.json"))
 
-    # 只移除「確定是 ADAD 自己建立」的 Codex symlink；如果根目錄 AGENTS.md
-    # 是一般檔案（例如 fallback 複製或使用者自己寫的），保留不動並提示。
-    if os.path.islink(ROOT_AGENTS_MD) and os.readlink(ROOT_AGENTS_MD) == CODEX_AGENTS_MD_TARGET:
+    root_agents_md_path = os.path.join(project_root, ROOT_AGENTS_MD)
+    if os.path.islink(root_agents_md_path) and os.readlink(root_agents_md_path) == CODEX_AGENTS_MD_TARGET:
         try:
-            os.remove(ROOT_AGENTS_MD)
-            print(f"  - 移除 Codex 用的 {ROOT_AGENTS_MD} symlink 成功")
+            os.remove(root_agents_md_path)
+            print(f"  - 移除 Codex 用的 {root_agents_md_path} symlink 成功")
         except Exception as e:
-            print(f"  - 移除 {ROOT_AGENTS_MD} symlink 失敗: {e}")
-    elif os.path.exists(ROOT_AGENTS_MD):
-        print(f"  - [提示] {ROOT_AGENTS_MD} 存在但不是 ADAD 建立的 symlink（可能是複製 fallback 或你自己的檔案），未自動刪除")
+            print(f"  - 移除 {root_agents_md_path} symlink 失敗: {e}")
+    elif os.path.exists(root_agents_md_path):
+        print(f"  - [提示] {root_agents_md_path} 存在但不是 ADAD 建立的 symlink（可能是複製 fallback 或你自己的檔案），未自動刪除")
 
-    if os.path.exists(PROJECT_AGENT_CONFIG):
+    project_agent_config = os.path.join(project_root, ".agents", ".adad-agents.json")
+    if os.path.exists(project_agent_config):
         try:
-            os.remove(PROJECT_AGENT_CONFIG)
-            print(f"  - 移除 {PROJECT_AGENT_CONFIG} 成功")
+            os.remove(project_agent_config)
+            print(f"  - 移除 {project_agent_config} 成功")
         except Exception as e:
-            print(f"  - 移除 {PROJECT_AGENT_CONFIG} 失敗: {e}")
+            print(f"  - 移除 {project_agent_config} 失敗: {e}")
 
     if purge_docs:
         print("  - [--purge-docs] 已指定，將一併移除使用者架構文件與決策紀錄...")
         for f in ("system_map.yaml", "system_map.md"):
-            if os.path.exists(f):
+            full_f = os.path.join(project_root, f)
+            if os.path.exists(full_f):
                 try:
-                    os.remove(f)
-                    print(f"  - 移除 {f} 成功")
+                    os.remove(full_f)
+                    print(f"  - 移除 {full_f} 成功")
                 except Exception as e:
-                    print(f"  - 移除 {f} 失敗: {e}")
+                    print(f"  - 移除 {full_f} 失敗: {e}")
 
-        if os.path.exists("checkpoints"):
+        checkpoints_dir = os.path.join(project_root, "checkpoints")
+        if os.path.exists(checkpoints_dir):
             try:
-                shutil.rmtree("checkpoints")
-                print("  - 移除 checkpoints/ 目錄成功")
+                shutil.rmtree(checkpoints_dir)
+                print(f"  - 移除 {checkpoints_dir}/ 目錄成功")
             except Exception as e:
-                print(f"  - 移除 checkpoints/ 失敗: {e}")
+                print(f"  - 移除 {checkpoints_dir}/ 失敗: {e}")
     else:
-        kept = [f for f in ("system_map.md", "system_map.yaml", "checkpoints") if os.path.exists(f)]
+        kept = [f for f in ("system_map.md", "system_map.yaml", "checkpoints") if os.path.exists(os.path.join(project_root, f))]
         if kept:
             print(f"  - 保留使用者資產（未刪除）：{', '.join(kept)}")
             print("    若確定要連同架構文件與決策紀錄一起清除，請改執行 `adad remove --purge-docs`")
 
     print("[ADAD] 專案清理還原完成！")
+
+    return {
+        "success": True,
+        "venv_status": venv_status,
+        "purge_docs": purge_docs
+    }
 
 
 def _write_global_rules_block(dest_file: str, agents_rules_content: str) -> None:
@@ -870,3 +844,126 @@ def pack_dist() -> None:
                     zipf.write(file_path, file_path)
 
     print(f"[ADAD] 打包完成！已生成安裝包: {zip_name}")
+
+
+def _project_venv_python(project_root: str) -> str:
+    """依專案根目錄與作業系統決定唯一受管理的 `.venv` Python 直譯器路徑。"""
+    # ponytail: .venv 是唯一受管理的環境名稱，不讀取 shell PATH
+    if os.name == "nt":
+        path = os.path.join(project_root, ".venv", "Scripts", "python.exe")
+    else:
+        path = os.path.join(project_root, ".venv", "bin", "python")
+    return os.path.normpath(path)
+
+
+def _write_project_pre_commit_hook(project_root: str, hook_src: str) -> dict:
+    """使用專案 `.venv` 直譯器寫入 pre-commit hook，供 init 與 upgrade 共用。"""
+    # ponytail: Rule of Two 要求 init 與 upgrade 共用相同 hook 寫入邏輯
+    # ponytail: 不依賴 sys.executable，而是呼叫 _project_venv_python
+    git_dir = os.path.join(project_root, ".git")
+    if not os.path.exists(git_dir):
+        return {"success": False, "error": "Git directory not found"}
+    if not os.path.exists(hook_src):
+        return {"success": False, "error": "Hook source file not found"}
+
+    hook_dst = os.path.join(git_dir, "hooks", "pre-commit")
+    python_path = _project_venv_python(project_root)
+    hook_content = f"""#!/bin/sh
+"{python_path}" "{hook_src}"
+"""
+
+    old_content = None
+    if os.path.exists(hook_dst):
+        try:
+            with open(hook_dst, "r", encoding="utf-8") as f:
+                old_content = f.read()
+        except Exception as e:
+            return {"success": False, "error": f"Failed to read existing hook: {e}"}
+
+    if old_content == hook_content:
+        return {"success": True, "status": "unchanged", "path": hook_dst}
+
+    try:
+        if old_content is not None:
+            shutil.copyfile(hook_dst, hook_dst + ".bak")
+        os.makedirs(os.path.dirname(hook_dst), exist_ok=True)
+        with open(hook_dst, "w", encoding="utf-8") as f:
+            f.write(hook_content)
+        try:
+            os.chmod(hook_dst, 0o755)
+        except Exception:
+            pass
+        status = "updated" if old_content is not None else "created"
+        return {"success": True, "status": status, "path": hook_dst}
+    except Exception as e:
+        return {"success": False, "error": f"Failed to write hook: {e}"}
+
+
+def _remove_project_virtual_environment(project_root: str) -> dict:
+    """只移除專案受管理的 `.venv`；舊 `venv` 保留並提示人工處理。"""
+    # ponytail: 舊 venv 可能含使用者資料，因此禁止破壞性自動清理
+    dot_venv_path = os.path.join(project_root, ".venv")
+    legacy_venv_path = os.path.join(project_root, "venv")
+
+    removed_venv = False
+    legacy_venv_detected = False
+    message = ""
+
+    if os.path.exists(dot_venv_path):
+        try:
+            shutil.rmtree(dot_venv_path)
+            removed_venv = True
+            message += "已成功移除受管理的 .venv 虛擬環境。"
+        except Exception as e:
+            return {"success": False, "error": f"Failed to remove .venv: {e}"}
+
+    if os.path.exists(legacy_venv_path):
+        legacy_venv_detected = True
+        msg = f"偵測到舊式虛擬環境 '{legacy_venv_path}'。為避免資料損失，ADAD 未自動刪除它，請視需要手動清理。"
+        if message:
+            message += "\n" + msg
+        else:
+            message = msg
+        print(f"  - [提示] {msg}")
+
+    return {
+        "success": True,
+        "removed_venv": removed_venv,
+        "legacy_venv_detected": legacy_venv_detected,
+        "message": message or "沒有需要清理 the .venv 虛擬環境。"
+    }
+
+
+def _ensure_project_virtual_environment(project_root: str) -> dict:
+    """建立或保留專案唯一受管理的 `.venv`，舊 `venv` 僅提示而不搬移或刪除。"""
+    # ponytail: 舊 venv 可能含使用者資料，遷移採提示優先
+    dot_venv_path = os.path.join(project_root, ".venv")
+    legacy_venv_path = os.path.join(project_root, "venv")
+
+    created = False
+    legacy_venv_detected = False
+
+    if not os.path.exists(dot_venv_path):
+        print(f"  - 正在建立 Python 虛擬環境 (.venv) 於 {dot_venv_path}...")
+        try:
+            subprocess.run([sys.executable, "-m", "venv", dot_venv_path], check=True)
+            created = True
+            print("  - Python 虛擬環境 (.venv) 建立成功")
+        except Exception as e:
+            return {"success": False, "error": f"Failed to create virtual environment: {e}"}
+    else:
+        print(f"  - .venv 虛擬環境已存在於 {dot_venv_path}，跳過建立")
+
+    if os.path.exists(legacy_venv_path):
+        legacy_venv_detected = True
+        msg = f"偵測到舊式虛擬環境 '{legacy_venv_path}'。為避免資料損失，ADAD 未自動遷移或刪除它，請視需要手動處理。"
+        print(f"  - [提示] {msg}")
+
+    return {
+        "success": True,
+        "created": created,
+        "legacy_venv_detected": legacy_venv_detected,
+        "path": os.path.normpath(dot_venv_path)
+    }
+
+
