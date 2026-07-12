@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adad.dev/schema/task_schema.json",
+  "title": "ADAD Frozen Coding Task Snapshot",
+  "type": "object",
+  "required": ["schema_version", "task_id", "node_name", "exported_at", "system_map_version", "source_hash", "status", "source_lock", "rollback", "history", "spec"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "node_name": { "type": "string", "minLength": 1 },
+    "exported_at": { "type": "string", "minLength": 1 },
+    "system_map_version": { "type": "integer", "minimum": 1 },
+    "source_hash": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["assigned", "in_progress", "submitted", "approved", "rejected"] },
+    "source_lock": {
+      "type": "object",
+      "required": ["source_path", "node_name", "task_id", "acquired_at"],
+      "properties": {
+        "source_path": { "type": "string", "minLength": 1 },
+        "node_name": { "type": "string", "minLength": 1 },
+        "task_id": { "type": "string", "minLength": 1 },
+        "acquired_at": { "type": "string", "minLength": 1 }
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "required": ["strategy", "source_path", "baseline_file_hash", "instruction"],
+      "properties": {
+        "strategy": { "const": "preserve_diff" },
+        "source_path": { "type": "string" },
+        "baseline_file_hash": { "type": ["string", "null"] },
+        "rejected_file_hash": { "type": ["string", "null"] },
+        "source_changed_since_issue": { "type": "boolean" },
+        "instruction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "history": { "type": "array", "items": { "type": "object" } },
+    "spec": {
+      "type": "object",
+      "required": ["target_node", "dependency_interfaces"],
+      "properties": {
+        "target_node": {
+          "type": "object",
+          "required": ["name", "type", "state", "source", "input", "output", "invariants", "verification", "observability"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "type": { "type": "string", "minLength": 1 },
+            "state": { "type": "string", "minLength": 1 },
+            "source": { "type": "string", "minLength": 1 },
+            "input": { "type": "object" },
+            "output": { "type": "object" },
+            "invariants": { "type": "array" },
+            "verification": { "type": "array" },
+            "observability": { "type": "object" }
+          }
+        },
+        "dependency_interfaces": { "type": "object" }
+      }
+    }
+  }
+}
