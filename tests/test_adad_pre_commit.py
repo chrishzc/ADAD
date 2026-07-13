@@ -14,7 +14,12 @@ def _git(args, cwd):
 
 
 @pytest.fixture
-def git_repo(project_dir):
+def git_repo(project_dir, monkeypatch):
+    # GitHub Actions 會把 CI=true 注入整個 pytest process；一般 pre-commit
+    # 測試使用的是 staged index，必須隔離 runner 環境。需要 CI 語意的案例會
+    # 自行在呼叫 run_script 時明確設回這些變數。
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
     _git(["init", "-q"], project_dir)
     _git(["config", "user.email", "test@example.com"], project_dir)
     _git(["config", "user.name", "ADAD Test"], project_dir)
