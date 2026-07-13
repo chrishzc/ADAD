@@ -11,7 +11,8 @@
     "exported_at": { "type": "string", "minLength": 1 },
     "system_map_version": { "type": "integer", "minimum": 1 },
     "source_hash": { "type": "string", "minLength": 1 },
-    "status": { "enum": ["assigned", "in_progress", "submitted", "approved", "rejected"] },
+    "status": { "enum": ["assigned", "in_progress", "submitted", "approved", "rejected", "blocked"] },
+    "block_reason": { "type": "string" },
     "source_lock": {
       "type": "object",
       "required": ["source_path", "node_name", "task_id", "acquired_at"],
@@ -41,7 +42,7 @@
       "properties": {
         "target_node": {
           "type": "object",
-          "required": ["name", "type", "state", "source", "input", "output", "invariants", "verification", "observability"],
+          "required": ["name", "type", "state", "source", "input", "output", "exceptions", "invariants", "verification", "observability"],
           "properties": {
             "name": { "type": "string", "minLength": 1 },
             "type": { "type": "string", "minLength": 1 },
@@ -49,9 +50,15 @@
             "source": { "type": "string", "minLength": 1 },
             "input": { "type": "object" },
             "output": { "type": "object" },
+            "exceptions": { "type": "array" },
             "invariants": { "type": "array" },
             "verification": { "type": "array" },
-            "observability": { "type": "object" }
+            "observability": { "type": "object" },
+            "idempotency": { "type": "object" },
+            "retry_budget": { "type": "integer" },
+            "required_context": { "type": "array" },
+            "forbidden_context": { "type": "array" },
+            "context_priority": { "type": "object" }
           }
         },
         "dependency_interfaces": { "type": "object" }

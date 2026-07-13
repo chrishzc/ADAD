@@ -52,6 +52,9 @@ htmlcov/
 # 類似 PR 的審查狀態不會存進 repo 本身，同樣道理。
 .agents/tasks/
 
+# === ADAD 隔離工作區（每次 Task 的本機執行產物，不進版控） ===
+.agents/workspaces/
+
 # === 系統檔案 ===
 .DS_Store
 Thumbs.db

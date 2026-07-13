@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 3
+- Version: 5
 - Status: planning
 
 ## Environment
@@ -77,16 +77,17 @@
 ##### Module: check_normalization
 - Type: tool
 - Observability: not_required
-- Description: 執行 Rule of Two 邊界檢查；支援舊 positional JSON、UTF-8 JSON 檔案與 stdin，避免 Windows shell quoting 破壞 JSON。
+- Description: 執行 Rule of Two 邊界檢查；架構提案只能透過 UTF-8 JSON 檔案或 stdin 傳入，禁止 positional JSON，避免 Windows PowerShell 與其他 shell quoting 破壞內容。
 - Source: adad_source/agents/skills/adad-workflow/scripts/check_normalization.py::main
 - Preferred Pattern: pure_function
 - Complexity: medium
 - Algorithm:
-  - 使用 argparse 定義可選 positional `proposal_json` 與 `--file <path>`；兩者同時提供時輸出結構化錯誤並 exit 1。
-  - 若提供 `--file`，以 UTF-8 讀取完整內容；否則若有 positional 則沿用舊行為；兩者皆無時從 stdin 讀取，stdin 為互動終端或內容空白時輸出用法錯誤。
+  - 使用 argparse 定義 `--file <path>`；任何 positional 參數都視為已停用的危險輸入方式，輸出結構化錯誤並 exit 1。
+  - 若提供 `--file`，以 strict UTF-8 讀取完整內容；否則從 stdin 讀取。stdin 為互動終端或內容空白時輸出結構化用法錯誤。
   - 將取得的文字交給 json.loads；解析失敗、檔案讀取失敗或根節點不是 object 時，都輸出單一 JSON error object 並 exit 1，不輸出 traceback。
   - 保留 name 必填與既有 ADADCore.evaluate_normalization 呼叫，不改 Rule of Two 判斷邏輯及成功輸出格式。
-  - 僅修改 canonical source 的 main；生成副本由 sync_adad_assets 更新，不直接手改。
+  - canonical SKILL 指令範例不得再出現 positional JSON，只能示範 `--file`；stdin 適用於能安全傳遞原始位元流的平台。
+  - 僅修改 canonical source 與同一節點的 canonical 操作指示；生成副本由 sync_adad_assets 更新，不直接手改。
 - Decisions: []
 - Invariants:
   - deny_imports: [pymysql]
@@ -98,9 +99,8 @@
   - target_file: adad_source/agents/skills/adad-workflow/scripts/check_normalization.py
   - allowed_symbols: [main]
   - forbidden_files: [system_map.md, adad_cli/core.py, adad_cli/sync_assets.py, adad_cli/resources, .agents, README.md]
-  - proposal_json: string（向後相容的 positional JSON，可選）
-  - --file: path（UTF-8 JSON 檔案，可選）
-  - stdin: string（未提供 positional 與 --file 時使用）
+  - proposal_file: path（CLI 旗標為 --file；strict UTF-8 JSON 檔案，可選，與 stdin 二擇一）
+  - stdin: string（未提供 --file 時使用）
 - Output:
   - result: object
 - TODO:
@@ -109,6 +109,7 @@
   - [x] CP-1-002 (validated)
   - [x] CP-2-002 (deployed)
   - [x] CP-3-001 (validated：改善 Windows quoting 輸入邊界)
+  - [x] CP-3-040 (approved：停用 positional JSON，改以 --file 或 stdin 作為唯一正式輸入)
 
 ##### Module: analyze_cascade
 - Type: tool
@@ -278,6 +279,56 @@
 - Checkpoint:
   - [ ] CP-1-010 (planned)
 
+##### Module: read_utf8_text_strict
+- Type: function
+- Observability: not_required
+- Description: 以嚴格 UTF-8 解碼讀取架構、規格與 Task 文字，拒絕非法位元與 BOM，避免 errors=ignore 靜默遺失 SSOT 內容。
+- Source: adad_source/agents/skills/adad-workflow/scripts/text_io.py::read_utf8_text_strict
+- Preferred Pattern: boundary_adapter
+- Complexity: low
+- Decisions:
+  - 檔案內容必須是無 BOM 的 UTF-8；UTF-8 BOM、UTF-16 BOM、非法位元與無法解碼內容一律明確失敗。
+  - 不提供 errors=ignore 或 errors=replace 降級模式，避免架構文字在未被察覺時遺失。
+  - 本節點只負責單一文字讀取邊界；各既有 reader 的採用由後續原子 Task 分別處理。
+- Invariants: []
+- Verification: []
+- Dependencies: []
+- Input:
+  - file_path: string
+- Output:
+  - text: string
+- TODO:
+  - [ ] 將架構與規格讀取統一為 strict UTF-8，移除 errors=ignore
+- Checkpoint:
+  - [ ] CP-1-039 (planned)
+
+##### Module: write_utf8_text_atomic
+- Type: function
+- Observability: not_required
+- Description: 以無 BOM UTF-8、LF 換行與同目錄暫存檔原子取代方式寫入架構、規格及 Task 文字，避免 Windows、macOS、Linux 換行差異或中斷寫入造成部分檔案與後續解析失敗。
+- Source: adad_source/agents/skills/adad-workflow/scripts/text_io.py::write_utf8_text_atomic
+- Preferred Pattern: atomic_file_writer
+- Complexity: low
+- Decisions:
+  - 輸入文字若以 BOM 字元開頭必須明確失敗；其餘 CRLF 與 CR 一律正規化為 LF，再以 strict UTF-8 編碼，不得使用 errors=ignore 或 errors=replace。
+  - 暫存檔必須建立在目標檔案的同一目錄，完整寫入並 flush 後再以 os.replace 原子取代；不得先截斷目標檔案。
+  - 寫入或取代失敗時保留原目標內容並清理本次暫存檔，原始例外向上傳遞，不得留下可被誤認為正式 SSOT 的部分檔案。
+  - 僅負責單一文字檔案邊界，不建立父目錄、不解析內容，也不批次更新多個檔案；既有 writers 的採用由後續原子 Task 分別處理。
+- Invariants:
+  - deny_imports: [subprocess]
+  - deny_calls: [os.chdir]
+- Verification: []
+- Dependencies: []
+- Input:
+  - file_path: string
+  - text: string
+- Output:
+  - written_path: string
+- TODO:
+  - [ ] 統一架構、規格與 Task 的跨平台 UTF-8 原子寫入邊界
+- Checkpoint:
+  - [ ] CP-1-041 (planned)
+
 #### Subsystem: Enforcement_Gates
 - Description: 機械強制執行層——commit 階段與 agent 工具呼叫前後的閘門、驗證與 Task 生命週期控管，把 AGENTS.md 的軟性規則轉成硬規則。
 
@@ -431,4 +482,3 @@
   - [ ] CP-1-016 (planned)
 
 <!-- include docs/domains/adad_roadmap.md -->
- 

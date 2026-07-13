@@ -1,0 +1,28 @@
+# Default behavior for all files
+* text=auto
+
+# Cross-platform text formats (Enforce LF)
+*.py text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+
+# Windows-specific scripts (Enforce CRLF)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files (Do not apply line ending conversion)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.pyc binary
+*.exe binary
+*.dll binary

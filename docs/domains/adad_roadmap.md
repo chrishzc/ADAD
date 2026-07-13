@@ -300,6 +300,43 @@
 - Checkpoint:
   - [ ] CP-1-027 (planned)
 
+##### Module: resolve_verification_fixture_inputs
+- Type: function
+- Observability: not_required
+- Description: 解析 Verification case 宣告的 UTF-8 JSON fixture 來源，將資料安全注入 case input；路徑必須限制在專案根目錄內，且不得靜默覆寫原始 input，作為 #37 Fixture / Mock Data 來源宣告的原子基礎能力。
+- Source: adad_cli/workflow/verification_fixtures.py::resolve_verification_fixture_inputs
+- Preferred Pattern: boundary_adapter
+- Complexity: medium
+- Decisions:
+  - fixture 語法固定為 case 內的 `fixtures` 陣列；每筆 descriptor 僅包含 `input_key` 與相對專案根目錄的 `source`。
+  - 初版只接受 UTF-8 JSON 資料 fixture，不 import Python fixture、不反序列化可執行物件，也不 monkeypatch 任意 module symbol；後者涉及 #25/#27 的 Side Effect 與 State Change Contract，不能偷渡進 #37。
+  - 使用 `pathlib.Path` 做跨 Windows、macOS 與 Linux 的正規化；不論目前宿主 OS，都必須辨識並拒絕 POSIX absolute、Windows drive-qualified 與 UNC 路徑，以及 resolve 後逃出 project root 的路徑。
+  - 回傳新的 case 與新的 input，不修改呼叫端傳入物件；fixture key 重複或與既有 input key 衝突時 fail-fast。
+  - pytest 必須以 `tmp_path` 建立真實 UTF-8 JSON fixture，覆蓋成功注入、輸入不變性、重複／衝突 key、`..` 逃逸、POSIX absolute、Windows drive/UNC、檔案不存在與無效 JSON；測試不得依賴目前 OS 才能成立。
+- Algorithm:
+  - 驗證 case 是 object、case.input 是 object，且 fixtures 缺省時視為空陣列；fixtures 存在時必須是 descriptor array。
+  - 逐筆驗證 descriptor 僅具非空 `input_key` 與 `source`；以 host Path、PurePosixPath 與 PureWindowsPath 的語意拒絕所有平台的絕對路徑，並拒絕重複 input_key 及既有 input key 衝突。
+  - 將 source 相對 project_root 解析並正規化，確認結果仍位於 project_root 且是存在的 regular file。
+  - 以嚴格 UTF-8 讀取並解析 JSON，把解析值注入新 input，最後回傳保留原 case 其他欄位的新 case。
+- Invariants:
+  - deny_calls: [eval, exec, os.chdir, pickle.load, yaml.load]
+- Verification:
+  - case: {"input": {"case": {"input": {"value": 1}, "expect": 1}, "project_root": "."}, "expect": {"input": {"value": 1}, "expect": 1}}
+  - case: {"input": {"case": {"input": {}, "fixtures": [{"input_key": "payload", "source": "C:\\outside.json"}]}, "project_root": "."}, "expect_exception": "ValueError"}
+  - case: {"input": {"case": {"input": {}, "fixtures": [{"input_key": "payload", "source": "/outside.json"}]}, "project_root": "."}, "expect_exception": "ValueError"}
+  - case: {"input": {"case": {"input": {}, "fixtures": [{"input_key": "payload", "source": "../outside.json"}]}, "project_root": "."}, "expect_exception": "ValueError"}
+  - case: {"input": {"case": {"input": {"payload": {}}, "fixtures": [{"input_key": "payload", "source": "tests/fixture.json"}]}, "project_root": "."}, "expect_exception": "ValueError"}
+- Dependencies: []
+- Input:
+  - case: object
+  - project_root: string
+- Output:
+  - resolved_case: object
+- TODO:
+  - [ ] #37 第一原子步驟：解析並安全注入 JSON fixture input
+- Checkpoint:
+  - [ ] CP-1-046 (planned)
+
 ##### Module: task_readiness_and_audit
 - Type: gate
 - Observability: not_required
@@ -603,6 +640,39 @@
   - [x] CP-1-033-D (validated)
   - [x] CP-3-048-D (validated)
 
+##### Module: ensure_claude_pretooluse_hook
+- Type: function
+- Observability: not_required
+- Description: 以 `settings_path` 所屬專案的 `.venv` Python 產生跨平台安全 command，並在 Claude `.claude/settings.json` 中冪等新增或更新 ADAD PreToolUse hook；既有 `python3` 舊命令必須升級，使用者其他 hooks 與設定必須完整保留。
+- Source: adad_cli/core.py::_ensure_claude_pretooluse_hook
+- Preferred Pattern: idempotent_configuration_upsert
+- Complexity: low
+- Decisions:
+  - 保持現有單一 `settings_path` 呼叫介面，從其絕對路徑向上兩層取得 project root，再委派 `project_venv_python` 取得該專案 `.venv` 直譯器；不得使用全域 `python`、`python3` 或 `sys.executable`。
+  - 僅將 `os.name == "nt"` 映射為 `windows`、`os.name == "posix"` 映射為 `posix`，其他值明確失敗；command 必須委派 `render_portable_python_hook_command`，不得自行重寫引用規則。
+  - 若相同 matcher 下已有包含 `adad_pretooluse_gate.py` 的 hook，command 不同時必須原位置更新；只有完全等於期望 command 時才可判定 unchanged，禁止只因腳本檔名相同就跳過。
+  - 新增或更新 ADAD hook 時保留所有非 ADAD hook、matcher、未知欄位與其他 Claude 設定；不得重建或排序使用者既有結構。
+  - settings JSON 不存在時建立最小結構；解析失敗時不得覆寫原檔，回傳 `skipped_invalid_json`；實際變更以 UTF-8、`ensure_ascii=False`、尾端單一 LF 寫回。
+  - pytest 必須涵蓋新增、舊 `python3` 升級、完全相同時冪等不改寫、其他 hooks 保留、無效 JSON 不覆寫，以及 Windows/POSIX command family 委派。
+- Algorithm:
+  - 由 `settings_path` 推導 project root，取得 project `.venv` Python，將 `os.name` 映射為精確 command family，再呼叫 portable renderer 得到唯一期望 command。
+  - 以 UTF-8 strict 讀取既有 JSON；不存在時使用空物件，解析失敗時保留原檔並回傳略過狀態。
+  - 尋找 matcher 相同且 command 含目標腳本名稱的既有 hook；command 不同則就地更新，相同則不寫檔；找不到時只追加 ADAD hook。
+  - 僅在結構實際變更時寫回設定並回傳 `created` 或 `updated`，否則回傳 `unchanged`。
+- Invariants:
+  - require_calls: [_project_venv_python, render_portable_python_hook_command]
+  - deny_calls: [subprocess.run, subprocess.Popen, os.system]
+- Verification: []
+- Dependencies: [project_venv_python, render_portable_python_hook_command]
+- Input:
+  - settings_path: path
+- Output:
+  - hook_status: object
+- TODO:
+  - [ ] 讓 init/upgrade 自動升級 Claude hook 的 `python3` 舊命令並保持設定冪等
+- Checkpoint:
+  - [ ] CP-1-045 (planned)
+
 #### Subsystem: Platform_Integration
 - Description: 將跨平台指示與平台能力降級情況變成可追蹤的產品資產。
 
@@ -662,3 +732,88 @@
   - [ ] 規格第 4 節：平台相容性 Checklist
 - Checkpoint:
   - [ ] CP-1-036 (planned)
+
+##### Module: run_utf8_subprocess
+- Type: function
+- Observability: not_required
+- Description: 以明確 UTF-8 文字邊界執行單次子程序，統一回傳 returncode、stdout 與 stderr，避免 Windows CP950、macOS/Linux UTF-8 locale 與 shell quoting 造成不一致。
+- Source: adad_cli/platform_io.py::run_utf8_subprocess
+- Preferred Pattern: boundary_adapter
+- Complexity: low
+- Decisions:
+  - 一律以 argv 陣列呼叫，不接受 shell 字串，也不得啟用 shell=True。
+  - capture_output 固定啟用，stdout 與 stderr 固定使用 UTF-8 strict 解碼；非法輸出必須明確失敗，不得 errors=ignore。
+  - cwd 僅作為執行目錄，不改寫全域工作目錄、PATH、locale 或環境變數。
+  - 本節點只建立共享子程序邊界；adad_task 與 prepare_isolation 的採用分別由後續原子 Task 處理。
+- Invariants:
+  - deny_calls: [subprocess.Popen, os.chdir]
+- Verification: []
+- Dependencies: []
+- Input:
+  - argv: array
+  - cwd: string_or_null
+- Output:
+  - process_result: object
+- TODO:
+  - [ ] 跨平台 UTF-8 子程序邊界：Windows、macOS 與 Linux 行為一致
+- Checkpoint:
+  - [ ] CP-1-038 (planned)
+
+##### Module: repository_line_ending_policy
+- Type: configuration
+- Observability: not_required
+- Description: 以版本控制內的 `.gitattributes` 明確規範文字與腳本換行，讓 Windows、macOS、Linux checkout 與 commit 的內容一致，避免 CRLF/LF 差異造成架構過期判斷、資產同步或解析結果不一致。
+- Source: .gitattributes
+- Preferred Pattern: policy_as_code
+- Complexity: low
+- Decisions:
+  - 一般文字先採 `text=auto`，Python、Markdown、YAML、JSON、TOML、shell 與 PowerShell 等跨平台文字格式固定 `eol=lf`。
+  - Windows `*.bat` 與 `*.cmd` 啟動腳本固定 `eol=crlf`；二進位內容不得套用文字換行轉換。
+  - 不使用 `working-tree-encoding` 宣稱或轉碼 UTF-8，避免舊版 Git、JGit 與第三方工具不相容；UTF-8 與 BOM 約束由 strict 文字邊界及驗證工具負責。
+  - 本節點只建立未來 checkout/commit 的政策，不自動執行 `git add --renormalize`、不暫存既有檔案，也不改寫使用者尚未提交的內容；歷史檔案正規化另行審核。
+- Invariants: []
+- Verification: []
+- Dependencies: []
+- Input:
+  - repository_file_types: array
+- Output:
+  - gitattributes_policy: file
+- TODO:
+  - [ ] 建立跨平台版本庫換行政策並避免既有檔案被隱性批次改寫
+- Checkpoint:
+  - [ ] CP-1-042 (planned)
+
+##### Module: render_portable_python_hook_command
+- Type: function
+- Observability: not_required
+- Description: 使用專案 `.venv` 的 Python 直譯器與 hook 腳本路徑，依明確的 `windows` 或 `posix` command family 引用規則產生可攜式 command；不得把此輸入誤解為 `sys.platform` 的 `win32`、`linux` 或 `darwin`，並須正確處理含空白或特殊字元的專案路徑。
+- Source: adad_cli/platform_io.py::render_portable_python_hook_command
+- Preferred Pattern: boundary_adapter
+- Complexity: low
+- Decisions:
+  - Python 直譯器必須由 `project_venv_python` 提供，不得退回全域 `python`、`python3`、PATH 探測或目前執行 CLI 的 `sys.executable`。
+  - Windows 使用符合 CreateProcess/CommandLineToArgvW 的參數引用規則；macOS 與 Linux 使用 POSIX shell 引用規則，禁止以字串拼接裸路徑。
+  - 本節點只渲染 command，不讀寫 `.claude/settings.json`、不安裝 hook，也不執行子程序；這些責任留在既有生命週期節點。
+  - `platform_family` 僅接受精確值 `windows` 或 `posix`；`win32`、`linux`、`darwin` 及其他值皆須拋出 `ValueError`，不得猜測或靜默降級。
+- Algorithm:
+  - 先以精確字串比對驗證 `platform_family`，不是 `windows` 或 `posix` 時立即拋出 `ValueError`。
+  - `windows` 使用符合 CreateProcess/CommandLineToArgvW 的 argv 引用規則渲染 Python 與腳本路徑。
+  - `posix` 使用 POSIX shell 引用規則分別引用 Python 與腳本路徑，再以單一空白連接。
+- Invariants:
+  - deny_calls: [subprocess.run, subprocess.Popen, os.system]
+- Verification:
+  - case: {"input": {"python_executable": "C:\\Program Files\\Python\\python.exe", "script_path": "C:\\Project Space\\hook.py", "platform_family": "windows"}, "expect": "\"C:\\Program Files\\Python\\python.exe\" \"C:\\Project Space\\hook.py\""}
+  - case: {"input": {"python_executable": "/opt/My Python/bin/python", "script_path": "/work/My Project/hook.py", "platform_family": "posix"}, "expect": "'/opt/My Python/bin/python' '/work/My Project/hook.py'"}
+  - case: {"input": {"python_executable": "python", "script_path": "hook.py", "platform_family": "win32"}, "expect_exception": "ValueError"}
+- Dependencies: [project_venv_python]
+- Input:
+  - python_executable: path
+  - script_path: path
+  - platform_family: string
+- Output:
+  - command: string
+- TODO:
+  - [ ] 移除 Claude PreToolUse hook 的 `python3` 硬編碼並支援含空白路徑
+- Checkpoint:
+  - [ ] CP-1-043 (planned)
+  - [x] CP-3-044 (validated)

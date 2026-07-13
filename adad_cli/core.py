@@ -45,6 +45,7 @@ from pathlib import Path
 
 from adad_cli import __version__
 from adad_cli.resources import agents_dir, templates_dir
+from adad_cli.platform_io import render_portable_python_hook_command
 
 # --------------------------------------------------------------------------
 # 支援的 Agent 清單（唯一事實來源，cli.py 的互動選單也是從這裡讀）
@@ -171,7 +172,7 @@ PRETOOLUSE_GATE_SCRIPT = os.path.join(".agents", "skills", "adad-workflow", "scr
 PRETOOLUSE_GATE_MATCHER = "Edit|Write|MultiEdit"
 
 
-def _ensure_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) -> None:
+def _ensure_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) -> dict:
     """把 adad_pretooluse_gate.py 註冊進 .claude/settings.json 的 PreToolUse hook。
 
     這一步做完，「Agent 在動手改代碼之前先被機械攔截」才會真的生效——
@@ -179,7 +180,18 @@ def _ensure_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) ->
     才知道要在哪個時機點呼叫它。合併時只新增／更新我們自己的這一條，
     使用者原本設定的其他 hooks（含同一個 matcher 下的其他指令）一律保留。
     """
-    gate_command = f"python3 {PRETOOLUSE_GATE_SCRIPT}"
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(settings_path))) or "."
+    python_path = _project_venv_python(project_root)
+    script_path = os.path.normpath(os.path.join(project_root, ".agents", "skills", "adad-workflow", "scripts", "adad_pretooluse_gate.py"))
+
+    if os.name == "nt":
+        platform_family = "windows"
+    elif os.name == "posix":
+        platform_family = "posix"
+    else:
+        raise ValueError(f"Unsupported OS name: {os.name}")
+
+    gate_command = render_portable_python_hook_command(python_path, script_path, platform_family)
 
     settings = {}
     if os.path.exists(settings_path):
@@ -189,31 +201,55 @@ def _ensure_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) ->
         except (json.JSONDecodeError, OSError) as e:
             print(f"  - [Claude Code] [警告] {settings_path} 解析失敗（{e}），"
                   "為避免覆蓋你手動編輯過的內容，這步驟已略過，請自行檢查/修正該檔案。")
-            return
+            return {"success": False, "status": "skipped_invalid_json", "error": str(e)}
 
     hooks = settings.setdefault("hooks", {})
     pretooluse = hooks.setdefault("PreToolUse", [])
 
-    # 找找看陣列裡有沒有「matcher 相同、且底下已經有我們這支腳本」的項目
+    found_matcher_entry = None
+    found_hook_inner = None
+
     for entry in pretooluse:
-        if entry.get("matcher") != PRETOOLUSE_GATE_MATCHER:
-            continue
-        for inner in entry.get("hooks", []):
-            if "adad_pretooluse_gate.py" in inner.get("command", ""):
-                print(f"  - [Claude Code] {settings_path} 已註冊 PreToolUse gate，跳過")
-                return
+        if entry.get("matcher") == PRETOOLUSE_GATE_MATCHER:
+            found_matcher_entry = entry
+            for inner in entry.get("hooks", []):
+                if "adad_pretooluse_gate.py" in inner.get("command", ""):
+                    found_hook_inner = inner
+                    break
+            if found_hook_inner:
+                break
 
-    pretooluse.append({
-        "matcher": PRETOOLUSE_GATE_MATCHER,
-        "hooks": [{"type": "command", "command": gate_command}],
-    })
+    changed = False
+    status = "unchanged"
 
-    os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
-    with open(settings_path, "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-    print(f"  - [Claude Code] 已在 {settings_path} 註冊 PreToolUse gate"
-          "（開新 session 後用 /hooks 確認已生效）")
+    if found_hook_inner:
+        if found_hook_inner.get("command") != gate_command:
+            found_hook_inner["command"] = gate_command
+            changed = True
+            status = "updated"
+    else:
+        if found_matcher_entry:
+            found_matcher_entry.setdefault("hooks", []).append({
+                "type": "command",
+                "command": gate_command
+            })
+        else:
+            pretooluse.append({
+                "matcher": PRETOOLUSE_GATE_MATCHER,
+                "hooks": [{"type": "command", "command": gate_command}]
+            })
+        changed = True
+        status = "created"
+
+    if changed:
+        os.makedirs(os.path.dirname(settings_path) or ".", exist_ok=True)
+        with open(settings_path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        print(f"  - [Claude Code] 已在 {settings_path} 註冊 PreToolUse gate"
+              "（開新 session 後用 /hooks 確認已生效）")
+
+    return {"success": True, "status": status}
 
 
 def _remove_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) -> None:
@@ -965,5 +1001,3 @@ def _ensure_project_virtual_environment(project_root: str) -> dict:
         "legacy_venv_detected": legacy_venv_detected,
         "path": os.path.normpath(dot_venv_path)
     }
-
-

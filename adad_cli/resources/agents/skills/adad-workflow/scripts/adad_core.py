@@ -35,7 +35,7 @@ TASK_DIR = os.path.join(".agents", "tasks")
 SOURCE_LOCK_DIR = os.path.join(TASK_DIR, ".source_locks")
 CHECKPOINT_DIR = "checkpoints"
 TASK_SCHEMA_VERSION = 2
-TASK_STATUSES = {"assigned", "in_progress", "submitted", "approved", "rejected"}
+TASK_STATUSES = {"assigned", "in_progress", "submitted", "approved", "rejected", "blocked"}
 
 # ponytail: 原本 RULE-02 允許修改的狀態集合，在 adad_core.py / adad_pre_commit.py /
 # adad_pretooluse_gate.py 三處各自寫了一份一模一樣的 {"planned","dirty","validated","draft"}，
@@ -46,8 +46,8 @@ ALLOWED_EDIT_STATES = {"planned", "dirty", "validated", "draft"}
 #   assigned/in_progress → 任務開放中，允許編輯
 #   submitted            → 已提交待人類審查，凍結、不允許再編輯（等 approve/reject）
 #   approved             → 本輪任務已完成並結案，若要再改，需重新 generate_task
-#   rejected             → 內部過渡值，task_reject() 執行完會立刻改回 assigned，
-#                           理論上不會被外部觀察到停留在這個值，保留僅供 history 記錄語意
+#   rejected             → CP-2 打回重做，附帶 reason，視同重新開放編輯（轉 assigned）
+#   blocked              → Agent 回報缺少規格或遭遇無法排除的阻礙，凍結編輯直到人類審查。
 TASK_EDITABLE_STATUSES = {"assigned", "in_progress"}
 
 
@@ -284,6 +284,7 @@ def parse_markdown(md_content):
                 "dependencies": [],
                 "input": {},
                 "output": {},
+                "exceptions": [],
                 "invariants": [],
                 "preferred_pattern": "none",
                 "verification": [],
@@ -298,7 +299,12 @@ def parse_markdown(md_content):
                 # Algorithm 讓高複雜度節點在 Plan 階段就先拆好步驟大綱，實作階段只需要
                 # 「翻譯」而不是「設計」。
                 "complexity": "low",
-                "algorithm": []
+                "algorithm": [],
+                "idempotency": {"level": "unknown", "side_effects": []},
+                "retry_budget": 0,
+                "required_context": [],
+                "forbidden_context": [],
+                "context_priority": {}
             }
             current_section = None
             continue
@@ -338,17 +344,20 @@ def parse_markdown(md_content):
                 if fd_match and fd_match.group(1).strip().lower() == "description":
                     data["domains"][current_domain]["subsystems"][current_subsystem]["description"] = fd_match.group(2).strip()
             continue
-            
+
         indent_match = re.match(r'^(\s+)-\s*(.*)', line)
         if indent_match and current_section:
             sub_content = indent_match.group(2).strip()
-            
-            if current_section == "input" or current_section == "output":
+
+            if current_section == "input" or current_section == "output" or current_section == "context_priority":
                 kv_match = re.match(r'^([\w_]+):\s*(.*)', sub_content)
                 if kv_match:
                     k, v = kv_match.group(1), kv_match.group(2).strip()
+                    if current_section == "context_priority":
+                        try: v = int(v)
+                        except: pass
                     data["modules"][current_module][current_section][k] = v
-            elif current_section in ["invariants", "verification", "todo", "checkpoint", "algorithm", "observability"]:
+            elif current_section in ["invariants", "exceptions", "verification", "todo", "checkpoint", "algorithm", "observability", "required_context", "forbidden_context"]:
                 # ponytail: Verification 底下的 `case: {...}` 是可執行測試案例（JSON 語法），
                 # 跟 `must_have_assertions` 這種純字串標籤混用在同一個清單裡。
                 # 這裡在編譯期就把它解析成結構化 dict、而不是留到執行期才發現格式錯誤——
@@ -363,6 +372,17 @@ def parse_markdown(md_content):
                         )
                     data["modules"][current_module]["observability"]["signals"].append({
                         "kind": signal_match.group(1).lower(), "name": signal_match.group(2).strip()
+                    })
+                elif current_section == "exceptions":
+                    exc_match = re.match(r'^([\w_]+):\s*(.*)', sub_content)
+                    if not exc_match:
+                        raise ValueError(
+                            f"編譯失敗：模組 '{current_module}' 的 Exceptions 語法錯誤。\n"
+                            f"應為 - ExceptionType: 條件描述。但收到：{sub_content}"
+                        )
+                    data["modules"][current_module]["exceptions"].append({
+                        "type": exc_match.group(1),
+                        "condition": exc_match.group(2).strip()
                     })
                 elif current_section == "verification" and sub_content.lower().startswith("case:"):
                     case_json_str = sub_content.split(":", 1)[1].strip()
@@ -386,19 +406,21 @@ def parse_markdown(md_content):
                 else:
                     data["modules"][current_module][current_section].append(sub_content)
             continue
-            
+
         lh_match = list_header_regex.match(line_strip)
         if lh_match:
             current_section = lh_match.group(1).strip().lower().replace(" ", "_")
             if current_section == "observability":
                 data["modules"][current_module]["observability"] = {"mode": "required", "signals": []}
+            elif current_section == "idempotency":
+                pass # Will be handled by field_regex if inline, or indented kv if needed. Let's just do inline.
             continue
-            
+
         f_match = field_regex.match(line_strip)
         if f_match:
             key = f_match.group(1).strip().lower().replace(" ", "_")
             val = f_match.group(2).strip()
-            
+
             if key == "type":
                 data["modules"][current_module]["type"] = val
             elif key == "description":
@@ -433,10 +455,38 @@ def parse_markdown(md_content):
                 if val.startswith("[") and val.endswith("]"):
                     items = [x.strip() for x in val[1:-1].split(",") if x.strip()]
                     data["modules"][current_module]["decisions"] = items
-            
+            elif key == "retry_budget":
+                try:
+                    data["modules"][current_module]["retry_budget"] = int(val)
+                except ValueError:
+                    pass
+            elif key == "idempotency":
+                # handle inline: "level: pure, side_effects: []"
+                # For simplicity, if it's just a string, store it as level
+                data["modules"][current_module]["idempotency"]["level"] = val
+
             current_section = None
             continue
-            
+
+    # ponytail: 檢查所有宣告的例外是否有對應的 test case
+    for mod_name, mod_info in data.get("modules", {}).items():
+        declared_exceptions = [e["type"] for e in mod_info.get("exceptions", [])]
+        if declared_exceptions:
+            verified_exceptions = set()
+            for v in mod_info.get("verification", []):
+                if isinstance(v, dict) and "case" in v:
+                    expect_exc = v["case"].get("expect_exception")
+                    if expect_exc:
+                        verified_exceptions.add(expect_exc)
+
+            for exc in declared_exceptions:
+                if exc not in verified_exceptions:
+                    raise ValueError(
+                        f"編譯失敗：模組 '{mod_name}' 宣告了會拋出例外 '{exc}'，"
+                        f"但其 Verification 欄位中缺乏對應的 expect_exception 測試案例。\n"
+                        f"請補上類似: - case: {{\"input\": {{...}}, \"expect_exception\": \"{exc}\"}}"
+                    )
+
     return data
 
 def build_file_to_registered_functions(modules):
@@ -576,24 +626,24 @@ class ADADCore:
     def check_ir_validity(self):
         md_path = "system_map.md"
         yaml_path = self.map_path
-        
+
         if os.path.exists(md_path):
             if not os.path.exists(yaml_path):
                 return {
                     "valid": False,
                     "error": f"找不到架構 IR 檔案 ({yaml_path})。請先執行編譯指令：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
-            
+
             md_mtime = get_max_mtime(md_path)
             yaml_mtime = os.path.getmtime(yaml_path)
-            
+
             # 給予 1 秒的緩衝時間防範不同檔案系統時間戳記微幅飄移
             if md_mtime > yaml_mtime + 1:
                 return {
                     "valid": False,
                     "error": f"架構源檔案 ({md_path} 或其包含的子檔案) 已更新，但 IR ({yaml_path}) 已過期。請重新執行編譯：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
-                
+
         return {"valid": True}
 
 
@@ -627,14 +677,14 @@ class ADADCore:
         """從 docs/adr/ 中提取設計決策摘要，僅抓取關鍵標題、狀態與決策內容以防範 Context 膨脹"""
         adr_dir = os.path.join("docs", "adr")
         file_path = os.path.join(adr_dir, f"{adr_id}.md")
-        
+
         # 增加相對路徑的容錯
         if not os.path.exists(file_path):
             file_path = os.path.join("adr", f"{adr_id}.md")
-            
+
         if not os.path.exists(file_path):
             return {"adr_id": adr_id, "error": "決策文件不存在"}
-            
+
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -696,13 +746,13 @@ class ADADCore:
         """從 docs/patterns/ 中提取設計模式規範摘要，僅抓取關鍵標題、說明與程式碼規範"""
         patterns_dir = os.path.join("docs", "patterns")
         file_path = os.path.join(patterns_dir, f"{pattern_name}.md")
-        
+
         if not os.path.exists(file_path):
             file_path = os.path.join("patterns", f"{pattern_name}.md")
-            
+
         if not os.path.exists(file_path):
             return {"pattern_name": pattern_name, "error": "模式說明文件不存在"}
-            
+
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -801,7 +851,7 @@ class ADADCore:
                 decisions_summary.append(f"{adr_id}: 決策檔案載入錯誤 - {adr_info['error']}")
             else:
                 decisions_summary.append(f"{adr_info['title']} (狀態: {adr_info['status']}) - 決策: {adr_info['decision']}")
-        
+
         if decisions_summary:
             context["target_node"]["decisions_summary"] = decisions_summary
 
@@ -922,7 +972,7 @@ class ADADCore:
                 "reason": f"觸發 Rule of Two：功能特徵與現有模組高度重複，相似模組已出現 {len(matches)} 次。",
                 "duplicates": [f"{name} ({reason})" for name, reason in matches]
             }
-            
+
         return {"passed": True, "duplicates": []}
 
     def check_domain_boundary(self):
@@ -1166,7 +1216,7 @@ class ADADCore:
                     modules[neighbor]["state"] = "dirty"
                     dirty_list.append(neighbor)
                     queue.append(neighbor)
-                
+
         # 自身變更也轉為 dirty (若原本是 deployed 狀態)
         modules[target_node]["state"] = "dirty"
         dirty_list.insert(0, target_node)
@@ -1637,6 +1687,42 @@ class ADADCore:
             return {"success": False, "error": str(exc)}
         return {"success": True, "task_id": task_data["task_id"], "status": "assigned", "reason": reason, "checkpoint": audit}
 
+    def task_block(self, node_name, reason):
+        """
+        將指定節點的 Task 凍結為 blocked，附帶結構化理由。
+        """
+        task_data = self.load_task(node_name)
+        if not task_data:
+            return {"success": False, "error": f"[BLOCKED] 任務快照不存在，無法標記 blocked。"}
+
+        if task_data.get("status") not in TASK_EDITABLE_STATUSES:
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 任務狀態為 `{task_data.get('status')}`，只有 {sorted(TASK_EDITABLE_STATUSES)} 狀態才能回報 blocked。"
+            }
+
+        task_data["status"] = "blocked"
+        task_data["block_reason"] = reason
+
+        audit = {
+            "action": "task_blocked",
+            "reason": reason,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        if "history" not in task_data:
+            task_data["history"] = []
+        task_data["history"].append(audit)
+
+        self._save_task(node_name, task_data)
+
+        # 解除 source lock (如果有的話) - 雖然卡住但停止編輯了
+        # ponytail: 保留 lock 給卡住的 agent 或釋放？釋放比較好，因為需要人類介入。
+        if "source_lock" in task_data:
+            del task_data["source_lock"]
+            self._save_task(node_name, task_data)
+
+        return {"success": True, "task_id": task_data["task_id"], "status": "blocked", "reason": reason}
+
     def check_task_gate(self, rel_path):
         """
         給 adad_pretooluse_gate.py / adad_pre_commit.py 共用的政策判斷：
@@ -1765,7 +1851,7 @@ class ADADCore:
         return {"promoted_nodes": promoted, "checkpoint_required": len(promoted) > 0}
 
     def check_invariants(self, node_name, file_path=None):
-        """檢查指定節點的實作檔案是否符合 Invariant 規則 (首波支援 deny_imports)"""
+        """檢查指定節點的實作檔案是否符合 Invariant 規則"""
         node = self.get_node(node_name)
         if not node:
             return {"success": False, "error": f"找不到節點: {node_name}"}
@@ -1774,39 +1860,69 @@ class ADADCore:
         if not invariants:
             return {"success": True, "message": "此節點未定義 invariants，無須檢查。"}
 
-        # 優先使用 system_map.yaml 的 source 欄位，最後才猜 <node_name>.py
         file_path = file_path or node.get("source") or f"{node_name}.py"
-
         if not os.path.exists(file_path):
             return {"success": False, "error": f"找不到實作檔案: {file_path}"}
 
-        # 解析 invariants 規則，取得 deny_imports / deny_calls 清單。
-        deny_list = []
+        # 解析 invariants 規則
+        deny_imports = []
         deny_calls = []
+        require_calls = []
+        deny_env_read = False
+        deny_sys_exit = False
+        deny_bare_except = False
+
         for inv in invariants:
-            match = re.search(r"deny_imports:\s*\[(.*?)\]", inv)
-            if match:
-                pkgs = [p.strip() for p in match.group(1).split(",") if p.strip()]
-                deny_list.extend(pkgs)
-            match = re.search(r"deny_calls:\s*\[(.*?)\]", inv)
-            if match:
-                deny_calls.extend([c.strip() for c in match.group(1).split(",") if c.strip()])
+            match_imports = re.search(r"deny_imports:\s*\[(.*?)\]", inv)
+            if match_imports:
+                deny_imports.extend([p.strip() for p in match_imports.group(1).split(",") if p.strip()])
 
-        if not deny_list and not deny_calls:
-            return {"success": True, "message": "未偵測到有效的 deny_imports 或 deny_calls 規則。"}
+            match_calls = re.search(r"deny_calls:\s*\[(.*?)\]", inv)
+            if match_calls:
+                deny_calls.extend([c.strip() for c in match_calls.group(1).split(",") if c.strip()])
 
-        # 讀取並解析檔案 AST
+            match_req = re.search(r"require_calls:\s*\[(.*?)\]", inv)
+            if match_req:
+                require_calls.extend([c.strip() for c in match_req.group(1).split(",") if c.strip()])
+
+            if "deny_env_read" in inv:
+                deny_env_read = True
+
+            if "deny_sys_exit" in inv:
+                deny_sys_exit = True
+                # 同時將常見的中斷呼叫加入 deny_calls
+                deny_calls.extend(["sys.exit", "exit", "quit"])
+
+            if "deny_bare_except" in inv:
+                deny_bare_except = True
+
+        if not any([deny_imports, deny_calls, require_calls, deny_env_read, deny_sys_exit, deny_bare_except]):
+            return {"success": True, "message": "未偵測到支援的 invariants 規則。"}
+
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 tree = ast.parse(f.read(), filename=file_path)
+
+            target_node_ast = tree
+            if node.get("type") in ["function", "class"]:
+                target_name = node_name
+                source_field = node.get("source", "")
+                if "::" in source_field:
+                    target_name = source_field.split("::")[-1]
+                for child in ast.iter_child_nodes(tree):
+                    if getattr(child, "name", None) == target_name:
+                        target_node_ast = child
+                        break
         except Exception as e:
             return {"success": False, "error": f"解析檔案 {file_path} 失敗: {e}"}
 
-        # 遍歷 AST 收集 imports
-        class ImportVisitor(ast.NodeVisitor):
+        class InvariantVisitor(ast.NodeVisitor):
             def __init__(self):
-                self.imports = [] # 包含 (module_name, line_number)
-                self.calls = []   # 包含 (qualified_call_name, line_number)
+                self.imports = []
+                self.calls = []
+                self.attributes = []
+                self.raises = []
+                self.bare_excepts = []
 
             def visit_Import(self, node_visitor):
                 for alias in node_visitor.names:
@@ -1818,13 +1934,8 @@ class ADADCore:
 
             def visit_ImportFrom(self, node_visitor):
                 is_relative = (node_visitor.level or 0) > 0
-                # alias.name 一律記錄：from . import db_connector / from pkg import db_connector
-                # 都需要比對 deny_imports 清單中的頂層名稱
                 for alias in node_visitor.names:
                     self.imports.append((alias.name, node_visitor.lineno))
-
-                # module 字串只在絕對 import（level==0）時才記錄，避免相對路徑
-                # 後綴（e.g. from .utils import x 的 "utils"）被誤判為頂層套件
                 if node_visitor.module and not is_relative:
                     self.imports.append((node_visitor.module, node_visitor.lineno))
                     parts = node_visitor.module.split('.')
@@ -1834,53 +1945,108 @@ class ADADCore:
                         self.imports.append((f"{node_visitor.module}.{alias.name}", node_visitor.lineno))
                 self.generic_visit(node_visitor)
 
-            def visit_Call(self, node_visitor):
-                def qualified_name(expr):
-                    if isinstance(expr, ast.Name):
-                        return expr.id
-                    if isinstance(expr, ast.Attribute):
-                        parent = qualified_name(expr.value)
-                        return f"{parent}.{expr.attr}" if parent else expr.attr
-                    return None
+            def _qualified_name(self, expr):
+                if isinstance(expr, ast.Name):
+                    return expr.id
+                if isinstance(expr, ast.Attribute):
+                    parent = self._qualified_name(expr.value)
+                    return f"{parent}.{expr.attr}" if parent else expr.attr
+                return None
 
-                name = qualified_name(node_visitor.func)
+            def visit_Call(self, node_visitor):
+                name = self._qualified_name(node_visitor.func)
                 if name:
                     self.calls.append((name, node_visitor.lineno))
                 self.generic_visit(node_visitor)
 
-        visitor = ImportVisitor()
-        visitor.visit(tree)
+            def visit_Attribute(self, node_visitor):
+                name = self._qualified_name(node_visitor)
+                if name:
+                    self.attributes.append((name, node_visitor.lineno))
+                self.generic_visit(node_visitor)
+
+            def visit_Raise(self, node_visitor):
+                if node_visitor.exc:
+                    name = None
+                    if isinstance(node_visitor.exc, ast.Name):
+                        name = node_visitor.exc.id
+                    elif isinstance(node_visitor.exc, ast.Call):
+                        name = self._qualified_name(node_visitor.exc.func)
+                    if name:
+                        self.raises.append((name, node_visitor.lineno))
+                self.generic_visit(node_visitor)
+
+            def visit_ExceptHandler(self, node_visitor):
+                is_bare = False
+                if node_visitor.type is None:
+                    is_bare = True
+                elif isinstance(node_visitor.type, ast.Name):
+                    if node_visitor.type.id in ("Exception", "BaseException"):
+                        is_bare = True
+
+                if is_bare:
+                    if len(node_visitor.body) == 1:
+                        stmt = node_visitor.body[0]
+                        if isinstance(stmt, ast.Pass):
+                            self.bare_excepts.append(node_visitor.lineno)
+                        elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis:
+                            self.bare_excepts.append(node_visitor.lineno)
+
+                self.generic_visit(node_visitor)
+
+        visitor = InvariantVisitor()
+        visitor.visit(target_node_ast)
 
         violations = []
         seen_violations = set()
-        for denied_pkg in deny_list:
+
+        def add_violation(rule, detail, line):
+            v_key = (rule, detail, line)
+            if v_key not in seen_violations:
+                seen_violations.add(v_key)
+                violations.append({
+                    "rule": rule,
+                    "detail": detail,
+                    "line": line
+                })
+
+        for denied_pkg in deny_imports:
             for imp_pkg, lineno in visitor.imports:
                 if imp_pkg == denied_pkg or imp_pkg.startswith(denied_pkg + "."):
-                    v_key = (denied_pkg, imp_pkg, lineno)
-                    if v_key not in seen_violations:
-                        seen_violations.add(v_key)
-                        violations.append({
-                            "rule": f"deny_imports: {denied_pkg}",
-                            "imported": imp_pkg,
-                            "line": lineno
-                        })
+                    add_violation(f"deny_imports: {denied_pkg}", f"Imported {imp_pkg}", lineno)
 
         for denied_call in deny_calls:
             for call_name, lineno in visitor.calls:
                 if call_name == denied_call:
-                    v_key = ("call", denied_call, call_name, lineno)
-                    if v_key not in seen_violations:
-                        seen_violations.add(v_key)
-                        violations.append({
-                            "rule": f"deny_calls: {denied_call}",
-                            "called": call_name,
-                            "line": lineno,
-                        })
+                    add_violation(f"deny_calls: {denied_call}", f"Called {call_name}", lineno)
+
+        if deny_sys_exit:
+            for exc_name, lineno in visitor.raises:
+                if exc_name == "SystemExit":
+                    add_violation("deny_sys_exit", "raise SystemExit", lineno)
+
+        if deny_env_read:
+            for attr_name, lineno in visitor.attributes:
+                if attr_name == "os.environ":
+                    add_violation("deny_env_read", "Access os.environ", lineno)
+            for call_name, lineno in visitor.calls:
+                if call_name == "os.getenv":
+                    add_violation("deny_env_read", "Call os.getenv", lineno)
+
+        if deny_bare_except:
+            for lineno in visitor.bare_excepts:
+                add_violation("deny_bare_except", "Caught exception without handling (pass/...)", lineno)
+
+        if require_calls:
+            called_names = set(name for name, _ in visitor.calls)
+            for req_call in require_calls:
+                if req_call not in called_names:
+                    add_violation(f"require_calls: {req_call}", f"Missing required call to {req_call}", 0)
 
         if violations:
             return {
                 "success": False,
-                "error": f"違反架構不變量 (Invariants) 邊界約束！檔案 {file_path} 包含了禁止的 import 或 call。",
+                "error": f"違反架構不變量 (Invariants) 邊界約束！檔案 {file_path} 未通過檢查。",
                 "violations": violations
             }
 
@@ -2066,7 +2232,7 @@ class ADADCore:
 def run_self_test():
     print("[ADAD Test] 啟動 ADAD 核心引擎自我測試...")
     test_file = "test_system_map.yaml"
-    
+
     # 建立測試資料
     test_data = {
         "version": 1,
@@ -2101,13 +2267,13 @@ def run_self_test():
             }
         }
     }
-    
+
     with open(test_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(test_data, f)
-        
+
     try:
         core = ADADCore(test_file, check_validity=False)
-        
+
         # 1. 測試讀取上下文
         ctx = core.read_context("user_service")
         assert "db_connector" in ctx["dependency_interfaces"]
@@ -2193,24 +2359,24 @@ def run_self_test():
         test_code_content = "import db_connector\nimport sys\n"
         with open(test_code_file, "w", encoding="utf-8") as f:
             f.write(test_code_content)
-        
+
         try:
             core.get_node("calculate_jp_tax")["invariants"] = ["deny_imports: [db_connector]"]
             res = core.check_invariants("calculate_jp_tax", test_code_file)
             assert res["success"] is False, "應該檢測出違反 invariants"
             assert len(res["violations"]) == 1
-            assert res["violations"][0]["imported"] == "db_connector"
+            assert "db_connector" in res["violations"][0]["detail"]
             print("  - 測試 5: Invariants (deny_imports) 靜態 AST 阻斷檢查成功")
         finally:
             if os.path.exists(test_code_file):
                 os.remove(test_code_file)
-        
+
         # 6. 測試 ADR 設計決策提取與智慧裁剪
         test_adr_file = os.path.join("docs", "adr", "ADR-TEST-999.md")
         os.makedirs(os.path.dirname(test_adr_file), exist_ok=True)
-        
+
         test_adr_content = """# ADR-TEST-999: 測試採用 Redis 進行快取
-        
+
 ## 狀態
 Approved
 
@@ -2226,7 +2392,7 @@ Approved
 """
         with open(test_adr_file, "w", encoding="utf-8") as f:
             f.write(test_adr_content)
-            
+
         try:
             core.get_node("calculate_jp_tax")["decisions"] = ["ADR-TEST-999"]
             ctx = core.read_context("calculate_jp_tax")
@@ -2244,7 +2410,7 @@ Approved
         # 7. 測試模式載入與斷言檢查 (Verification)
         test_pattern_file = os.path.join("docs", "patterns", "test_pattern.md")
         os.makedirs(os.path.dirname(test_pattern_file), exist_ok=True)
-        
+
         test_pattern_content = """# Test Pattern 模式規範
 
 ## 說明
@@ -2256,7 +2422,7 @@ Approved
 """
         with open(test_pattern_file, "w", encoding="utf-8") as f:
             f.write(test_pattern_content)
-            
+
         test_impl_file = "test_impl_file.py"
         try:
             # 7.1 驗證模式載入與裁剪
@@ -2268,22 +2434,22 @@ Approved
             assert "說明: 這是一個用來自我測試的模式說明。" in pat_summary
             assert "規範: - 第一條規範：必須要寫得很好。 - 第二條規範：一定要遵守。" in pat_summary
             print("  - 測試 7.1: 設計模式外部化與 Context 智慧載入成功")
-            
+
             # 7.2 驗證無斷言的阻斷
             core.get_node("calculate_jp_tax")["verification"] = ["must_have_assertions"]
-            
+
             with open(test_impl_file, "w", encoding="utf-8") as f:
                 f.write("def func():\n    return 42\n")
-            
+
             res_fail = core.verify_implementation("calculate_jp_tax", test_impl_file)
             assert res_fail["success"] is False
             assert "必須包含至少一個 assert" in res_fail["error"]
             print("  - 測試 7.2: Verification 無斷言實作自動阻斷成功")
-            
+
             # 7.3 驗證有斷言的通過
             with open(test_impl_file, "w", encoding="utf-8") as f:
                 f.write("def func():\n    assert True\n    return 42\n")
-                
+
             res_pass = core.verify_implementation("calculate_jp_tax", test_impl_file)
             assert res_pass["success"] is True
             print("  - 測試 7.3: Verification 有斷言實作順利通過成功")

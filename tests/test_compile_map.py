@@ -164,3 +164,34 @@ def test_compile_map_missing_markdown_file(project_dir):
     code, data, out, err = run_script("compile_map.py", [], cwd=project_dir)
     assert code == 1
     assert data["success"] is False
+
+
+def test_compile_map_parses_exceptions_with_verification(project_dir):
+    md = VALID_MD.replace(
+        "- Invariants: []",
+        "- Exceptions:\n  - ValueError: 輸入無效\n- Invariants: []"
+    ).replace(
+        "- Verification: []",
+        "- Verification:\n  - case: {\"input\": {\"x\": -1}, \"expect_exception\": \"ValueError\"}"
+    )
+    _write_md(project_dir, md)
+    code, data, out, err = run_script("compile_map.py", [], cwd=project_dir)
+    assert code == 0, err
+    compiled = read_yaml(project_dir)
+    exc = compiled["modules"]["sample_tool"]["exceptions"]
+    assert len(exc) == 1
+    assert exc[0]["type"] == "ValueError"
+    assert exc[0]["condition"] == "輸入無效"
+
+
+def test_compile_map_fails_when_exception_not_verified(project_dir):
+    md = VALID_MD.replace(
+        "- Invariants: []",
+        "- Exceptions:\n  - TypeError: 類型錯誤\n- Invariants: []"
+    )
+    _write_md(project_dir, md)
+    code, data, out, err = run_script("compile_map.py", [], cwd=project_dir)
+    assert code == 1
+    assert data["success"] is False
+    assert "TypeError" in data["error"]
+    assert "缺乏對應的 expect_exception" in data["error"]

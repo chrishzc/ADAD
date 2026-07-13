@@ -12,7 +12,7 @@ def test_check_normalization_passes_when_no_overlap(project_dir, base_modules):
         "output": {"w": "float"},
         "description": "跟現有模組完全無關的全新功能",
     })
-    code, data, out, err = run_script("check_normalization.py", [proposal], cwd=project_dir)
+    code, data, out, err = run_script("check_normalization.py", cwd=project_dir, input_text=proposal)
     assert code == 0, err
     assert data["passed"] is True
     assert data["duplicates"] == []
@@ -30,7 +30,7 @@ def test_check_normalization_flags_identical_interface(project_dir, base_modules
         "output": {"y": "int"},
         "description": "跟前面幾個介面完全一樣的新提案",
     })
-    code, data, out, err = run_script("check_normalization.py", [proposal], cwd=project_dir)
+    code, data, out, err = run_script("check_normalization.py", cwd=project_dir, input_text=proposal)
     assert code == 0, err
     assert data["passed"] is False
     assert len(data["duplicates"]) >= 2
@@ -39,21 +39,21 @@ def test_check_normalization_flags_identical_interface(project_dir, base_modules
 def test_check_normalization_requires_name_field(project_dir, base_modules):
     write_yaml(project_dir, base_modules)
     proposal = json.dumps({"input": {}, "output": {}})
-    code, data, out, err = run_script("check_normalization.py", [proposal], cwd=project_dir)
+    code, data, out, err = run_script("check_normalization.py", cwd=project_dir, input_text=proposal)
     assert code == 1
     assert "error" in data
 
 
 def test_check_normalization_rejects_invalid_json(project_dir, base_modules):
     write_yaml(project_dir, base_modules)
-    code, data, out, err = run_script("check_normalization.py", ["not-json"], cwd=project_dir)
+    code, data, out, err = run_script("check_normalization.py", cwd=project_dir, input_text="not-json")
     assert code == 1
     assert "error" in data
 
 
 def test_check_normalization_rejects_non_object_json(project_dir, base_modules):
     write_yaml(project_dir, base_modules)
-    code, data, out, err = run_script("check_normalization.py", ["[1,2,3]"], cwd=project_dir)
+    code, data, out, err = run_script("check_normalization.py", cwd=project_dir, input_text="[1,2,3]")
     # 對應原始碼裡的 assert isinstance(data, dict)：非物件會觸發 AssertionError，
     # Python 對未捕捉例外預設 exit code 是 1。
     assert code == 1
