@@ -1,4 +1,4 @@
-version: 5
+version: 6
 modules:
   sync_adad_assets:
     type: tool
@@ -595,8 +595,9 @@ modules:
     fan_in_snapshot: 0
   adad_pre_commit:
     type: tool
-    description: Git pre-commit hook，將 AGENTS.md 的軟規則轉為 commit 階段的機械硬閘門：Staleness
-      阻斷、狀態門禁、原子範圍警告、Invariants/Verification 校驗、跨 Domain 依賴邊界、未登記函式掃描、懸空依賴、模組落點校驗。
+    description: Git pre-commit／CI guardrail，將 AGENTS.md 的軟規則轉為機械硬閘門：本機讀取 staged diff；CI
+      pull request 比對明確 base branch；CI push 在 GITHUB_BASE_REF 空白時安全回退至 HEAD~1，禁止組成無效的
+      origin/ revision。
     source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
     domain: ADAD_Workflow
     subsystem: Enforcement_Gates
@@ -604,7 +605,8 @@ modules:
     dependencies:
     - adad_core
     input:
-      git_staged_files: file（讀取 git staged diff，無 CLI 參數）
+      git_change_set: file（本機為 staged diff；CI 為 base revision 到 HEAD）
+      ci_environment: object（CI、GITHUB_BASE_REF；空白 base 必須視為未提供）
     output:
       errors: array
       warnings: array
@@ -617,11 +619,15 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-011 (planned)'
+    - '[x] CP-3-003 (validated：CI push 空 base fallback)'
     observability:
       mode: not_required
       signals: []
     complexity: low
-    algorithm: []
+    algorithm:
+    - 非 CI 環境使用 git diff --cached。
+    - CI 且 GITHUB_BASE_REF 為非空白值時，使用 origin/<base> 到 HEAD。
+    - CI 且 GITHUB_BASE_REF 缺少或為空白值時，使用 HEAD~1 到 HEAD。
     idempotency:
       level: unknown
       side_effects: []
@@ -629,7 +635,7 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: planned
+    state: dirty
     fan_in_snapshot: 1
     known_symbols:
     - build_source_to_module_map
@@ -932,7 +938,7 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: deployed
+    state: dirty
     fan_in_snapshot: 0
   automated_test_suite:
     type: test_suite

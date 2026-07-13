@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import os
 import subprocess
 
 import pytest
@@ -23,6 +24,32 @@ def git_repo(project_dir):
 def test_no_staged_files_exits_clean(git_repo):
     code, data, out, err = run_script("adad_pre_commit.py", cwd=git_repo)
     assert code == 0
+
+
+def test_ci_push_with_empty_base_ref_uses_previous_commit(git_repo, base_modules):
+    base_modules["modules"]["sample_tool"]["state"] = "planned"
+    write_yaml(git_repo, base_modules)
+    source = git_repo / "sample_tool.py"
+    source.write_text(
+        "def sample_tool(x):\n    assert isinstance(x, int)\n    return x\n",
+        encoding="utf-8",
+    )
+    _git(["add", "system_map.yaml", "sample_tool.py"], git_repo)
+    _git(["commit", "-qm", "base"], git_repo)
+
+    source.write_text(
+        "def sample_tool(x):\n    assert isinstance(x, int)\n    return x + 1\n",
+        encoding="utf-8",
+    )
+    _git(["add", "sample_tool.py"], git_repo)
+    _git(["commit", "-qm", "change"], git_repo)
+
+    env = os.environ.copy()
+    env.update({"CI": "true", "GITHUB_BASE_REF": ""})
+    code, data, out, err = run_script("adad_pre_commit.py", cwd=git_repo, env=env)
+
+    assert code == 0, err
+    assert "origin/" not in err
 
 
 def test_blocks_editing_deployed_module_rule02(git_repo, base_modules):

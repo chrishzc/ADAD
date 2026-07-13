@@ -38,8 +38,14 @@ def get_staged_files(diff_filter="ACM"):
     模組的原始碼會完全繞過 RULE-02，因為刪除本身也是一種需要先轉成 dirty 才能做
     的變更。
     """
-    # ponytail: CI 環境下 index 是空的，改跟 base branch 比對
-    diff_target = [os.environ.get("GITHUB_BASE_REF", "HEAD~1"), "HEAD"] if os.environ.get("CI") else ["--cached"]
+    # ponytail: CI 環境下 index 是空的，改跟 base revision 比對。
+    # GitHub push 事件會把 GITHUB_BASE_REF 設成空字串；空白值必須視為未提供，
+    # 否則下方會組成無效的 origin/ revision，讓 guardrail 在任何測試前失敗。
+    if os.environ.get("CI"):
+        base_ref = (os.environ.get("GITHUB_BASE_REF") or "").strip()
+        diff_target = [base_ref or "HEAD~1", "HEAD"]
+    else:
+        diff_target = ["--cached"]
     if diff_target[0] != "--cached" and not diff_target[0].startswith("HEAD") and not diff_target[0].startswith("origin/"):
         diff_target[0] = f"origin/{diff_target[0]}"
 

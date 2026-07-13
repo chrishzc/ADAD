@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 5
+- Version: 6
 - Status: planning
 
 ## Environment
@@ -335,23 +335,30 @@
 ##### Module: adad_pre_commit
 - Type: tool
 - Observability: not_required
-- Description: Git pre-commit hook，將 AGENTS.md 的軟規則轉為 commit 階段的機械硬閘門：Staleness 阻斷、狀態門禁、原子範圍警告、Invariants/Verification 校驗、跨 Domain 依賴邊界、未登記函式掃描、懸空依賴、模組落點校驗。
+- Description: Git pre-commit／CI guardrail，將 AGENTS.md 的軟規則轉為機械硬閘門：本機讀取 staged diff；CI pull request 比對明確 base branch；CI push 在 GITHUB_BASE_REF 空白時安全回退至 HEAD~1，禁止組成無效的 origin/ revision。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
 - Preferred Pattern: none
-- Decisions: []
+- Decisions:
+  - GITHUB_BASE_REF 空字串等同未提供；push 事件使用 HEAD~1，pull request 才使用 origin/<base>。
 - Invariants: []
 - Verification: []
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
-  - git_staged_files: file（讀取 git staged diff，無 CLI 參數）
+  - git_change_set: file（本機為 staged diff；CI 為 base revision 到 HEAD）
+  - ci_environment: object（CI、GITHUB_BASE_REF；空白 base 必須視為未提供）
 - Output:
   - errors: array
   - warnings: array
+- Algorithm:
+  - 非 CI 環境使用 git diff --cached。
+  - CI 且 GITHUB_BASE_REF 為非空白值時，使用 origin/<base> 到 HEAD。
+  - CI 且 GITHUB_BASE_REF 缺少或為空白值時，使用 HEAD~1 到 HEAD。
 - TODO:
   - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
 - Checkpoint:
   - [ ] CP-1-011 (planned)
+  - [x] CP-3-003 (validated：CI push 空 base fallback)
 
 ##### Module: adad_pretooluse_gate
 - Type: tool
