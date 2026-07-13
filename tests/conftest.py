@@ -60,13 +60,16 @@ def run_script(name, args=None, cwd=None, input_text=None, env=None):
         （這正好用來驗證 adad_task.py approve/reject 的「非 tty 一律拒絕」邏輯）。
     """
     cmd = [sys.executable, script_path(name)] + (args or [])
+    env_vars = env.copy() if env else os.environ.copy()
+    env_vars["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.run(
         cmd,
         cwd=cwd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         input=input_text if input_text is not None else "",
-        env=env,
+        env=env_vars,
     )
     parsed = None
     try:

@@ -217,7 +217,7 @@ pip install -e .
    ```
 
    這會建立 `checkpoints/`、`docs/adr`、`docs/patterns`、`system_map.md`（並自動編譯出
-   `system_map.yaml`）、`venv/`、`.git/hooks/pre-commit`，**並把 `adad-workflow` skill 的腳本
+   `system_map.yaml`）、`.venv/`、`.git/hooks/pre-commit`，**並把 `adad-workflow` skill 的腳本
    複製一份到該專案的 `.agents/skills/adad-workflow/`**，讓這個專案完全自我完備，不必依賴
    全域安裝也能運作。若選擇了 `claude`，還會額外：
    - 把 `adad-workflow` skill 複製一份到 `.claude/skills/adad-workflow/`，讓 Claude Code 的
@@ -227,7 +227,9 @@ pip install -e .
    - 在專案的 `.claude/settings.json` 自動註冊 PreToolUse gate（`adad_pretooluse_gate.py`），
      讓 Claude Code 在真正動手改代碼**之前**就攔截違反狀態門禁的修改，比 pre-commit hook
      更早擋下，省下已經寫出來又要丟棄的 token；若 `settings.json` 已存在其他設定，只會
-     新增這一條，不會動到你原本的內容。
+     新增這一條，不會動到你原本的內容。hook command 固定使用該專案 `.venv` 的 Python，
+     並依 Windows／POSIX 規則安全引用路徑；`adad upgrade` 會更新舊版 `python3` 命令，若
+     `settings.json` 不是合法 JSON 則保留原檔並明確回報，不會覆寫損壞內容。
 
    若選擇了 `codex`，則會：
    - **不需要**複製 skill——Codex CLI / 桌面 App 原生就會掃描 `.agents/skills/`，
@@ -244,13 +246,13 @@ pip install -e .
    紀錄、不需要重新選一次。
 2. 安裝 Python 依賴：
    ```bash
-   venv/bin/pip install -r requirements.txt   # Windows: venv\Scripts\pip install -r requirements.txt
+   .venv/bin/pip install -r requirements.txt   # Windows: .venv\Scripts\pip install -r requirements.txt
    ```
 3. 完成後即可呼叫 ADAD 底層腳本，例如：
    ```bash
-   venv/bin/python .agents/skills/adad-workflow/scripts/read_context.py <node_name>
+   .venv/bin/python .agents/skills/adad-workflow/scripts/read_context.py <node_name>
    ```
-4. 不再需要 ADAD 時，於該專案目錄執行 `adad remove` 即可還原（移除 venv、pre-commit hook、
+4. 不再需要 ADAD 時，於該專案目錄執行 `adad remove` 即可還原（移除 `.venv`、pre-commit hook、
    本地 skill 副本）。**`system_map.md`／`system_map.yaml`／`checkpoints/` 這些是你自己的
    架構文件與決策紀錄，預設會保留、不會被刪除**；如果確定要連同這些也一起清掉重來，
    改執行 `adad remove --purge-docs`。
@@ -281,12 +283,6 @@ adad global install --agents codex
     寫入 `~/.codex/AGENTS.md`。安裝完成後，同樣建議開新 session 詢問 Codex 目前有哪些
     skill／規則可用，以確認已被讀到。
 
-*   選擇 `antigravity`：會將 `adad-workflow` Skills 複製到所有已知 Antigravity 全域路徑，
-    並將 ADAD 規則寫入 `~/.gemini/GEMINI.md`。
-*   選擇 `claude`：會將 `adad-workflow` Skills 複製到 `~/.claude/skills/`，並將 ADAD 規則
-    寫入 `~/.claude/CLAUDE.md`。安裝完成後，開一個新的 Claude Code session，
-    問它「你現在有哪些 skills 可以用」即可確認載入成功。
-
 若要移除，執行 `adad global uninstall`（同樣支援 `--agents` 指定要卸載的 Agent，
 省略則卸載全部已知 Agent）。
 
@@ -297,7 +293,7 @@ adad global install --agents codex
 > 不需要把 ADAD 這個 repo 本身 clone 或複製進每一個目標專案裡。
 >
 > （如果你希望完全不影響全域 Python 環境，正確做法是在**目標專案自己的
-> venv 裡**執行 `pip install /path/to/adad-cli`，而不是把 ADAD 的原始碼
+> `.venv` 裡**執行 `pip install /path/to/adad-cli`，而不是把 ADAD 的原始碼
 > clone 進目標專案資料夾——後者會讓目標專案的 git 裡多出一個巢狀的
 > `.git`，追蹤起來會很混亂，不建議這樣做。）
 
@@ -328,7 +324,7 @@ adad upgrade
 | `adad init --agents codex` | 同上，但只為 Codex 設定：不複製 skill（原生共用 `.agents/skills/`），改為建立根目錄 `AGENTS.md` symlink |
 | `adad upgrade` | 將已安裝的套件版本安全同步到已 init 過的專案（讀取當初 `adad init` 記錄的 Agent 清單；僅更新套件管理的檔案，不動使用者資產；覆蓋前自動備份成 `.bak`） |
 | `adad upgrade --force-agents-md` | 同上，但連 `.agents/AGENTS.md` 也用套件最新版本強制覆蓋 |
-| `adad remove` | 清理/還原目前專案的環境與工具產出（venv、pre-commit hook、本地 skill 副本，含 `.claude/skills/adad-workflow`、Codex 用的根目錄 `AGENTS.md` symlink、`.claude/settings.json` 裡的 PreToolUse gate 設定）；`system_map.md/.yaml`、`checkpoints/` 等使用者資產預設保留 |
+| `adad remove` | 清理/還原目前專案的環境與工具產出（受管理的 `.venv`、pre-commit hook、本地 skill 副本，含 `.claude/skills/adad-workflow`、Codex 用的根目錄 `AGENTS.md` symlink、`.claude/settings.json` 裡的 PreToolUse gate 設定）；舊版 `venv/` 只提示、不自動刪除；`system_map.md/.yaml`、`checkpoints/` 等使用者資產預設保留 |
 | `adad remove --purge-docs` | 同上，但連同 `system_map.md/.yaml`、`checkpoints/` 一併刪除 |
 | `adad global install` | 部署到 Antigravity／Claude Code／Codex 全域設定，供所有專案共用；不加 `--agents` 會跳互動選單 |
 | `adad global uninstall` | 自 Antigravity／Claude Code／Codex 全域設定移除；可用 `--agents` 指定，省略則卸載全部已知 Agent |

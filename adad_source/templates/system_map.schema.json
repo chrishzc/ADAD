@@ -70,7 +70,7 @@
   "$defs": {
     "module": {
       "type": "object",
-      "required": ["type", "description", "source", "state", "input", "output", "invariants", "verification", "complexity", "algorithm", "observability"],
+      "required": ["type", "description", "source", "state", "input", "output", "exceptions", "invariants", "verification", "complexity", "algorithm", "observability"],
       "properties": {
         "type": {
           "type": "string", "minLength": 1,
@@ -183,6 +183,41 @@
           "description": "參數名稱 → 型別描述字串的對應（型別描述目前是自由文字，不強制列舉）。"
         },
         "output": {
+          "type": "object"
+        },
+        "exceptions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "condition"],
+            "properties": {
+              "type": { "type": "string" },
+              "condition": { "type": "string" }
+            }
+          }
+        },
+        "idempotency": {
+          "type": "object",
+          "properties": {
+            "level": { "type": "string" },
+            "side_effects": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "retry_budget": {
+          "type": "integer"
+        },
+        "required_context": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "forbidden_context": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "context_priority": {
           "type": "object"
         }
       }

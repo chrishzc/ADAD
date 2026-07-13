@@ -4,6 +4,28 @@
 
 ## Unreleased
 
+### Added
+
+- **跨平台 I/O 與版本庫邊界**：
+  - `run_utf8_subprocess` 統一以 argv、UTF-8 strict 與明確 cwd 執行子程序，避免 Windows CP950 與 shell quoting 差異。
+  - `read_utf8_text_strict`／`write_utf8_text_atomic` 提供嚴格 UTF-8 讀取及同目錄暫存檔原子替換。
+  - `.gitattributes` 明確規範跨平台文字格式使用 LF，Windows batch/cmd 使用 CRLF，二進位檔不做文字轉換。
+- **Verification fixture 第一階段（#37）**：新增 `resolve_verification_fixture_inputs`，可將專案根目錄內的 UTF-8 JSON fixture 安全注入 case input；拒絕路徑逃逸、POSIX absolute、Windows drive/UNC、重複或衝突 key，且不修改原始 case。完整接入 `system_map.schema.json` 與 `verify_implementation` 仍列為後續工作。
+- 新增跨平台與 fixture 測試；2026-07-13 以 `C:\Python314\python.exe -m pytest -q` 實跑完整套件，135 項全數通過。
+
+### Changed
+
+- `adad init`／`upgrade`／`remove` 統一管理專案根目錄的 `.venv`；舊 `venv/` 只提示人工遷移，不自動搬移或刪除。
+- pre-commit hook 與 Claude PreToolUse hook 固定使用目標專案 `.venv` Python，不再綁定安裝 ADAD 時的外部 Python 或硬編碼 `python3`。
+- Claude hook command 依 Windows／POSIX 規則安全引用含空白路徑；升級時會冪等更新舊命令、保留其他 hooks，無效 JSON 則保留原檔並回報略過。
+- `check_normalization.py` 停用容易被 shell quoting 破壞的 positional JSON，只接受 UTF-8 `--file` 或 stdin。
+
+### Fixed
+
+- 修正 Windows、macOS、Linux 間的子程序解碼、文字換行、路徑引用與 hook Python 選擇差異。
+- 修正 fixture 來源在非 Windows 主機可能漏判 `C:relative`、drive-qualified 或 UNC 路徑的風險。
+- 將 Task 快照未攜帶架構 `Decisions` 的核發品質缺口登記為 backlog #54，避免必要測試要求只存在於規劃端。
+
 ## 1.3.0 — 2026-07-12
 
 ### Added

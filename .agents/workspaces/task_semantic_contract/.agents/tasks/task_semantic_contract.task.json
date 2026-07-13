@@ -1,0 +1,81 @@
+{
+  "schema_version": 2,
+  "task_id": "task_semantic_contract@v3@a29fb0",
+  "node_name": "task_semantic_contract",
+  "exported_at": "2026-07-12T13:32:54.508329+00:00",
+  "system_map_version": 3,
+  "source_hash": "a29fb052edcf6159710370dbbbc79c71fce392e5ac95fe833d9f53e69fdffd58",
+  "status": "approved",
+  "source_lock": {
+    "source_path": "adad_cli/workflow/task_contract_schema.py",
+    "node_name": "task_semantic_contract",
+    "task_id": "task_semantic_contract@v3@a29fb0",
+    "acquired_at": "2026-07-12T13:32:54.508667+00:00"
+  },
+  "rollback": {
+    "strategy": "preserve_diff",
+    "source_path": "adad_cli/workflow/task_contract_schema.py",
+    "baseline_file_hash": null,
+    "instruction": "駁回或驗證失敗時保留工作區 diff；僅記錄狀態，絕不自動 reset 或刪除檔案。"
+  },
+  "history": [
+    {
+      "event": "generated",
+      "at": "2026-07-12T13:32:54.508329+00:00"
+    },
+    {
+      "event": "submitted",
+      "at": "2026-07-12T13:34:47.928753+00:00"
+    },
+    {
+      "event": "approved",
+      "at": "2026-07-12T13:35:59.563787+00:00",
+      "reviewer": "chris",
+      "reason": "",
+      "checkpoint_id": "CP-2-20260712T133559619394Z-task_semantic_contract",
+      "checkpoint_path": "checkpoints\\CP-2-20260712T133559619394Z-task_semantic_contract-approved.yaml"
+    }
+  ],
+  "spec": {
+    "target_node": {
+      "name": "task_semantic_contract",
+      "type": "schema",
+      "state": "planned",
+      "source": "adad_cli/workflow/task_contract_schema.py::validate_semantic_contract",
+      "input": {
+        "description": "string"
+      },
+      "output": {
+        "semantic_contract": "object"
+      },
+      "dependencies": [
+        "validate_schema"
+      ],
+      "description": "將 Task 的自然語言 description 升級為可驗證的結構化 Semantic Contract（#19）。",
+      "map_file": "docs\\domains\\adad_roadmap.md",
+      "invariants": [],
+      "verification": [],
+      "observability": {
+        "mode": "not_required",
+        "signals": []
+      },
+      "complexity": "low",
+      "algorithm": [],
+      "decisions_summary": [
+        "Semantic Contract 必須保留人類可讀摘要，並提供機器可驗證的目標與完成條件: 決策檔案載入錯誤 - 決策文件不存在"
+      ],
+      "preferred_pattern_summary": "schema_first: 模式檔案載入錯誤 - 模式說明文件不存在"
+    },
+    "dependency_interfaces": {
+      "validate_schema": {
+        "input": {
+          "cwd_system_map_yaml": "file（預設驗證 system_map.yaml 對照 system_map.schema.json）"
+        },
+        "output": {
+          "result": "object"
+        },
+        "invariants": []
+      }
+    }
+  }
+}

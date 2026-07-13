@@ -1,4 +1,4 @@
-version: 3
+version: 5
 modules:
   sync_adad_assets:
     type: tool
@@ -17,6 +17,7 @@ modules:
         README.md]'
     output:
       result: object（同步或檢查結果；不一致時列出相對路徑）
+    exceptions: []
     invariants:
     - 'deny_imports: [yaml]'
     preferred_pattern: pure_function
@@ -37,6 +38,13 @@ modules:
     - --write 前先從受管理輸出樹移除上述快取，再只複製 canonical 的非快取檔案。
     - --check 只比較受管理檔案，Python 執行期產生的快取不得造成不一致。
     - 擴充測試，驗證 canonical 與輸出任一側出現 .pyc 時，資產檢查仍只評估受管理檔案且 --write 可清理輸出快取。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: deployed
     fan_in_snapshot: 2
     known_symbols:
@@ -60,6 +68,7 @@ modules:
       node_name: string
     output:
       context: object
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -74,14 +83,21 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 1
     known_symbols:
     - main
   check_normalization:
     type: tool
-    description: 執行 Rule of Two 邊界檢查；支援舊 positional JSON、UTF-8 JSON 檔案與 stdin，避免 Windows
-      shell quoting 破壞 JSON。
+    description: 執行 Rule of Two 邊界檢查；架構提案只能透過 UTF-8 JSON 檔案或 stdin 傳入，禁止 positional
+      JSON，避免 Windows PowerShell 與其他 shell quoting 破壞內容。
     source: adad_source/agents/skills/adad-workflow/scripts/check_normalization.py::main
     domain: ADAD_Workflow
     subsystem: Core_Engine
@@ -92,10 +108,11 @@ modules:
       allowed_symbols: '[main]'
       forbidden_files: '[system_map.md, adad_cli/core.py, adad_cli/sync_assets.py,
         adad_cli/resources, .agents, README.md]'
-      proposal_json: string（向後相容的 positional JSON，可選）
-      stdin: string（未提供 positional 與 --file 時使用）
+      proposal_file: path（CLI 旗標為 --file；strict UTF-8 JSON 檔案，可選，與 stdin 二擇一）
+      stdin: string（未提供 --file 時使用）
     output:
       result: object
+    exceptions: []
     invariants:
     - 'deny_imports: [pymysql]'
     preferred_pattern: pure_function
@@ -108,18 +125,26 @@ modules:
     - '[x] CP-1-002 (validated)'
     - '[x] CP-2-002 (deployed)'
     - '[x] CP-3-001 (validated：改善 Windows quoting 輸入邊界)'
+    - '[x] CP-3-040 (approved：停用 positional JSON，改以 --file 或 stdin 作為唯一正式輸入)'
     observability:
       mode: not_required
       signals: []
     complexity: medium
     algorithm:
-    - 使用 argparse 定義可選 positional `proposal_json` 與 `--file <path>`；兩者同時提供時輸出結構化錯誤並
-      exit 1。
-    - 若提供 `--file`，以 UTF-8 讀取完整內容；否則若有 positional 則沿用舊行為；兩者皆無時從 stdin 讀取，stdin 為互動終端或內容空白時輸出用法錯誤。
+    - 使用 argparse 定義 `--file <path>`；任何 positional 參數都視為已停用的危險輸入方式，輸出結構化錯誤並 exit 1。
+    - 若提供 `--file`，以 strict UTF-8 讀取完整內容；否則從 stdin 讀取。stdin 為互動終端或內容空白時輸出結構化用法錯誤。
     - 將取得的文字交給 json.loads；解析失敗、檔案讀取失敗或根節點不是 object 時，都輸出單一 JSON error object 並 exit
       1，不輸出 traceback。
     - 保留 name 必填與既有 ADADCore.evaluate_normalization 呼叫，不改 Rule of Two 判斷邏輯及成功輸出格式。
-    - 僅修改 canonical source 的 main；生成副本由 sync_adad_assets 更新，不直接手改。
+    - canonical SKILL 指令範例不得再出現 positional JSON，只能示範 `--file`；stdin 適用於能安全傳遞原始位元流的平台。
+    - 僅修改 canonical source 與同一節點的 canonical 操作指示；生成副本由 sync_adad_assets 更新，不直接手改。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 0
   analyze_cascade:
@@ -134,6 +159,7 @@ modules:
       changed_node_name: string
     output:
       dirty_nodes: array
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -148,6 +174,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
     known_symbols:
@@ -165,6 +198,7 @@ modules:
       next_state: string
     output:
       result: object
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -179,6 +213,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
     known_symbols:
@@ -194,6 +235,7 @@ modules:
     dependencies: []
     input: {}
     output: {}
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -208,6 +250,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 11
     known_symbols:
@@ -247,6 +296,7 @@ modules:
     - ADADCore.read_context
     - ADADCore.save
     - ADADCore.task_approve
+    - ADADCore.task_block
     - ADADCore.task_is_expired
     - ADADCore.task_reject
     - ADADCore.task_submit
@@ -277,6 +327,7 @@ modules:
       cwd_system_map_md: file（無 CLI 參數，讀取當前目錄的 system_map.md）
     output:
       result: object
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -290,6 +341,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 3
     known_symbols:
@@ -308,6 +366,7 @@ modules:
       node_name: string
     output:
       result: object
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -321,6 +380,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 5
     known_symbols:
@@ -343,6 +409,7 @@ modules:
       domain_exists: boolean
       subsystem_exists: boolean
       hint: string
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -356,6 +423,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
     known_symbols:
@@ -374,6 +448,7 @@ modules:
       cwd_system_map_md: file（無 CLI 參數，讀取當前目錄檔案）
     output:
       report: text（stdout 輸出）
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -387,6 +462,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
     known_symbols:
@@ -404,6 +486,7 @@ modules:
       cwd_system_map_yaml: file（預設驗證 system_map.yaml 對照 system_map.schema.json）
     output:
       result: object
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -417,6 +500,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 7
     known_symbols:
@@ -428,6 +518,81 @@ modules:
     - _MinimalValidator.iter_errors
     - main
     - validate_schema_conformance
+  read_utf8_text_strict:
+    type: function
+    description: 以嚴格 UTF-8 解碼讀取架構、規格與 Task 文字，拒絕非法位元與 BOM，避免 errors=ignore 靜默遺失 SSOT
+      內容。
+    source: adad_source/agents/skills/adad-workflow/scripts/text_io.py::read_utf8_text_strict
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      file_path: string
+    output:
+      text: string
+    exceptions: []
+    invariants: []
+    preferred_pattern: boundary_adapter
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 將架構與規格讀取統一為 strict UTF-8，移除 errors=ignore'
+    checkpoint:
+    - '[ ] CP-1-039 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+  write_utf8_text_atomic:
+    type: function
+    description: 以無 BOM UTF-8、LF 換行與同目錄暫存檔原子取代方式寫入架構、規格及 Task 文字，避免 Windows、macOS、Linux
+      換行差異或中斷寫入造成部分檔案與後續解析失敗。
+    source: adad_source/agents/skills/adad-workflow/scripts/text_io.py::write_utf8_text_atomic
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      file_path: string
+      text: string
+    output:
+      written_path: string
+    exceptions: []
+    invariants:
+    - 'deny_imports: [subprocess]'
+    - 'deny_calls: [os.chdir]'
+    preferred_pattern: atomic_file_writer
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 統一架構、規格與 Task 的跨平台 UTF-8 原子寫入邊界'
+    checkpoint:
+    - '[ ] CP-1-041 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
   adad_pre_commit:
     type: tool
     description: Git pre-commit hook，將 AGENTS.md 的軟規則轉為 commit 階段的機械硬閘門：Staleness
@@ -443,6 +608,7 @@ modules:
     output:
       errors: array
       warnings: array
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -456,6 +622,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 1
     known_symbols:
@@ -489,6 +662,7 @@ modules:
       stdin: object（Claude Code hook payload，含 tool_input.file_path）
     output:
       exit_code: string（0=放行；2=阻擋，原因寫在 stderr）
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -502,6 +676,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
     known_symbols:
@@ -527,6 +708,7 @@ modules:
         為駁回原因）
     output:
       result: object
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -540,11 +722,19 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 5
     known_symbols:
     - _require_human_tty
     - cmd_approve
+    - cmd_isolate
     - cmd_reject
     - cmd_submit
     - main
@@ -564,6 +754,7 @@ modules:
       passed: boolean
       violations: array
       unbound: array
+    exceptions: []
     invariants: []
     preferred_pattern: pure_function
     verification: []
@@ -576,6 +767,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
     known_symbols:
@@ -595,6 +793,7 @@ modules:
     output:
       passed: boolean
       violations: array
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -608,6 +807,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 1
     known_symbols:
@@ -627,6 +833,7 @@ modules:
     output:
       success: boolean
       result: object
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -640,6 +847,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 1
     known_symbols:
@@ -659,6 +873,7 @@ modules:
     output:
       success: boolean
       result: object
+    exceptions: []
     invariants: []
     preferred_pattern: none
     verification: []
@@ -672,6 +887,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 3
     known_symbols:
@@ -687,6 +909,7 @@ modules:
     input: {}
     output:
       inventory: system_map.yaml
+    exceptions: []
     invariants: []
     preferred_pattern: ssot_document
     verification: []
@@ -702,6 +925,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: deployed
     fan_in_snapshot: 0
   automated_test_suite:
@@ -715,6 +945,7 @@ modules:
     input: {}
     output:
       test_result: report
+    exceptions: []
     invariants: []
     preferred_pattern: black_box_test
     verification: []
@@ -730,6 +961,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: deployed
     fan_in_snapshot: 0
   environment_contract:
@@ -746,6 +984,7 @@ modules:
       environment: object
     output:
       validated_environment: object
+    exceptions: []
     invariants: []
     preferred_pattern: schema_first
     verification: []
@@ -760,6 +999,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
   module_contract_schema:
@@ -776,6 +1022,7 @@ modules:
       module_contract: object
     output:
       normalized_module_contract: object
+    exceptions: []
     invariants: []
     preferred_pattern: schema_first
     verification: []
@@ -790,6 +1037,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
   rollback_and_concurrency_contract:
@@ -805,6 +1059,7 @@ modules:
       execution_policy: object
     output:
       guarded_execution_policy: object
+    exceptions: []
     invariants: []
     preferred_pattern: explicit_contract
     verification: []
@@ -819,6 +1074,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
   task_contract_schema:
@@ -840,6 +1102,7 @@ modules:
       task_contract: object
     output:
       validated_task_contract: object
+    exceptions: []
     invariants: []
     preferred_pattern: thin_orchestrator
     verification: []
@@ -854,6 +1117,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: dirty
     fan_in_snapshot: 0
   task_semantic_contract:
@@ -869,6 +1139,7 @@ modules:
       description: string
     output:
       semantic_contract: object
+    exceptions: []
     invariants: []
     preferred_pattern: schema_first
     verification: []
@@ -883,6 +1154,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 1
   task_non_goals_contract:
@@ -898,6 +1176,7 @@ modules:
       non_goals: array
     output:
       validated_non_goals: array
+    exceptions: []
     invariants: []
     preferred_pattern: explicit_contract
     verification: []
@@ -912,6 +1191,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 1
   task_verification_conditions:
@@ -927,6 +1213,7 @@ modules:
       verification_cases: array
     output:
       validated_verification_cases: array
+    exceptions: []
     invariants: []
     preferred_pattern: extend_existing_contract
     verification: []
@@ -942,6 +1229,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 1
   task_assumptions_contract:
@@ -957,6 +1251,7 @@ modules:
       assumptions: array
     output:
       validated_assumptions: array
+    exceptions: []
     invariants: []
     preferred_pattern: explicit_contract
     verification: []
@@ -971,6 +1266,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 1
   task_input_json_schema:
@@ -986,6 +1288,7 @@ modules:
       input_schema: object
     output:
       validated_input_schema: object
+    exceptions: []
     invariants: []
     preferred_pattern: schema_first
     verification: []
@@ -1000,6 +1303,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 1
   task_output_json_schema:
@@ -1015,6 +1325,7 @@ modules:
       output_schema: object
     output:
       validated_output_schema: object
+    exceptions: []
     invariants: []
     preferred_pattern: schema_first
     verification: []
@@ -1029,6 +1340,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 1
   execution_contracts:
@@ -1046,6 +1364,7 @@ modules:
       execution_contract: object
     output:
       execution_verdict: object
+    exceptions: []
     invariants: []
     preferred_pattern: executable_contract
     verification: []
@@ -1060,6 +1379,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
   dependency_and_retry_contract:
@@ -1076,6 +1402,7 @@ modules:
       dependency_contract: object
     output:
       bounded_dependency_context: object
+    exceptions: []
     invariants: []
     preferred_pattern: bounded_context
     verification: []
@@ -1090,6 +1417,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
   verification_strategy:
@@ -1106,6 +1440,7 @@ modules:
       verification_plan: object
     output:
       verification_report: object
+    exceptions: []
     invariants: []
     preferred_pattern: executable_specification
     verification: []
@@ -1120,7 +1455,106 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
+    fan_in_snapshot: 0
+  resolve_verification_fixture_inputs:
+    type: function
+    description: '解析 Verification case 宣告的 UTF-8 JSON fixture 來源，將資料安全注入 case input；路徑必須限制在專案根目錄內，且不得靜默覆寫原始
+      input，作為 #37 Fixture / Mock Data 來源宣告的原子基礎能力。'
+    source: adad_cli/workflow/verification_fixtures.py::resolve_verification_fixture_inputs
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      case: object
+      project_root: string
+    output:
+      resolved_case: object
+    exceptions: []
+    invariants:
+    - 'deny_calls: [eval, exec, os.chdir, pickle.load, yaml.load]'
+    preferred_pattern: boundary_adapter
+    verification:
+    - case:
+        input:
+          case:
+            input:
+              value: 1
+            expect: 1
+          project_root: .
+        expect:
+          input:
+            value: 1
+          expect: 1
+    - case:
+        input:
+          case:
+            input: {}
+            fixtures:
+            - input_key: payload
+              source: C:\outside.json
+          project_root: .
+        expect_exception: ValueError
+    - case:
+        input:
+          case:
+            input: {}
+            fixtures:
+            - input_key: payload
+              source: /outside.json
+          project_root: .
+        expect_exception: ValueError
+    - case:
+        input:
+          case:
+            input: {}
+            fixtures:
+            - input_key: payload
+              source: ../outside.json
+          project_root: .
+        expect_exception: ValueError
+    - case:
+        input:
+          case:
+            input:
+              payload: {}
+            fixtures:
+            - input_key: payload
+              source: tests/fixture.json
+          project_root: .
+        expect_exception: ValueError
+    decisions: []
+    todo:
+    - '[ ] #37 第一原子步驟：解析並安全注入 JSON fixture input'
+    checkpoint:
+    - '[ ] CP-1-046 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 驗證 case 是 object、case.input 是 object，且 fixtures 缺省時視為空陣列；fixtures 存在時必須是 descriptor
+      array。
+    - 逐筆驗證 descriptor 僅具非空 `input_key` 與 `source`；以 host Path、PurePosixPath 與 PureWindowsPath
+      的語意拒絕所有平台的絕對路徑，並拒絕重複 input_key 及既有 input key 衝突。
+    - 將 source 相對 project_root 解析並正規化，確認結果仍位於 project_root 且是存在的 regular file。
+    - 以嚴格 UTF-8 讀取並解析 JSON，把解析值注入新 input，最後回傳保留原 case 其他欄位的新 case。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
     fan_in_snapshot: 0
   task_readiness_and_audit:
     type: gate
@@ -1140,6 +1574,7 @@ modules:
     output:
       readiness_result: object
       audit_record: object
+    exceptions: []
     invariants: []
     preferred_pattern: fail_fast_gate
     verification: []
@@ -1155,6 +1590,13 @@ modules:
       signals: []
     complexity: medium
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: dirty
     fan_in_snapshot: 0
   task_complexity_policy:
@@ -1181,6 +1623,7 @@ modules:
       override_reason: string
     output:
       decision: string
+    exceptions: []
     invariants:
     - 'deny_imports: [yaml, subprocess, os]'
     preferred_pattern: pure_function
@@ -1263,6 +1706,13 @@ modules:
     - complexity=high 時，只有 model_capability=high、override_approved=true 且 override_reason
       去除空白後非空，才回傳 `issue_override`。
     - 其餘 high 情況一律回傳 `split`；不得讀寫檔案、環境變數、全域狀態或呼叫外部服務。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: deployed
     fan_in_snapshot: 1
   context_policy:
@@ -1279,6 +1729,7 @@ modules:
       context_policy: object
     output:
       curated_context: object
+    exceptions: []
     invariants: []
     preferred_pattern: least_context
     verification: []
@@ -1293,6 +1744,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
   documentation_alignment:
@@ -1309,6 +1767,7 @@ modules:
     input: {}
     output:
       user_documentation: markdown
+    exceptions: []
     invariants: []
     preferred_pattern: documentation_as_contract
     verification: []
@@ -1322,6 +1781,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 0
   continuous_integration:
@@ -1338,6 +1804,7 @@ modules:
       git_revision: string
     output:
       check_results: report
+    exceptions: []
     invariants: []
     preferred_pattern: continuous_verification
     verification: []
@@ -1352,6 +1819,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: dirty
     fan_in_snapshot: 0
   release_changelog:
@@ -1366,6 +1840,7 @@ modules:
       release_changes: array
     output:
       changelog_entry: markdown
+    exceptions: []
     invariants: []
     preferred_pattern: keep_a_changelog
     verification: []
@@ -1379,6 +1854,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 0
   project_venv_python:
@@ -1393,6 +1875,7 @@ modules:
       project_root: path
     output:
       python_path: path
+    exceptions: []
     invariants:
     - 'deny_imports: [virtualenv]'
     preferred_pattern: pure_function
@@ -1408,8 +1891,15 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
-    fan_in_snapshot: 1
+    fan_in_snapshot: 3
   init_project_virtual_environment:
     type: lifecycle
     description: '`adad init` 編排已拆分的 `.venv` 建立與 pre-commit hook 寫入節點（#48）。'
@@ -1425,6 +1915,7 @@ modules:
       agents: array
     output:
       environment_status: object
+    exceptions: []
     invariants:
     - 'deny_imports: [virtualenv]'
     preferred_pattern: thin_orchestrator
@@ -1442,6 +1933,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 0
   ensure_project_virtual_environment:
@@ -1456,6 +1954,7 @@ modules:
       project_root: path
     output:
       environment_status: object
+    exceptions: []
     invariants:
     - 'deny_imports: [virtualenv]'
     preferred_pattern: idempotent_resource
@@ -1471,6 +1970,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 1
   write_project_pre_commit_hook:
@@ -1487,6 +1993,7 @@ modules:
       hook_src: path
     output:
       hook_status: object
+    exceptions: []
     invariants:
     - 'deny_imports: [virtualenv]'
     preferred_pattern: shared_resource_writer
@@ -1502,6 +2009,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 2
   upgrade_project_virtual_environment:
@@ -1518,6 +2032,7 @@ modules:
       agents: array
     output:
       environment_status: object
+    exceptions: []
     invariants:
     - 'deny_imports: [virtualenv]'
     preferred_pattern: thin_orchestrator
@@ -1534,6 +2049,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 0
   remove_project_virtual_environment:
@@ -1548,6 +2070,7 @@ modules:
       project_root: path
     output:
       environment_status: object
+    exceptions: []
     invariants:
     - 'deny_imports: [virtualenv]'
     preferred_pattern: safe_cleanup
@@ -1563,6 +2086,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 1
   clean_project_virtual_environment:
@@ -1579,6 +2109,7 @@ modules:
       purge_docs: boolean
     output:
       environment_status: object
+    exceptions: []
     invariants:
     - 'deny_imports: [virtualenv]'
     preferred_pattern: thin_orchestrator
@@ -1595,6 +2126,59 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+  ensure_claude_pretooluse_hook:
+    type: function
+    description: 以 `settings_path` 所屬專案的 `.venv` Python 產生跨平台安全 command，並在 Claude
+      `.claude/settings.json` 中冪等新增或更新 ADAD PreToolUse hook；既有 `python3` 舊命令必須升級，使用者其他
+      hooks 與設定必須完整保留。
+    source: adad_cli/core.py::_ensure_claude_pretooluse_hook
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - project_venv_python
+    - render_portable_python_hook_command
+    input:
+      settings_path: path
+    output:
+      hook_status: object
+    exceptions: []
+    invariants:
+    - 'require_calls: [_project_venv_python, render_portable_python_hook_command]'
+    - 'deny_calls: [subprocess.run, subprocess.Popen, os.system]'
+    preferred_pattern: idempotent_configuration_upsert
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 讓 init/upgrade 自動升級 Claude hook 的 `python3` 舊命令並保持設定冪等'
+    checkpoint:
+    - '[ ] CP-1-045 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - 由 `settings_path` 推導 project root，取得 project `.venv` Python，將 `os.name` 映射為精確
+      command family，再呼叫 portable renderer 得到唯一期望 command。
+    - 以 UTF-8 strict 讀取既有 JSON；不存在時使用空物件，解析失敗時保留原檔並回傳略過狀態。
+    - 尋找 matcher 相同且 command 含目標腳本名稱的既有 hook；command 不同則就地更新，相同則不寫檔；找不到時只追加 ADAD hook。
+    - 僅在結構實際變更時寫回設定並回傳 `created` 或 `updated`，否則回傳 `unchanged`。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: validated
     fan_in_snapshot: 0
   blocked_task_reporting:
@@ -1610,6 +2194,7 @@ modules:
       blocked_reason: object
     output:
       blocked_task: object
+    exceptions: []
     invariants: []
     preferred_pattern: structured_failure
     verification: []
@@ -1624,6 +2209,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
   platform_instruction_renderer:
@@ -1640,6 +2232,7 @@ modules:
       platform_instruction_source: object
     output:
       rendered_instructions: array
+    exceptions: []
     invariants: []
     preferred_pattern: generate_from_ssot
     verification: []
@@ -1654,6 +2247,13 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: dirty
     fan_in_snapshot: 0
   platform_compatibility_assessment:
@@ -1669,6 +2269,7 @@ modules:
       platform_capabilities: object
     output:
       compatibility_report: object
+    exceptions: []
     invariants: []
     preferred_pattern: explicit_capability_matrix
     verification: []
@@ -1683,8 +2284,151 @@ modules:
       signals: []
     complexity: low
     algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
     state: planned
     fan_in_snapshot: 0
+  run_utf8_subprocess:
+    type: function
+    description: 以明確 UTF-8 文字邊界執行單次子程序，統一回傳 returncode、stdout 與 stderr，避免 Windows
+      CP950、macOS/Linux UTF-8 locale 與 shell quoting 造成不一致。
+    source: adad_cli/platform_io.py::run_utf8_subprocess
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      argv: array
+      cwd: string_or_null
+    output:
+      process_result: object
+    exceptions: []
+    invariants:
+    - 'deny_calls: [subprocess.Popen, os.chdir]'
+    preferred_pattern: boundary_adapter
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 跨平台 UTF-8 子程序邊界：Windows、macOS 與 Linux 行為一致'
+    checkpoint:
+    - '[ ] CP-1-038 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+  repository_line_ending_policy:
+    type: configuration
+    description: 以版本控制內的 `.gitattributes` 明確規範文字與腳本換行，讓 Windows、macOS、Linux checkout
+      與 commit 的內容一致，避免 CRLF/LF 差異造成架構過期判斷、資產同步或解析結果不一致。
+    source: .gitattributes
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      repository_file_types: array
+    output:
+      gitattributes_policy: file
+    exceptions: []
+    invariants: []
+    preferred_pattern: policy_as_code
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 建立跨平台版本庫換行政策並避免既有檔案被隱性批次改寫'
+    checkpoint:
+    - '[ ] CP-1-042 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+  render_portable_python_hook_command:
+    type: function
+    description: 使用專案 `.venv` 的 Python 直譯器與 hook 腳本路徑，依明確的 `windows` 或 `posix` command
+      family 引用規則產生可攜式 command；不得把此輸入誤解為 `sys.platform` 的 `win32`、`linux` 或 `darwin`，並須正確處理含空白或特殊字元的專案路徑。
+    source: adad_cli/platform_io.py::render_portable_python_hook_command
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - project_venv_python
+    input:
+      python_executable: path
+      script_path: path
+      platform_family: string
+    output:
+      command: string
+    exceptions: []
+    invariants:
+    - 'deny_calls: [subprocess.run, subprocess.Popen, os.system]'
+    preferred_pattern: boundary_adapter
+    verification:
+    - case:
+        input:
+          python_executable: C:\Program Files\Python\python.exe
+          script_path: C:\Project Space\hook.py
+          platform_family: windows
+        expect: '"C:\Program Files\Python\python.exe" "C:\Project Space\hook.py"'
+    - case:
+        input:
+          python_executable: /opt/My Python/bin/python
+          script_path: /work/My Project/hook.py
+          platform_family: posix
+        expect: '''/opt/My Python/bin/python'' ''/work/My Project/hook.py'''
+    - case:
+        input:
+          python_executable: python
+          script_path: hook.py
+          platform_family: win32
+        expect_exception: ValueError
+    decisions: []
+    todo:
+    - '[ ] 移除 Claude PreToolUse hook 的 `python3` 硬編碼並支援含空白路徑'
+    checkpoint:
+    - '[ ] CP-1-043 (planned)'
+    - '[x] CP-3-044 (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - 先以精確字串比對驗證 `platform_family`，不是 `windows` 或 `posix` 時立即拋出 `ValueError`。
+    - '`windows` 使用符合 CreateProcess/CommandLineToArgvW 的 argv 引用規則渲染 Python 與腳本路徑。'
+    - '`posix` 使用 POSIX shell 引用規則分別引用 Python 與腳本路徑，再以單一空白連接。'
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 1
 domains:
   ADAD_Workflow:
     description: ADAD (Architecture-Driven Agentic Development) 的架構與工作流核心管理工具集。

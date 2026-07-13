@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T083025086809Z-check_normalization
+  phase: 2
+  timestamp: '2026-07-13T08:30:25.086809+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: check_normalization
+    task_id: check_normalization@v4@1e831b
+    system_map_version: 4
+    source_hash: 1e831ba2f9491736f958da9568fb2196a32cd1ec45f7863a3e894e5d3f1f2000
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

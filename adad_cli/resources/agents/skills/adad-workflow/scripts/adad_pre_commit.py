@@ -38,8 +38,13 @@ def get_staged_files(diff_filter="ACM"):
     模組的原始碼會完全繞過 RULE-02，因為刪除本身也是一種需要先轉成 dirty 才能做
     的變更。
     """
+    # ponytail: CI 環境下 index 是空的，改跟 base branch 比對
+    diff_target = [os.environ.get("GITHUB_BASE_REF", "HEAD~1"), "HEAD"] if os.environ.get("CI") else ["--cached"]
+    if diff_target[0] != "--cached" and not diff_target[0].startswith("HEAD") and not diff_target[0].startswith("origin/"):
+        diff_target[0] = f"origin/{diff_target[0]}"
+
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", f"--diff-filter={diff_filter}"],
+        ["git", "diff", *diff_target, "--name-only", f"--diff-filter={diff_filter}"],
         capture_output=True, text=True
     )
     if result.returncode != 0:
@@ -222,7 +227,7 @@ def check_invariants_staged(py_files, modules, src_map, map_path):
             if not result.get("success", True):
                 for v in result.get("violations", []):
                     errors.append(
-                        f"[INVARIANT] {f}:{v['line']} — 違反 {v['rule']}，匯入了 {v['imported']}"
+                        f"[INVARIANT] {f}:{v['line']} — 違反 {v['rule']}，詳情：{v.get('detail', '')}"
                     )
         except Exception:
             pass  # ponytail: 單一檔案解析失敗不阻斷其他檢查

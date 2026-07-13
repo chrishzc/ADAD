@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T112444918073Z-ensure_claude_pretooluse_hook
+  phase: 2
+  timestamp: '2026-07-13T11:24:44.918073+00:00'
+  triggered_by: human
+  status: rejected
+  target:
+    node_name: ensure_claude_pretooluse_hook
+    task_id: ensure_claude_pretooluse_hook@v5@9fb43a
+    system_map_version: 5
+    source_hash: 9fb43ae9a361f33d8f4dae9cb3440fad2fe5ec0b76b8d1b7693aa98d7c6dab09
+  decision:
+    action: rejected
+    reviewer: chris
+    comment: 未套用任何修正：未知 os.name、skipped_invalid_json、hooks 保留、mtime 與跨平台 mock 測試皆缺漏

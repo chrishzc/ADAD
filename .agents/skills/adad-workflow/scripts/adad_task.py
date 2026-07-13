@@ -17,6 +17,11 @@ approve / reject（只能由人類在真正的互動終端機執行）:
   明確訊息，不會嘗試用 input() 去等一個可能永遠不會出現的輸入而卡住。
   這是刻意設計成「Agent 沒辦法透過工具呼叫自我核准」的關卡，需要人類
   自己在自己的終端機視窗、或 IDE 內建的終端機（不是聊天視窗）親自執行。
+
+isolate:
+  python adad_task.py isolate <node_name> [artifact_type]
+  建立或清理一個獨立隔離的工作目錄（預設在 .agents/workspaces/<node>），
+  只掛載該階段需要的白名單檔案，防止 Agent 跨邊界修改或讀取未授權的原始碼。
 """
 import sys
 import json
@@ -45,6 +50,21 @@ def cmd_submit(args):
     file_path = args[1] if len(args) > 1 else None
     core = ADADCore()
     res = core.task_submit(node_name, file_path)
+    
+    if res.get("success"):
+        # Task #53: 偵測 Schema 缺口並給出警告
+        import subprocess
+        import os
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        gap_script = os.path.join(script_dir, "detect_schema_gaps.py")
+        gap_res = subprocess.run([sys.executable, gap_script, node_name], capture_output=True, text=True)
+        if gap_res.returncode == 2:
+            try:
+                gap_data = json.loads(gap_res.stdout)
+                res["warnings"] = gap_data.get("gaps", [])
+            except:
+                pass
+                
     print(json.dumps(res, ensure_ascii=False, indent=2))
     sys.exit(0 if res.get("success") else 1)
 
@@ -73,11 +93,25 @@ def cmd_reject(args):
     sys.exit(0 if res.get("success") else 1)
 
 
+def cmd_isolate(args):
+    if len(args) < 1:
+        print(json.dumps({"success": False, "error": "用法: python adad_task.py isolate <node_name> [artifact_type]"}, ensure_ascii=False))
+        sys.exit(1)
+    import subprocess
+    import os
+    node_name = args[0]
+    artifact_type = args[1] if len(args) > 1 else "coding"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    iso_script = os.path.join(script_dir, "prepare_isolation.py")
+    res = subprocess.run([sys.executable, iso_script, node_name, artifact_type])
+    sys.exit(res.returncode)
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("submit", "approve", "reject"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("submit", "approve", "reject", "isolate"):
         print(json.dumps({
             "success": False,
-            "error": "用法: python adad_task.py <submit|approve|reject> <node_name> [...]"
+            "error": "用法: python adad_task.py <submit|approve|reject|isolate> <node_name> [...]"
         }, ensure_ascii=False))
         sys.exit(1)
 
@@ -88,6 +122,8 @@ def main():
         cmd_approve(rest)
     elif sub == "reject":
         cmd_reject(rest)
+    elif sub == "isolate":
+        cmd_isolate(rest)
 
 
 if __name__ == "__main__":

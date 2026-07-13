@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T081639618116Z-read_utf8_text_strict
+  phase: 2
+  timestamp: '2026-07-13T08:16:39.618116+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: read_utf8_text_strict
+    task_id: read_utf8_text_strict@v3@945835
+    system_map_version: 3
+    source_hash: 9458354688cccdb7c0a32f3ce3f3b6e4ff90a0f9523f4fb04121728fafc3118c
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

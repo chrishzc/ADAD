@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T110750250818Z-render_portable_python_hook_command
+  phase: 2
+  timestamp: '2026-07-13T11:07:50.250818+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: render_portable_python_hook_command
+    task_id: render_portable_python_hook_command@v5@4b9ab1
+    system_map_version: 5
+    source_hash: 4b9ab1028a4096a0d1158e971a86f834feddd275549cc27b75dad4cc38399de0
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

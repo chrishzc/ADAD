@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T083710845269Z-write_utf8_text_atomic
+  phase: 2
+  timestamp: '2026-07-13T08:37:10.845269+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: write_utf8_text_atomic
+    task_id: write_utf8_text_atomic@v4@e3e696
+    system_map_version: 4
+    source_hash: e3e6968387c0bf1156da4b7cd063f130dc370836c7ae4cd3928721386f01da6f
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''
