@@ -13,6 +13,8 @@ import math
 import hashlib
 import datetime
 import copy
+import subprocess
+import tempfile
 from collections import Counter
 from task_complexity import evaluate_task_complexity
 
@@ -384,25 +386,39 @@ def parse_markdown(md_content):
                         "type": exc_match.group(1),
                         "condition": exc_match.group(2).strip()
                     })
-                elif current_section == "verification" and sub_content.lower().startswith("case:"):
-                    case_json_str = sub_content.split(":", 1)[1].strip()
+                elif current_section == "verification" and any(
+                    sub_content.lower().startswith(f"{kind}:")
+                    for kind in ("case", "command", "integration_case")
+                ):
+                    verification_kind, verification_json = sub_content.split(":", 1)
+                    verification_kind = verification_kind.strip().lower()
                     try:
-                        case_obj = json.loads(case_json_str)
+                        verification_obj = json.loads(verification_json.strip())
                     except Exception as e:
                         raise ValueError(
-                            f"編譯失敗：模組 '{current_module}' 的 Verification case 不是合法 JSON：\n"
+                            f"編譯失敗：模組 '{current_module}' 的 Verification "
+                            f"{verification_kind} 不是合法 JSON：\n"
                             f"  {sub_content}\n"
                             f"解析錯誤：{e}\n"
-                            f"case 語法必須是嚴格 JSON（雙引號、不可有多餘逗號），"
-                            f"例如：case: {{\"input\": {{\"x\": 1}}, \"expect\": 2}}"
+                            "Verification 結構化語法必須是嚴格 JSON（雙引號、不可有多餘逗號）。"
                         )
-                    if (not isinstance(case_obj, dict) or "input" not in case_obj
-                            or ("expect" not in case_obj and "expect_exception" not in case_obj)):
+                    if not isinstance(verification_obj, dict):
+                        raise ValueError(
+                            f"編譯失敗：模組 '{current_module}' 的 Verification "
+                            f"{verification_kind} 必須是 JSON object：{sub_content}"
+                        )
+                    if verification_kind == "case" and (
+                        "input" not in verification_obj
+                        or ("expect" not in verification_obj
+                            and "expect_exception" not in verification_obj)
+                    ):
                         raise ValueError(
                             f"編譯失敗：模組 '{current_module}' 的 Verification case 缺少必要欄位 "
                             f"'input' 與 'expect' 或 'expect_exception'：{sub_content}"
                         )
-                    data["modules"][current_module][current_section].append({"case": case_obj})
+                    data["modules"][current_module][current_section].append({
+                        verification_kind: verification_obj
+                    })
                 else:
                     data["modules"][current_module][current_section].append(sub_content)
             continue
@@ -2113,16 +2129,154 @@ class ADADCore:
             raise AttributeError(f"檔案 {file_path} 找不到函式 `{func_name}`")
         return getattr(module, func_name)
 
+    @staticmethod
+    def _safe_verification_path(base_dir, relative_path, label):
+        """解析 verification fixture 路徑，禁止絕對路徑與目錄穿越。"""
+        if not isinstance(relative_path, str) or not relative_path.strip():
+            raise ValueError(f"{label} 必須是非空白相對路徑。")
+        portable = relative_path.replace("\\", "/")
+        if (
+            os.path.isabs(relative_path)
+            or re.match(r"^[A-Za-z]:", portable)
+            or portable.startswith("//")
+            or ".." in portable.split("/")
+        ):
+            raise ValueError(f"{label} 不得使用絕對路徑或目錄穿越：{relative_path}")
+        base_abs = os.path.realpath(base_dir)
+        resolved = os.path.realpath(os.path.join(base_abs, *portable.split("/")))
+        try:
+            inside_base = os.path.commonpath([base_abs, resolved]) == base_abs
+        except ValueError:
+            inside_base = False
+        if not inside_base:
+            raise ValueError(f"{label} 超出允許目錄：{relative_path}")
+        return resolved
+
+    @staticmethod
+    def _expand_verification_argv(argv, placeholders):
+        if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv):
+            raise ValueError("command.argv 必須是非空字串陣列。")
+        expanded = []
+        for arg in argv:
+            for name, value in placeholders.items():
+                arg = arg.replace("{" + name + "}", value)
+            expanded.append(arg)
+        return expanded
+
+    def _run_verification_command(self, command, workspace, placeholders, step_index):
+        result = {"step_index": step_index, "passed": False}
+        if not isinstance(command, dict):
+            result["error"] = "command 必須是 object。"
+            return result
+        expected_exit = command.get("expect_exit", 0)
+        timeout = command.get("timeout", 30)
+        result["expected_exit"] = expected_exit
+        try:
+            if expected_exit != "nonzero" and not isinstance(expected_exit, int):
+                raise ValueError("expect_exit 必須是整數或 'nonzero'。")
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 300:
+                raise ValueError("timeout 必須大於 0 且不超過 300 秒。")
+            argv = self._expand_verification_argv(command.get("argv"), placeholders)
+            result["argv"] = argv
+            completed = subprocess.run(
+                argv,
+                cwd=workspace,
+                shell=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="strict",
+                timeout=timeout,
+            )
+            stdout = completed.stdout[-4000:]
+            stderr = completed.stderr[-4000:]
+            exit_ok = completed.returncode != 0 if expected_exit == "nonzero" else completed.returncode == expected_exit
+            stdout_expected = command.get("expect_stdout_contains")
+            stderr_expected = command.get("expect_stderr_contains")
+            stdout_ok = stdout_expected is None or stdout_expected in completed.stdout
+            stderr_ok = stderr_expected is None or stderr_expected in completed.stderr
+            result.update({
+                "returncode": completed.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "passed": exit_ok and stdout_ok and stderr_ok,
+            })
+            if not result["passed"]:
+                result["error"] = "command 結果不符合預期。"
+        except subprocess.TimeoutExpired as e:
+            result["error"] = f"command 執行逾時（{timeout} 秒）。"
+            result["stdout"] = (e.stdout or "")[-4000:] if isinstance(e.stdout, str) else ""
+            result["stderr"] = (e.stderr or "")[-4000:] if isinstance(e.stderr, str) else ""
+        except Exception as e:
+            result["error"] = f"command 執行失敗：{e}"
+        return result
+
+    def _run_integration_verification(self, integration, real_file_path, integration_index):
+        integration_result = {
+            "integration_index": integration_index,
+            "name": integration.get("name") if isinstance(integration, dict) else None,
+            "passed": False,
+            "step_results": [],
+        }
+        if not isinstance(integration, dict):
+            integration_result["error"] = "integration_case 必須是 object。"
+            return integration_result
+        steps = integration.get("steps")
+        if not isinstance(steps, list) or not steps:
+            integration_result["error"] = "integration_case.steps 必須是非空陣列。"
+            return integration_result
+
+        project_root = os.path.realpath(os.path.dirname(os.path.abspath(self.map_path)))
+        source_path = os.path.realpath(os.path.abspath(real_file_path))
+        try:
+            with tempfile.TemporaryDirectory(prefix="adad_verify_") as workspace:
+                for fixture in integration.get("fixtures", []):
+                    if not isinstance(fixture, dict):
+                        raise ValueError("fixture 必須是 object。")
+                    fixture_source = self._safe_verification_path(
+                        project_root, fixture.get("source"), "fixture.source"
+                    )
+                    fixture_target = self._safe_verification_path(
+                        workspace, fixture.get("target"), "fixture.target"
+                    )
+                    if not os.path.exists(fixture_source):
+                        raise ValueError(f"fixture.source 不存在：{fixture.get('source')}")
+                    os.makedirs(os.path.dirname(fixture_target), exist_ok=True)
+                    if os.path.isdir(fixture_source):
+                        shutil.copytree(fixture_source, fixture_target)
+                    else:
+                        shutil.copy2(fixture_source, fixture_target)
+
+                placeholders = {
+                    "python": sys.executable,
+                    "source": source_path,
+                    "project": project_root,
+                    "workspace": workspace,
+                }
+                for step_index, step in enumerate(steps):
+                    step_result = self._run_verification_command(
+                        step, workspace, placeholders, step_index
+                    )
+                    integration_result["step_results"].append(step_result)
+                    if not step_result["passed"]:
+                        integration_result["error"] = f"第 {step_index + 1} 個 command 未通過。"
+                        return integration_result
+                integration_result["passed"] = True
+        except Exception as e:
+            integration_result["error"] = f"integration_case 執行失敗：{e}"
+        return integration_result
+
     def verify_implementation(self, node_name, file_path=None):
         """
         驗證指定節點的實作代碼是否符合 Verification 約束。
 
-        支援兩種規則，可以在同一個節點混用：
+        支援四種規則，可以在同一個節點混用：
           - `must_have_assertions`：原有的靜態 AST 掃描，檢查檔案裡至少有一個
             assert 語句。只證明「有自檢」，不證明「自檢的內容是對的」。
-          - `case`：新增的動態執行驗證。實際 import 該節點對應的函式，用
+          - `case`：動態執行驗證。實際 import 該節點對應的函式，用
             `case.input` 當作 kwargs 呼叫它，比對回傳值是否等於 `case.expect`。
-            這才是真正驗證「邏輯對不對」，不只是「有沒有寫測試」。
+          - `command`：在隔離暫存目錄執行單一步驟 CLI 驗證。
+          - `integration_case`：複製 fixtures 後依序執行多個 CLI 步驟。
         """
         node = self.get_node(node_name)
         if not node:
@@ -2214,17 +2368,55 @@ class ADADCore:
 
         all_cases_passed = all(c["passed"] for c in case_results)
 
-        if static_error or not all_cases_passed:
-            return {
-                "success": False,
-                "error": static_error or f"{sum(1 for c in case_results if not c['passed'])} / "
-                                         f"{len(case_results)} 個 Verification case 未通過，詳見 case_results。",
-                "case_results": case_results
+        # --- CLI 規則：command 是單一步驟 integration_case 的簡寫 ---
+        commands = [v["command"] for v in verification if isinstance(v, dict) and "command" in v]
+        command_results = []
+        for idx, command in enumerate(commands):
+            wrapped = self._run_integration_verification(
+                {"name": f"command_{idx}", "steps": [command]}, real_file_path, idx
+            )
+            step_result = wrapped["step_results"][0] if wrapped["step_results"] else {
+                "step_index": 0, "passed": False, "error": wrapped.get("error")
             }
+            command_results.append(step_result)
+
+        integrations = [
+            v["integration_case"]
+            for v in verification
+            if isinstance(v, dict) and "integration_case" in v
+        ]
+        integration_results = [
+            self._run_integration_verification(integration, real_file_path, idx)
+            for idx, integration in enumerate(integrations)
+        ]
+        all_commands_passed = all(item["passed"] for item in command_results)
+        all_integrations_passed = all(item["passed"] for item in integration_results)
+
+        if static_error or not all_cases_passed or not all_commands_passed or not all_integrations_passed:
+            failed_count = (
+                sum(not item["passed"] for item in case_results)
+                + sum(not item["passed"] for item in command_results)
+                + sum(not item["passed"] for item in integration_results)
+            )
+            result = {
+                "success": False,
+                "error": static_error or f"{failed_count} 個 Verification 項目未通過，詳見結果欄位。",
+            }
+            if case_results:
+                result["case_results"] = case_results
+            if command_results:
+                result["command_results"] = command_results
+            if integration_results:
+                result["integration_results"] = integration_results
+            return result
 
         result = {"success": True, "message": "驗證條件 (Verification) 檢查通過。"}
         if case_results:
             result["case_results"] = case_results
+        if command_results:
+            result["command_results"] = command_results
+        if integration_results:
+            result["integration_results"] = integration_results
         return result
 
 

@@ -184,6 +184,33 @@ def test_compile_map_parses_exceptions_with_verification(project_dir):
     assert exc[0]["condition"] == "輸入無效"
 
 
+def test_compile_map_parses_command_and_integration_verification(project_dir):
+    md = VALID_MD.replace(
+        "- Verification: []",
+        "- Verification:\n"
+        "  - command: {\"argv\": [\"{python}\", \"{source}\", \"--check\"], \"expect_exit\": \"nonzero\"}\n"
+        "  - integration_case: {\"name\": \"migration\", \"fixtures\": [{\"source\": \"fixture.db\", \"target\": \"db/test.db\"}], \"steps\": [{\"argv\": [\"{python}\", \"{source}\", \"--apply\", \"--db\", \"{workspace}/db/test.db\"]}]}"
+    )
+    _write_md(project_dir, md)
+    code, data, out, err = run_script("compile_map.py", [], cwd=project_dir)
+    assert code == 0, err
+    verification = read_yaml(project_dir)["modules"]["sample_tool"]["verification"]
+    assert verification[0]["command"]["expect_exit"] == "nonzero"
+    assert verification[1]["integration_case"]["steps"][0]["argv"][1] == "{source}"
+
+
+def test_compile_map_rejects_invalid_command_json(project_dir):
+    md = VALID_MD.replace(
+        "- Verification: []",
+        "- Verification:\n  - command: {argv: [\"{python}\"]}"
+    )
+    _write_md(project_dir, md)
+    code, data, out, err = run_script("compile_map.py", [], cwd=project_dir)
+    assert code == 1
+    assert data["success"] is False
+    assert "command 不是合法 JSON" in data["error"]
+
+
 def test_compile_map_fails_when_exception_not_verified(project_dir):
     md = VALID_MD.replace(
         "- Invariants: []",
