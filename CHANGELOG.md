@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+## 1.4.1 — 2026-07-14
+
+### Fixed
+
+- `adad upgrade` 現會備份並同步根目錄 `system_map.schema.json` 與 `task_schema.json`，避免 Parser 已支援新 Verification 類型、正式 Schema 卻仍停留舊版。
+
 ## 1.4.0 — 2026-07-14
 
 ### Added

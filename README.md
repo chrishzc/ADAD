@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2DD4BF">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.4.0-38BDF8">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.4.1-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
