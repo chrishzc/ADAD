@@ -335,30 +335,23 @@
 ##### Module: adad_pre_commit
 - Type: tool
 - Observability: not_required
-- Description: Git pre-commit／CI guardrail，將 AGENTS.md 的軟規則轉為機械硬閘門：本機讀取 staged diff；CI pull request 比對明確 base branch；CI push 在 GITHUB_BASE_REF 空白時安全回退至 HEAD~1，禁止組成無效的 origin/ revision。
+- Description: Git pre-commit hook，將 AGENTS.md 的軟規則轉為 commit 階段的機械硬閘門：Staleness 阻斷、狀態門禁、原子範圍警告、Invariants/Verification 校驗、跨 Domain 依賴邊界、未登記函式掃描、懸空依賴、模組落點校驗。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
 - Preferred Pattern: none
-- Decisions:
-  - GITHUB_BASE_REF 空字串等同未提供；push 事件使用 HEAD~1，pull request 才使用 origin/<base>。
+- Decisions: []
 - Invariants: []
 - Verification: []
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
-  - git_change_set: file（本機為 staged diff；CI 為 base revision 到 HEAD）
-  - ci_environment: object（CI、GITHUB_BASE_REF；空白 base 必須視為未提供）
+  - git_staged_files: file（讀取 git staged diff，無 CLI 參數）
 - Output:
   - errors: array
   - warnings: array
-- Algorithm:
-  - 非 CI 環境使用 git diff --cached。
-  - CI 且 GITHUB_BASE_REF 為非空白值時，使用 origin/<base> 到 HEAD。
-  - CI 且 GITHUB_BASE_REF 缺少或為空白值時，使用 HEAD~1 到 HEAD。
 - TODO:
   - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
 - Checkpoint:
   - [ ] CP-1-011 (planned)
-  - [x] CP-3-003 (validated：CI push 空 base fallback)
 
 ##### Module: adad_pretooluse_gate
 - Type: tool
@@ -469,10 +462,15 @@
 ##### Module: verify_implementation
 - Type: tool
 - Observability: not_required
-- Description: 校驗指定節點的實作是否符合其宣告的 Verification 條件（例如 must_have_assertions、結構化 case）。
+- Description: 校驗指定節點的實作是否符合多型 Verification 契約；case 驗證可 import 函式，command 驗證單一 CLI，integration_case 在隔離暫存工作區依序執行 fixture 與多步命令。
 - Source: adad_source/agents/skills/adad-workflow/scripts/verify_implementation.py
 - Preferred Pattern: none
-- Decisions: []
+- Complexity: high
+- Decisions:
+  - command 是單一步驟 integration_case 的語法糖，兩者共用相同 subprocess runner。
+  - 命令一律使用 argv 陣列與 shell=False；禁止 shell 字串。
+  - integration_case 一律在暫存工作區複製 fixture，禁止直接修改來源資料。
+  - 資料庫欄位與資料快照等領域斷言由專案 checker command 負責，ADAD 核心只判斷 exit code 與輸出契約。
 - Invariants: []
 - Verification: []
 - Observability: not_required
@@ -482,10 +480,18 @@
   - file_path: string（選填）
 - Output:
   - success: boolean
-  - result: object
+  - result: object（包含 case_results、command_results 與 integration_results）
+- Algorithm:
+  - 保留 must_have_assertions 與 case 的既有行為及回傳格式。
+  - 將 command 正規化為單一步驟 integration_case。
+  - 建立暫存工作區並將 fixture 複製到指定相對路徑；所有來源與目的路徑必須限制於專案根目錄或暫存工作區。
+  - 逐步以 shell=False 執行 argv，套用 {python}、{source}、{project}、{workspace} placeholder、timeout 與預期 exit code。
+  - 任一步驟失敗即停止該 integration_case，截斷回報 stdout/stderr，並在 finally 清理暫存工作區。
 - TODO:
   - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
 - Checkpoint:
   - [ ] CP-1-016 (planned)
+  - [x] CP-3-004 (validated：command／integration_case 多型驗證)
 
 <!-- include docs/domains/adad_roadmap.md -->
+ 

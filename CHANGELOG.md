@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+## 1.4.2 — 2026-07-14
+
+### Fixed
+
+- Verification command 支援明確 `cwd` 與跨平台 `{project_python}`；需要專案檔案的 CLI 可選擇專案根目錄執行，migration 仍可使用隔離 workspace fixtures。
+- 將 `adad_cli/core.py` 的完整 top-level 函式集合納入架構 Source 綁定，恢復 RULE-04 對 init、upgrade、hook 與發行流程的追蹤。
+
 ## 1.4.1 — 2026-07-14
 
 ### Fixed

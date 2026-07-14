@@ -78,6 +78,10 @@
           "minItems": 1,
           "items": { "type": "string" }
         },
+        "cwd": {
+          "enum": ["workspace", "project"],
+          "default": "workspace"
+        },
         "expect_exit": {
           "oneOf": [
             { "type": "integer" },

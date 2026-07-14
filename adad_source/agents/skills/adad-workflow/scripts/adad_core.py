@@ -346,11 +346,11 @@ def parse_markdown(md_content):
                 if fd_match and fd_match.group(1).strip().lower() == "description":
                     data["domains"][current_domain]["subsystems"][current_subsystem]["description"] = fd_match.group(2).strip()
             continue
-
+            
         indent_match = re.match(r'^(\s+)-\s*(.*)', line)
         if indent_match and current_section:
             sub_content = indent_match.group(2).strip()
-
+            
             if current_section == "input" or current_section == "output" or current_section == "context_priority":
                 kv_match = re.match(r'^([\w_]+):\s*(.*)', sub_content)
                 if kv_match:
@@ -422,7 +422,7 @@ def parse_markdown(md_content):
                 else:
                     data["modules"][current_module][current_section].append(sub_content)
             continue
-
+            
         lh_match = list_header_regex.match(line_strip)
         if lh_match:
             current_section = lh_match.group(1).strip().lower().replace(" ", "_")
@@ -431,12 +431,12 @@ def parse_markdown(md_content):
             elif current_section == "idempotency":
                 pass # Will be handled by field_regex if inline, or indented kv if needed. Let's just do inline.
             continue
-
+            
         f_match = field_regex.match(line_strip)
         if f_match:
             key = f_match.group(1).strip().lower().replace(" ", "_")
             val = f_match.group(2).strip()
-
+            
             if key == "type":
                 data["modules"][current_module]["type"] = val
             elif key == "description":
@@ -483,7 +483,7 @@ def parse_markdown(md_content):
 
             current_section = None
             continue
-
+            
     # ponytail: 檢查所有宣告的例外是否有對應的 test case
     for mod_name, mod_info in data.get("modules", {}).items():
         declared_exceptions = [e["type"] for e in mod_info.get("exceptions", [])]
@@ -494,7 +494,7 @@ def parse_markdown(md_content):
                     expect_exc = v["case"].get("expect_exception")
                     if expect_exc:
                         verified_exceptions.add(expect_exc)
-
+            
             for exc in declared_exceptions:
                 if exc not in verified_exceptions:
                     raise ValueError(
@@ -642,24 +642,24 @@ class ADADCore:
     def check_ir_validity(self):
         md_path = "system_map.md"
         yaml_path = self.map_path
-
+        
         if os.path.exists(md_path):
             if not os.path.exists(yaml_path):
                 return {
                     "valid": False,
                     "error": f"找不到架構 IR 檔案 ({yaml_path})。請先執行編譯指令：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
-
+            
             md_mtime = get_max_mtime(md_path)
             yaml_mtime = os.path.getmtime(yaml_path)
-
+            
             # 給予 1 秒的緩衝時間防範不同檔案系統時間戳記微幅飄移
             if md_mtime > yaml_mtime + 1:
                 return {
                     "valid": False,
                     "error": f"架構源檔案 ({md_path} 或其包含的子檔案) 已更新，但 IR ({yaml_path}) 已過期。請重新執行編譯：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
-
+                
         return {"valid": True}
 
 
@@ -693,14 +693,14 @@ class ADADCore:
         """從 docs/adr/ 中提取設計決策摘要，僅抓取關鍵標題、狀態與決策內容以防範 Context 膨脹"""
         adr_dir = os.path.join("docs", "adr")
         file_path = os.path.join(adr_dir, f"{adr_id}.md")
-
+        
         # 增加相對路徑的容錯
         if not os.path.exists(file_path):
             file_path = os.path.join("adr", f"{adr_id}.md")
-
+            
         if not os.path.exists(file_path):
             return {"adr_id": adr_id, "error": "決策文件不存在"}
-
+            
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -762,13 +762,13 @@ class ADADCore:
         """從 docs/patterns/ 中提取設計模式規範摘要，僅抓取關鍵標題、說明與程式碼規範"""
         patterns_dir = os.path.join("docs", "patterns")
         file_path = os.path.join(patterns_dir, f"{pattern_name}.md")
-
+        
         if not os.path.exists(file_path):
             file_path = os.path.join("patterns", f"{pattern_name}.md")
-
+            
         if not os.path.exists(file_path):
             return {"pattern_name": pattern_name, "error": "模式說明文件不存在"}
-
+            
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -867,7 +867,7 @@ class ADADCore:
                 decisions_summary.append(f"{adr_id}: 決策檔案載入錯誤 - {adr_info['error']}")
             else:
                 decisions_summary.append(f"{adr_info['title']} (狀態: {adr_info['status']}) - 決策: {adr_info['decision']}")
-
+        
         if decisions_summary:
             context["target_node"]["decisions_summary"] = decisions_summary
 
@@ -988,7 +988,7 @@ class ADADCore:
                 "reason": f"觸發 Rule of Two：功能特徵與現有模組高度重複，相似模組已出現 {len(matches)} 次。",
                 "duplicates": [f"{name} ({reason})" for name, reason in matches]
             }
-
+            
         return {"passed": True, "duplicates": []}
 
     def check_domain_boundary(self):
@@ -1232,7 +1232,7 @@ class ADADCore:
                     modules[neighbor]["state"] = "dirty"
                     dirty_list.append(neighbor)
                     queue.append(neighbor)
-
+                
         # 自身變更也轉為 dirty (若原本是 deployed 狀態)
         modules[target_node]["state"] = "dirty"
         dirty_list.insert(0, target_node)
@@ -1892,7 +1892,7 @@ class ADADCore:
             match_imports = re.search(r"deny_imports:\s*\[(.*?)\]", inv)
             if match_imports:
                 deny_imports.extend([p.strip() for p in match_imports.group(1).split(",") if p.strip()])
-
+                
             match_calls = re.search(r"deny_calls:\s*\[(.*?)\]", inv)
             if match_calls:
                 deny_calls.extend([c.strip() for c in match_calls.group(1).split(",") if c.strip()])
@@ -1903,7 +1903,7 @@ class ADADCore:
 
             if "deny_env_read" in inv:
                 deny_env_read = True
-
+                
             if "deny_sys_exit" in inv:
                 deny_sys_exit = True
                 # 同時將常見的中斷呼叫加入 deny_calls
@@ -1918,7 +1918,7 @@ class ADADCore:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 tree = ast.parse(f.read(), filename=file_path)
-
+            
             target_node_ast = tree
             if node.get("type") in ["function", "class"]:
                 target_name = node_name
@@ -1999,7 +1999,7 @@ class ADADCore:
                 elif isinstance(node_visitor.type, ast.Name):
                     if node_visitor.type.id in ("Exception", "BaseException"):
                         is_bare = True
-
+                
                 if is_bare:
                     if len(node_visitor.body) == 1:
                         stmt = node_visitor.body[0]
@@ -2007,7 +2007,7 @@ class ADADCore:
                             self.bare_excepts.append(node_visitor.lineno)
                         elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis:
                             self.bare_excepts.append(node_visitor.lineno)
-
+                
                 self.generic_visit(node_visitor)
 
         visitor = InvariantVisitor()
@@ -2163,6 +2163,17 @@ class ADADCore:
             expanded.append(arg)
         return expanded
 
+    @staticmethod
+    def _resolve_project_python(project_root):
+        """優先使用專案 .venv 的跨平台 Python，找不到時沿用目前直譯器。"""
+        relative_path = (
+            os.path.join(".venv", "Scripts", "python.exe")
+            if os.name == "nt"
+            else os.path.join(".venv", "bin", "python")
+        )
+        project_python = os.path.realpath(os.path.join(project_root, relative_path))
+        return project_python if os.path.isfile(project_python) else sys.executable
+
     def _run_verification_command(self, command, workspace, placeholders, step_index):
         result = {"step_index": step_index, "passed": False}
         if not isinstance(command, dict):
@@ -2170,17 +2181,22 @@ class ADADCore:
             return result
         expected_exit = command.get("expect_exit", 0)
         timeout = command.get("timeout", 30)
+        cwd_name = command.get("cwd", "workspace")
         result["expected_exit"] = expected_exit
         try:
             if expected_exit != "nonzero" and not isinstance(expected_exit, int):
                 raise ValueError("expect_exit 必須是整數或 'nonzero'。")
             if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 300:
                 raise ValueError("timeout 必須大於 0 且不超過 300 秒。")
+            if cwd_name not in ("workspace", "project"):
+                raise ValueError("command.cwd 必須是 'workspace' 或 'project'。")
             argv = self._expand_verification_argv(command.get("argv"), placeholders)
+            execution_cwd = workspace if cwd_name == "workspace" else placeholders["project"]
             result["argv"] = argv
+            result["cwd"] = execution_cwd
             completed = subprocess.run(
                 argv,
-                cwd=workspace,
+                cwd=execution_cwd,
                 shell=False,
                 capture_output=True,
                 text=True,
@@ -2249,6 +2265,7 @@ class ADADCore:
 
                 placeholders = {
                     "python": sys.executable,
+                    "project_python": self._resolve_project_python(project_root),
                     "source": source_path,
                     "project": project_root,
                     "workspace": workspace,
@@ -2424,7 +2441,7 @@ class ADADCore:
 def run_self_test():
     print("[ADAD Test] 啟動 ADAD 核心引擎自我測試...")
     test_file = "test_system_map.yaml"
-
+    
     # 建立測試資料
     test_data = {
         "version": 1,
@@ -2459,13 +2476,13 @@ def run_self_test():
             }
         }
     }
-
+    
     with open(test_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(test_data, f)
-
+        
     try:
         core = ADADCore(test_file, check_validity=False)
-
+        
         # 1. 測試讀取上下文
         ctx = core.read_context("user_service")
         assert "db_connector" in ctx["dependency_interfaces"]
@@ -2551,7 +2568,7 @@ def run_self_test():
         test_code_content = "import db_connector\nimport sys\n"
         with open(test_code_file, "w", encoding="utf-8") as f:
             f.write(test_code_content)
-
+        
         try:
             core.get_node("calculate_jp_tax")["invariants"] = ["deny_imports: [db_connector]"]
             res = core.check_invariants("calculate_jp_tax", test_code_file)
@@ -2562,13 +2579,13 @@ def run_self_test():
         finally:
             if os.path.exists(test_code_file):
                 os.remove(test_code_file)
-
+        
         # 6. 測試 ADR 設計決策提取與智慧裁剪
         test_adr_file = os.path.join("docs", "adr", "ADR-TEST-999.md")
         os.makedirs(os.path.dirname(test_adr_file), exist_ok=True)
-
+        
         test_adr_content = """# ADR-TEST-999: 測試採用 Redis 進行快取
-
+        
 ## 狀態
 Approved
 
@@ -2584,7 +2601,7 @@ Approved
 """
         with open(test_adr_file, "w", encoding="utf-8") as f:
             f.write(test_adr_content)
-
+            
         try:
             core.get_node("calculate_jp_tax")["decisions"] = ["ADR-TEST-999"]
             ctx = core.read_context("calculate_jp_tax")
@@ -2602,7 +2619,7 @@ Approved
         # 7. 測試模式載入與斷言檢查 (Verification)
         test_pattern_file = os.path.join("docs", "patterns", "test_pattern.md")
         os.makedirs(os.path.dirname(test_pattern_file), exist_ok=True)
-
+        
         test_pattern_content = """# Test Pattern 模式規範
 
 ## 說明
@@ -2614,7 +2631,7 @@ Approved
 """
         with open(test_pattern_file, "w", encoding="utf-8") as f:
             f.write(test_pattern_content)
-
+            
         test_impl_file = "test_impl_file.py"
         try:
             # 7.1 驗證模式載入與裁剪
@@ -2626,22 +2643,22 @@ Approved
             assert "說明: 這是一個用來自我測試的模式說明。" in pat_summary
             assert "規範: - 第一條規範：必須要寫得很好。 - 第二條規範：一定要遵守。" in pat_summary
             print("  - 測試 7.1: 設計模式外部化與 Context 智慧載入成功")
-
+            
             # 7.2 驗證無斷言的阻斷
             core.get_node("calculate_jp_tax")["verification"] = ["must_have_assertions"]
-
+            
             with open(test_impl_file, "w", encoding="utf-8") as f:
                 f.write("def func():\n    return 42\n")
-
+            
             res_fail = core.verify_implementation("calculate_jp_tax", test_impl_file)
             assert res_fail["success"] is False
             assert "必須包含至少一個 assert" in res_fail["error"]
             print("  - 測試 7.2: Verification 無斷言實作自動阻斷成功")
-
+            
             # 7.3 驗證有斷言的通過
             with open(test_impl_file, "w", encoding="utf-8") as f:
                 f.write("def func():\n    assert True\n    return 42\n")
-
+                
             res_pass = core.verify_implementation("calculate_jp_tax", test_impl_file)
             assert res_pass["success"] is True
             print("  - 測試 7.3: Verification 有斷言實作順利通過成功")

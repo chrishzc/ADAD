@@ -101,6 +101,26 @@ def test_verify_implementation_command_accepts_expected_nonzero(project_dir, bas
     assert data["command_results"][0]["returncode"] == 3
 
 
+def test_verify_implementation_command_can_opt_into_project_cwd(project_dir, base_modules):
+    src = project_dir / "read_schema.py"
+    src.write_text(
+        "from pathlib import Path\nraise SystemExit(0 if Path('db/schema.sql').read_text(encoding='utf-8') == 'ok' else 1)\n",
+        encoding="utf-8",
+    )
+    schema = project_dir / "db" / "schema.sql"
+    schema.parent.mkdir()
+    schema.write_text("ok", encoding="utf-8")
+    base_modules["modules"]["sample_tool"]["source"] = "read_schema.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{project_python}", "{source}"], "cwd": "project"}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
+    assert code == 0, err
+    assert data["command_results"][0]["cwd"] == str(project_dir)
+
+
 def test_verify_implementation_migration_integration_isolated_and_idempotent(
     project_dir, base_modules
 ):

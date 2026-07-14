@@ -65,3 +65,29 @@ def test_validate_schema_missing_yaml_file(project_dir):
     )
     assert code == 1
     assert data["success"] is False
+
+
+def test_validate_schema_accepts_verification_command_cwd(project_dir, base_modules):
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{project_python}", "{source}"], "cwd": "project"}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script(
+        "validate_schema.py", ["system_map.yaml", SCHEMA_PATH], cwd=project_dir
+    )
+    assert code == 0, err
+    assert data["success"] is True
+
+
+def test_validate_schema_rejects_unknown_verification_command_cwd(project_dir, base_modules):
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{python}", "{source}"], "cwd": "somewhere"}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script(
+        "validate_schema.py", ["system_map.yaml", SCHEMA_PATH], cwd=project_dir
+    )
+    assert code == 1
+    assert data["success"] is False

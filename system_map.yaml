@@ -265,6 +265,7 @@ modules:
     - ADADCore._advance_module_to_validated
     - ADADCore._bigrams
     - ADADCore._commit_checkpoint_decision
+    - ADADCore._expand_verification_argv
     - ADADCore._extract_adr_summary
     - ADADCore._extract_pattern_summary
     - ADADCore._file_hash
@@ -273,8 +274,12 @@ modules:
     - ADADCore._node_source_hash
     - ADADCore._read_source_lock
     - ADADCore._release_source_lock
+    - ADADCore._resolve_project_python
     - ADADCore._resolve_verify_target_func
     - ADADCore._rollback_metadata
+    - ADADCore._run_integration_verification
+    - ADADCore._run_verification_command
+    - ADADCore._safe_verification_path
     - ADADCore._save_task
     - ADADCore._source_lock_path
     - ADADCore._source_path_for_node
@@ -595,9 +600,8 @@ modules:
     fan_in_snapshot: 0
   adad_pre_commit:
     type: tool
-    description: Git pre-commit／CI guardrail，將 AGENTS.md 的軟規則轉為機械硬閘門：本機讀取 staged diff；CI
-      pull request 比對明確 base branch；CI push 在 GITHUB_BASE_REF 空白時安全回退至 HEAD~1，禁止組成無效的
-      origin/ revision。
+    description: Git pre-commit hook，將 AGENTS.md 的軟規則轉為 commit 階段的機械硬閘門：Staleness
+      阻斷、狀態門禁、原子範圍警告、Invariants/Verification 校驗、跨 Domain 依賴邊界、未登記函式掃描、懸空依賴、模組落點校驗。
     source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
     domain: ADAD_Workflow
     subsystem: Enforcement_Gates
@@ -605,8 +609,7 @@ modules:
     dependencies:
     - adad_core
     input:
-      git_change_set: file（本機為 staged diff；CI 為 base revision 到 HEAD）
-      ci_environment: object（CI、GITHUB_BASE_REF；空白 base 必須視為未提供）
+      git_staged_files: file（讀取 git staged diff，無 CLI 參數）
     output:
       errors: array
       warnings: array
@@ -619,15 +622,11 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-011 (planned)'
-    - '[x] CP-3-003 (validated：CI push 空 base fallback)'
     observability:
       mode: not_required
       signals: []
     complexity: low
-    algorithm:
-    - 非 CI 環境使用 git diff --cached。
-    - CI 且 GITHUB_BASE_REF 為非空白值時，使用 origin/<base> 到 HEAD。
-    - CI 且 GITHUB_BASE_REF 缺少或為空白值時，使用 HEAD~1 到 HEAD。
+    algorithm: []
     idempotency:
       level: unknown
       side_effects: []
@@ -635,7 +634,7 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: dirty
+    state: planned
     fan_in_snapshot: 1
     known_symbols:
     - build_source_to_module_map
@@ -866,7 +865,8 @@ modules:
     - main
   verify_implementation:
     type: tool
-    description: 校驗指定節點的實作是否符合其宣告的 Verification 條件（例如 must_have_assertions、結構化 case）。
+    description: 校驗指定節點的實作是否符合多型 Verification 契約；case 驗證可 import 函式，command 驗證單一 CLI，integration_case
+      在隔離暫存工作區依序執行 fixture 與多步命令。
     source: adad_source/agents/skills/adad-workflow/scripts/verify_implementation.py
     domain: ADAD_Workflow
     subsystem: Enforcement_Gates
@@ -878,7 +878,7 @@ modules:
       file_path: string（選填）
     output:
       success: boolean
-      result: object
+      result: object（包含 case_results、command_results 與 integration_results）
     exceptions: []
     invariants: []
     preferred_pattern: none
@@ -888,11 +888,18 @@ modules:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
     checkpoint:
     - '[ ] CP-1-016 (planned)'
+    - '[x] CP-3-004 (validated：command／integration_case 多型驗證)'
     observability:
       mode: not_required
       signals: []
-    complexity: low
-    algorithm: []
+    complexity: high
+    algorithm:
+    - 保留 must_have_assertions 與 case 的既有行為及回傳格式。
+    - 將 command 正規化為單一步驟 integration_case。
+    - 建立暫存工作區並將 fixture 複製到指定相對路徑；所有來源與目的路徑必須限制於專案根目錄或暫存工作區。
+    - 逐步以 shell=False 執行 argv，套用 {python}、{source}、{project}、{workspace} placeholder、timeout
+      與預期 exit code。
+    - 任一步驟失敗即停止該 integration_case，截斷回報 stdout/stderr，並在 finally 清理暫存工作區。
     idempotency:
       level: unknown
       side_effects: []
@@ -900,7 +907,7 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: planned
+    state: dirty
     fan_in_snapshot: 3
     known_symbols:
     - main
@@ -1242,7 +1249,7 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: validated
+    state: dirty
     fan_in_snapshot: 1
   task_assumptions_contract:
     type: schema
@@ -1392,7 +1399,7 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: planned
+    state: dirty
     fan_in_snapshot: 0
   dependency_and_retry_contract:
     type: schema
@@ -1468,7 +1475,7 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: planned
+    state: dirty
     fan_in_snapshot: 0
   resolve_verification_fixture_inputs:
     type: function
@@ -1909,7 +1916,7 @@ modules:
   init_project_virtual_environment:
     type: lifecycle
     description: '`adad init` 編排已拆分的 `.venv` 建立與 pre-commit hook 寫入節點（#48）。'
-    source: adad_cli/core.py::init_project
+    source: adad_cli/core.py::init_project,_normalize_agents,load_project_agents,save_project_agents,_copy_file_if_absent,_setup_claude_project_skill,_ensure_claude_md_import,_ensure_codex_root_agents_md
     domain: ADAD_Roadmap
     subsystem: Product_Delivery
     map_file: docs\domains\adad_roadmap.md
@@ -2026,8 +2033,8 @@ modules:
     fan_in_snapshot: 2
   upgrade_project_virtual_environment:
     type: lifecycle
-    description: '`adad upgrade` 僅在 `.venv` 存在時委派共享節點更新 pre-commit hook（#48）。'
-    source: adad_cli/core.py::upgrade_project
+    description: '`adad upgrade` 同步 workflow、正式 schema 與 hook；不覆蓋使用者架構內容。'
+    source: adad_cli/core.py::upgrade_project,_iter_relative_files,_sync_file
     domain: ADAD_Roadmap
     subsystem: Product_Delivery
     map_file: docs\domains\adad_roadmap.md
@@ -2038,6 +2045,7 @@ modules:
       agents: array
     output:
       environment_status: object
+      schema_sync_status: object
     exceptions: []
     invariants:
     - 'deny_imports: [virtualenv]'
@@ -2045,6 +2053,7 @@ modules:
     verification: []
     decisions:
     - upgrade 不得以隱含方式建立虛擬環境
+    - system_map.schema.json 與 task_schema.json 為套件管理契約，更新前須備份
     todo:
     - '[ ] 規格總覽 #48-3：升級時重寫既有 `.venv` hook'
     checkpoint:
@@ -2062,7 +2071,7 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: validated
+    state: dirty
     fan_in_snapshot: 0
   remove_project_virtual_environment:
     type: function
@@ -2146,7 +2155,7 @@ modules:
     description: 以 `settings_path` 所屬專案的 `.venv` Python 產生跨平台安全 command，並在 Claude
       `.claude/settings.json` 中冪等新增或更新 ADAD PreToolUse hook；既有 `python3` 舊命令必須升級，使用者其他
       hooks 與設定必須完整保留。
-    source: adad_cli/core.py::_ensure_claude_pretooluse_hook
+    source: adad_cli/core.py::_ensure_claude_pretooluse_hook,_remove_claude_pretooluse_hook
     domain: ADAD_Roadmap
     subsystem: Product_Delivery
     map_file: docs\domains\adad_roadmap.md
@@ -2186,6 +2195,40 @@ modules:
     forbidden_context: []
     context_priority: {}
     state: validated
+    fan_in_snapshot: 0
+  global_installation_distribution:
+    type: lifecycle
+    description: 管理全域 ADAD 規則安裝、解除安裝與可攜發行封裝。
+    source: adad_cli/core.py::install_global,uninstall_global,pack_dist,_write_global_rules_block
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      agents: array
+    output:
+      installation_status: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: lifecycle_orchestrator
+    verification: []
+    decisions:
+    - 全域規則寫入集中管理；封裝不依賴呼叫端 cwd
+    todo: []
+    checkpoint: []
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: planned
     fan_in_snapshot: 0
   blocked_task_reporting:
     type: integration
