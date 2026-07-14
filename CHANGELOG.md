@@ -4,7 +4,26 @@
 
 ## Unreleased
 
+## 1.4.2 — 2026-07-14
+
+### Fixed
+
+- Verification command 支援明確 `cwd` 與跨平台 `{project_python}`；需要專案檔案的 CLI 可選擇專案根目錄執行，migration 仍可使用隔離 workspace fixtures。
+- 將 `adad_cli/core.py` 的完整 top-level 函式集合納入架構 Source 綁定，恢復 RULE-04 對 init、upgrade、hook 與發行流程的追蹤。
+
+## 1.4.1 — 2026-07-14
+
+### Fixed
+
+- `adad upgrade` 現會備份並同步根目錄 `system_map.schema.json` 與 `task_schema.json`，避免 Parser 已支援新 Verification 類型、正式 Schema 卻仍停留舊版。
+
+## 1.4.0 — 2026-07-14
+
 ### Added
+
+- **多型 Verification runner**：新增 `command` 與 `integration_case`，以 argv 與 `shell=False` 在隔離暫存工作區執行 CLI／migration 驗證。
+- 支援 `{python}`、`{source}`、`{project}`、`{workspace}` placeholder、fixture 複製、預期 exit code、timeout 與 stdout/stderr contains 契約。
+- 新增 SQLite migration 整合測試，驗證 check 阻擋、apply、資料快照保持、來源 fixture 隔離與 idempotent；完整 pytest 140 項通過。
 
 - **跨平台 I/O 與版本庫邊界**：
   - `run_utf8_subprocess` 統一以 argv、UTF-8 strict 與明確 cwd 執行子程序，避免 Windows CP950 與 shell quoting 差異。
@@ -25,6 +44,7 @@
 - 修正 Windows、macOS、Linux 間的子程序解碼、文字換行、路徑引用與 hook Python 選擇差異。
 - 修正 fixture 來源在非 Windows 主機可能漏判 `C:relative`、drive-qualified 或 UNC 路徑的風險。
 - 將 Task 快照未攜帶架構 `Decisions` 的核發品質缺口登記為 backlog #54，避免必要測試要求只存在於規劃端。
+- `Verification` 不再把 migration CLI 誤當成可 import 的同名 Python 函式。
 
 ## 1.3.0 — 2026-07-12
 

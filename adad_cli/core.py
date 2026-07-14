@@ -558,6 +558,15 @@ def upgrade_project(agents=None, force_agents_md: bool = False, project_root: st
         dst_file = os.path.join(local_skill_dir, str(rel_path))
         _sync_file(src_file, dst_file, report)
 
+    # 正式 schema 是 parser/runner 的版本化契約，不是使用者內容。若 upgrade
+    # 只更新 skill，舊專案會出現「parser 接受、root schema 拒絕」的半套升級。
+    schema_sync_status = {}
+    for schema_name in ("system_map.schema.json", "task_schema.json"):
+        dst_file = os.path.join(project_root, schema_name)
+        before = "missing" if not os.path.exists(dst_file) else "existing"
+        _sync_file(templates_dir() / schema_name, dst_file, report)
+        schema_sync_status[schema_name] = before
+
     # 1.5 若專案有選 Claude Code，.claude/skills/adad-workflow 也要跟著同步
     if "claude" in agents:
         claude_skill_dir = os.path.join(project_root, ".claude", "skills", "adad-workflow")
@@ -640,7 +649,9 @@ def upgrade_project(agents=None, force_agents_md: bool = False, project_root: st
     return {
         "success": True,
         "venv_exists": os.path.isdir(os.path.join(project_root, ".venv")),
-        "hook_status": hook_status
+        "hook_status": hook_status,
+        "schema_sync_status": schema_sync_status,
+        "report": report,
     }
 
 
@@ -1001,5 +1012,4 @@ def _ensure_project_virtual_environment(project_root: str) -> dict:
         "legacy_venv_detected": legacy_venv_detected,
         "path": os.path.normpath(dot_venv_path)
     }
-
 

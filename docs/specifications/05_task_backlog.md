@@ -79,6 +79,7 @@
 |37|**🟡 第一階段完成**：已實作並核准 `resolve_verification_fixture_inputs`，支援專案內 UTF-8 JSON fixture 注入、跨平台絕對／drive／UNC／逃逸路徑阻擋、key 衝突與原物件不變性。尚待：① `system_map.schema.json` 接受 `case.fixtures`；② `verify_implementation` 呼叫 resolver，完成真正的 Kernel 執行注入。|ADAD 宣告 + Kernel 執行注入|中——進行中，不可標記全項完成|
 |38|Coverage Gate（`verify_implementation.py` 升級成真的跑 coverage 工具）|Kernel|**P2，先不做**——複雜度躍升一個量級|
 |39|Property-based / Golden Test|Kernel，可選|低優先|
+|55|**Command／Integration Verification 強化測試**：補齊 unknown placeholder、POSIX absolute／Windows drive／UNC、fixture source/target 穿越、timeout、UTF-8 decode failure、stdout/stderr contains、目錄 fixture 複製與清理，以及 integration fail-fast。|Kernel pytest|中——核心流程已可用，這些是邊界與失敗路徑補強|
 
 #### Task Readiness
 
@@ -133,6 +134,13 @@
 - #37 第一階段 resolver 已核准，修正後 pytest 覆蓋 null、drive-relative、UNC、invalid JSON 與輸入不變性；全套 135 項 pytest 通過。
 - 登記 #54 Task 快照遺漏 `Decisions`，避免把本次駁回誤歸因於 coding 模型能力。
 
+### 2026-07-14 更新紀錄
+
+- Verification 新增 `command` 與 `integration_case`，支援 argv、隔離 fixture、預期 exit code、timeout、stdout/stderr 契約與多步 fail-fast。
+- migration 驗證可依序執行 `--check`、`--apply`、資料快照 checker 與第二次 apply，確認阻擋條件、資料保持及 idempotent。
+- 四個 runner helper 已納入 `adad_core.known_symbols`；重新編譯確認 `untracked_symbols: []`。
+- 登記 #55，追蹤 command／integration runner 尚待補齊的邊界與失敗路徑 pytest。
+
 ### 2026-07-12 分支差異與合併紀錄
 
 - **development 保留為基準**：canonical `adad_source/`、`sync_assets` 生成流程、Windows-safe normalization 輸入、Task Complexity Policy 第一階段、完整 roadmap、#48 單一 `.venv` 與 #50 資產快取排除。
@@ -142,6 +150,6 @@
 
 
 ### 代辦事項優先順序
-- #54、#37（剩餘 schema + verifier 接線）、#33、#29；低優先再評估 #28、#47。
+- #54、#37（剩餘 case fixture schema + verifier 接線）、#55、#33、#29；低優先再評估 #28、#47。
 
 `#25/#27/#30/#34/#38/#39` 這幾項工程量大或收益不確定，建議明確標記 P2，避免搶資源。

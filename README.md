@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2DD4BF">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.3.0-38BDF8">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.4.2-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
@@ -17,12 +17,12 @@
 
 ADAD 的核心理念是：**將「系統設計（架構）」與「程式碼實作（邏輯）」徹底解耦**。由人類把持高價值的架構與驗收 Checkpoint，並指派 Agent 在最小 Context 的約束下進行高精度的原子程式碼生成，以防範 AI 開發中的架構失控與 Context 膨脹問題。
 
-## ✨ 1.3.0 更新重點
+## ✨ 1.4.0 更新重點
 
-- **Task 規格驗證系列**：引進結構化 Semantic Contract、Non-goals、以前後條件強化的 Verification case、Assumptions 約束，以及 per-task Input/Output JSON Schema 遞迴驗證，全方位限制 Agent 施工範圍與預期行為。
-- **說明文件對齊與重構**：補齊 `generate_task`、`adad_task` 等關鍵 CLI 的使用說明，重構 Phase 2 與 CP-2 工作流描述，並將長篇歷史演進轉移至 CHANGELOG。
-- **Source 綁定防線與 audit 留痕**：新增重複 Source 阻斷與 git 暫存區 (staged blob) 安全校驗，CP-2 審查正式強制 `--reviewer` 審計留痕。
-- **測試覆蓋**：新增 105 個測試案例，100% 通過 pytest 驗證。
+- **CLI／migration 驗證**：Verification 新增 `command` 與 `integration_case`，不再要求 CLI 腳本提供可 import 的同名函式。
+- **隔離執行**：fixture 複製到暫存工作區，以 argv、`shell=False`、timeout 與預期 exit code 執行多步驗證。
+- **migration 安全驗收**：可組合 check、apply、資料快照 checker 與第二次 apply，確認資料保持及 idempotent。
+- **測試覆蓋**：完整 pytest 140 項通過。
 
 完整變更請見 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -88,7 +88,15 @@ Verification case 支援正常回傳與預期例外兩種驗收：
   - case: {"input": {"x": -1}, "expect_exception": "ValueError"}
 ```
 
-兩者皆由 AST／執行期驗證器機械檢查，失敗會阻擋 Task 提交。
+CLI 或 migration 使用 `command`／`integration_case`：
+
+```markdown
+- Verification:
+  - command: {"argv": ["{python}", "{source}", "--check"], "expect_exit": "nonzero"}
+  - integration_case: {"fixtures": [{"source": "tests/fixture.db", "target": "db/test.db"}], "steps": [{"argv": ["{python}", "{source}", "--apply", "--db", "{workspace}/db/test.db"]}]}
+```
+
+命令以 argv 與 `shell=False` 在隔離暫存工作區執行；任一步驟失敗即停止。所有規則皆由 AST／執行期驗證器機械檢查，失敗會阻擋 Task 提交。
 
 ### 架構文件與 Task 快照的責任邊界
 

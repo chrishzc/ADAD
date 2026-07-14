@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 5
+- Version: 6
 - Status: planning
 
 ## Environment
@@ -462,10 +462,15 @@
 ##### Module: verify_implementation
 - Type: tool
 - Observability: not_required
-- Description: 校驗指定節點的實作是否符合其宣告的 Verification 條件（例如 must_have_assertions、結構化 case）。
+- Description: 校驗指定節點的實作是否符合多型 Verification 契約；case 驗證可 import 函式，command 驗證單一 CLI，integration_case 在隔離暫存工作區依序執行 fixture 與多步命令。
 - Source: adad_source/agents/skills/adad-workflow/scripts/verify_implementation.py
 - Preferred Pattern: none
-- Decisions: []
+- Complexity: high
+- Decisions:
+  - command 是單一步驟 integration_case 的語法糖，兩者共用相同 subprocess runner。
+  - 命令一律使用 argv 陣列與 shell=False；禁止 shell 字串。
+  - integration_case 一律在暫存工作區複製 fixture，禁止直接修改來源資料。
+  - 資料庫欄位與資料快照等領域斷言由專案 checker command 負責，ADAD 核心只判斷 exit code 與輸出契約。
 - Invariants: []
 - Verification: []
 - Observability: not_required
@@ -475,11 +480,18 @@
   - file_path: string（選填）
 - Output:
   - success: boolean
-  - result: object
+  - result: object（包含 case_results、command_results 與 integration_results）
+- Algorithm:
+  - 保留 must_have_assertions 與 case 的既有行為及回傳格式。
+  - 將 command 正規化為單一步驟 integration_case。
+  - 建立暫存工作區並將 fixture 複製到指定相對路徑；所有來源與目的路徑必須限制於專案根目錄或暫存工作區。
+  - 逐步以 shell=False 執行 argv，套用 {python}、{source}、{project}、{workspace} placeholder、timeout 與預期 exit code。
+  - 任一步驟失敗即停止該 integration_case，截斷回報 stdout/stderr，並在 finally 清理暫存工作區。
 - TODO:
   - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
 - Checkpoint:
   - [ ] CP-1-016 (planned)
+  - [x] CP-3-004 (validated：command／integration_case 多型驗證)
 
 <!-- include docs/domains/adad_roadmap.md -->
  

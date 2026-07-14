@@ -511,7 +511,7 @@
 - Type: lifecycle
 - Observability: not_required
 - Description: `adad init` 編排已拆分的 `.venv` 建立與 pre-commit hook 寫入節點（#48）。
-- Source: adad_cli/core.py::init_project
+- Source: adad_cli/core.py::init_project,_normalize_agents,load_project_agents,save_project_agents,_copy_file_if_absent,_setup_claude_project_skill,_ensure_claude_md_import,_ensure_codex_root_agents_md
 - Preferred Pattern: thin_orchestrator
 - Complexity: low
 - Decisions: [本 repo 已手動完成單一 .venv 整理；本節點只修正 CLI 的未來 init 行為, 舊 venv 可能含使用者資料，遷移採提示優先]
@@ -576,11 +576,11 @@
 ##### Module: upgrade_project_virtual_environment
 - Type: lifecycle
 - Observability: not_required
-- Description: `adad upgrade` 僅在 `.venv` 存在時委派共享節點更新 pre-commit hook（#48）。
-- Source: adad_cli/core.py::upgrade_project
+- Description: `adad upgrade` 同步 workflow、正式 schema 與 hook；不覆蓋使用者架構內容。
+- Source: adad_cli/core.py::upgrade_project,_iter_relative_files,_sync_file
 - Preferred Pattern: thin_orchestrator
 - Complexity: low
-- Decisions: [upgrade 不得以隱含方式建立虛擬環境]
+- Decisions: [upgrade 不得以隱含方式建立虛擬環境, system_map.schema.json 與 task_schema.json 為套件管理契約，更新前須備份]
 - Invariants:
   - deny_imports: [virtualenv]
 - Verification: []
@@ -590,6 +590,7 @@
   - agents: array
 - Output:
   - environment_status: object
+  - schema_sync_status: object
 - TODO:
   - [ ] 規格總覽 #48-3：升級時重寫既有 `.venv` hook
 - Checkpoint:
@@ -644,7 +645,7 @@
 - Type: function
 - Observability: not_required
 - Description: 以 `settings_path` 所屬專案的 `.venv` Python 產生跨平台安全 command，並在 Claude `.claude/settings.json` 中冪等新增或更新 ADAD PreToolUse hook；既有 `python3` 舊命令必須升級，使用者其他 hooks 與設定必須完整保留。
-- Source: adad_cli/core.py::_ensure_claude_pretooluse_hook
+- Source: adad_cli/core.py::_ensure_claude_pretooluse_hook,_remove_claude_pretooluse_hook
 - Preferred Pattern: idempotent_configuration_upsert
 - Complexity: low
 - Decisions:
@@ -672,6 +673,24 @@
   - [ ] 讓 init/upgrade 自動升級 Claude hook 的 `python3` 舊命令並保持設定冪等
 - Checkpoint:
   - [ ] CP-1-045 (planned)
+
+##### Module: global_installation_distribution
+- Type: lifecycle
+- Observability: not_required
+- Description: 管理全域 ADAD 規則安裝、解除安裝與可攜發行封裝。
+- Source: adad_cli/core.py::install_global,uninstall_global,pack_dist,_write_global_rules_block
+- Preferred Pattern: lifecycle_orchestrator
+- Complexity: low
+- Decisions: [全域規則寫入集中管理；封裝不依賴呼叫端 cwd]
+- Invariants: []
+- Verification: []
+- Dependencies: []
+- Input:
+  - agents: array
+- Output:
+  - installation_status: object
+- TODO: []
+- Checkpoint: []
 
 #### Subsystem: Platform_Integration
 - Description: 將跨平台指示與平台能力降級情況變成可追蹤的產品資產。
