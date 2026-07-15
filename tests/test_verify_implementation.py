@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
+import hashlib
 import sqlite3
 import importlib.util
+import os
+import subprocess
 import sys
 
 from conftest import SCRIPTS_DIR, run_script, write_yaml
@@ -132,6 +135,88 @@ def test_verify_implementation_command_can_opt_into_project_cwd(project_dir, bas
     code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
     assert code == 0, err
     assert data["command_results"][0]["cwd"] == str(project_dir)
+
+
+def test_verification_command_ignores_outer_git_index_and_preserves_other_env(
+    project_dir, base_modules, tmp_path, monkeypatch
+):
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=outer, check=True)
+    (outer / "outer.txt").write_text("outer", encoding="utf-8")
+    subprocess.run(["git", "add", "outer.txt"], cwd=outer, check=True)
+    outer_index = outer / ".git" / "index"
+    index_hash_before = hashlib.sha256(outer_index.read_bytes()).hexdigest()
+    files_before = subprocess.run(
+        ["git", "ls-files"], cwd=outer, check=True, capture_output=True, text=True
+    ).stdout
+
+    subprocess.run(["git", "init", "-q"], cwd=project_dir, check=True)
+    probe = project_dir / "git_env_probe.py"
+    probe.write_text(
+        """import os
+import subprocess
+import sys
+from pathlib import Path
+
+blocked = {
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
+    'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_PREFIX', 'GIT_IMPLICIT_WORK_TREE',
+}
+if blocked.intersection(os.environ):
+    raise SystemExit(2)
+if os.environ.get('ADAD_VERIFICATION_ENV_MARKER') != 'preserved':
+    raise SystemExit(3)
+root = subprocess.run(
+    ['git', 'rev-parse', '--show-toplevel'], check=True,
+    capture_output=True, text=True,
+).stdout.strip()
+if Path(root).resolve() != Path(sys.argv[1]).resolve():
+    raise SystemExit(4)
+Path('inner.txt').write_text('inner', encoding='utf-8')
+subprocess.run(['git', 'add', 'inner.txt'], check=True)
+""",
+        encoding="utf-8",
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "git_env_probe.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {
+            "command": {
+                "argv": ["{project_python}", "{source}", "{project}"],
+                "cwd": "project",
+            }
+        }
+    ]
+    write_yaml(project_dir, base_modules)
+
+    monkeypatch.setenv("GIT_INDEX_FILE", str(outer_index))
+    monkeypatch.setenv("GIT_PREFIX", "outer-prefix/")
+    monkeypatch.setenv("ADAD_VERIFICATION_ENV_MARKER", "preserved")
+    core = _load_adad_core()(project_dir / "system_map.yaml", check_validity=False)
+    result = core.verify_implementation("sample_tool", str(probe))
+
+    assert result["success"] is True, result
+    assert hashlib.sha256(outer_index.read_bytes()).hexdigest() == index_hash_before
+    clean_env = core._verification_subprocess_environment()
+    files_after = subprocess.run(
+        ["git", "ls-files"],
+        cwd=outer,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    ).stdout
+    assert files_after == files_before
+    inner_files = subprocess.run(
+        ["git", "ls-files"],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    ).stdout.splitlines()
+    assert inner_files == ["inner.txt"]
 
 
 def test_verify_implementation_explicit_project_root_is_independent_of_map_path(

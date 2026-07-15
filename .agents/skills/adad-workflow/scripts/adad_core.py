@@ -2258,6 +2258,23 @@ class ADADCore:
         except UnicodeDecodeError as error:
             return raw.decode("utf-8", errors="replace"), False, str(error)
 
+    @staticmethod
+    def _verification_subprocess_environment():
+        """Copy the environment without inheriting an outer Git repository route."""
+        environment = os.environ.copy()
+        for name in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_PREFIX",
+            "GIT_IMPLICIT_WORK_TREE",
+        ):
+            environment.pop(name, None)
+        return environment
+
     def _run_verification_command(self, command, workspace, placeholders, step_index):
         result = {"step_index": step_index, "passed": False}
         if not isinstance(command, dict):
@@ -2281,6 +2298,7 @@ class ADADCore:
             completed = subprocess.run(
                 argv,
                 cwd=execution_cwd,
+                env=self._verification_subprocess_environment(),
                 shell=False,
                 capture_output=True,
                 text=False,

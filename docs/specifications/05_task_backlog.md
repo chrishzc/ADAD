@@ -1,6 +1,6 @@
 ## 5. 代辦事項總表（合併版，執行清單）
 
-以下代辦目前編號至 #60，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
+以下代辦目前編號至 #61，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
 待辦事項。**這節才是「現在要動手做哪一項」的答案**，第 1~4 節是「做完之後系統該
 長什麼樣子」的規格。
 
@@ -15,6 +15,7 @@
 |5|~~沒有正式測試套件（無 `/tests`、無 pytest），CLI 腳本缺少自動化覆蓋~~ **✅ 已完成**（已建立 pytest 套件，涵蓋 workflow CLI、Task lifecycle、schema、跨平台 I/O、hook 與 Verification fixture；`pyproject.toml` 提供 `dev` extra 與 pytest 設定。2026-07-13 使用全域 `C:\Python314\python.exe -m pytest -q` 實際執行，135 項全數通過。）|測試|已完成|
 |6|~~沒有 CI/CD（無 `.github/workflows`），README 建議的「CI 跑 `adad_pre_commit.py`」自己沒做到~~ **✅ 已完成**（GitHub Actions 會在 push／pull request 執行資產同步檢查、ADAD guardrail、架構編譯與完整 pytest。）|CI|已完成|
 |7|~~沒有 `CHANGELOG.md`，Improvements 都寫在 README 尾巴長條文字，無版本對照~~ **✅ 已完成**（已建立 `CHANGELOG.md`，維護版本化與 Unreleased 改善紀錄。）|文件|已完成|
+|61|Verification command 在 linked worktree 的 commit hook 內繼承 `GIT_INDEX_FILE` 等 repo-scoped 環境，巢狀 Git 測試會誤讀／污染外層 release index；runner 必須清除 repo-routing Git 變數並驗證外層 index 不變。|ADAD Core / Dogfooding|**P0**|
 
 ### B. Schema / 架構層級缺口（Architecture Proposal / 模組定義）
 

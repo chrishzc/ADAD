@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 11
+- Version: 12
 - Status: planning
 
 ## Environment
@@ -157,35 +157,32 @@
 ##### Module: adad_core
 - Type: library
 - Observability: not_required
-- Description: #60 核心層；保存人工核准的實作 hash，並區分 Edit Gate 與 Commit Gate，不修改 pre-commit。
+- Description: #61 Verification 子程序隔離；移除外層 Git hook/worktree 的 repo-scoped 環境，避免巢狀測試誤用外層 index。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
 - Preferred Pattern: none
 - Complexity: medium
 - Algorithm:
-  - task_submit 驗證通過後，以來源檔原始 bytes 保存 SHA-256 implementation_hash。
-  - task_approve 將同值保存為 approved_implementation_hash。
-  - Edit Gate 只允許 assigned、in_progress。
-  - Commit Gate 只允許 approved 且 candidate_hash 完全相等；缺少 hash 時 fail-closed。
-  - source_hash 僅代表架構快照，不得與 implementation_hash 混用。
-- Decisions: [check_task_gate 預設 operation=edit 以維持相容；approved hash 綁定人工 CP-2；舊 Task 缺 hash 禁止 commit；本 Task 不修改 pre-commit]
+  - 執行 Verification command 前複製目前環境。
+  - 移除 GIT_DIR、GIT_WORK_TREE、GIT_INDEX_FILE、GIT_COMMON_DIR、GIT_OBJECT_DIRECTORY、GIT_ALTERNATE_OBJECT_DIRECTORIES、GIT_PREFIX 與 GIT_IMPLICIT_WORK_TREE。
+  - 保留 PATH、認證與非 repo-routing 環境，並將清理後環境傳入 subprocess。
+  - 測試模擬 linked worktree hook 的外層 index，驗證子程序依 cwd 使用內層 repo，且外層 index 不變。
+- Decisions: [隔離責任放在通用 Verification runner；只移除 repo-routing Git 變數；不得修改或清空外層 index；本 Task 不修改 pre-commit]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_adad_task.py", "tests/test_adad_pretooluse_gate.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_verify_implementation.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
 - Observability: not_required
 - Dependencies: []
 - Input:
-  - source_path: file
-  - gate_operation: string（edit｜commit）
-  - candidate_hash: string|null
+  - verification_command: object
+  - inherited_environment: object
 - Output:
-  - gate_result: object
-  - implementation_hash: string|null
-  - approved_implementation_hash: string|null
+  - command_result: object
+  - sanitized_environment: object
 - Retry Budget: 2
 - TODO:
-  - [ ] #60：保存人工核准 hash 並分離 Edit/Commit Gate
+  - [ ] #61：隔離 linked-worktree hook 的 Git repo 環境
 - Checkpoint:
-  - [x] CP-1-060-CORE (validated：2026-07-15 medium Task 直接核發)
+  - [x] CP-1-061-CORE (validated：2026-07-15 medium Task 直接核發)
 
 ##### Module: task_snapshot_schema
 - Type: schema
