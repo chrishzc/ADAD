@@ -21,6 +21,7 @@ import os
 import json
 import ast
 import tempfile
+import hashlib
 
 # ponytail: 動態加入 scripts 目錄以便 import adad_core
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +59,17 @@ def get_staged_files(diff_filter="ACM"):
     return [f for f in result.stdout.strip().split("\n") if f.strip()]
 
 
+def get_staged_bytes(path):
+    """Return the exact stage-0 Git index bytes for ``path``."""
+    result = subprocess.run(
+        ["git", "show", f":0:{path}"],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
 def get_staged_content(path):
     """
     取得 path 在 git index（staged）中的實際內容，而不是工作目錄上的檔案。
@@ -66,13 +78,10 @@ def get_staged_content(path):
     真正即將被 commit 的內容，而不是磁碟上可能已經不一致的版本。
     讀取失敗時回傳 None，交由呼叫端決定是否略過該檔案。
     """
-    result = subprocess.run(
-        ["git", "show", f":0:{path}"],
-        capture_output=True
-    )
-    if result.returncode != 0:
+    content = get_staged_bytes(path)
+    if content is None:
         return None
-    return result.stdout.decode("utf-8", errors="ignore")
+    return content.decode("utf-8", errors="ignore")
 
 
 def write_temp_file(content, suffix):
@@ -134,7 +143,7 @@ def check_state_gate(staged_files, modules, src_map):
     return errors
 
 
-def check_task_gate_staged(staged_files, src_map, map_path=None):
+def check_task_gate_staged(staged_files, src_map, map_path=None, project_root=None):
     """
     Task 狀態門禁：commit 時再檢查一次 .agents/tasks/<node>.task.json 的 status。
 
@@ -156,7 +165,11 @@ def check_task_gate_staged(staged_files, src_map, map_path=None):
     warnings = []
     try:
         from adad_core import ADADCore, MAP_FILE
-        core = ADADCore(map_path=map_path or MAP_FILE, check_validity=False)  # staleness 已由 check_staleness() 檢查過
+        core = ADADCore(
+            map_path=map_path or MAP_FILE,
+            check_validity=False,
+            project_root=project_root or os.getcwd(),
+        )  # staleness 已由 check_staleness() 檢查過
     except Exception:
         return errors, warnings  # Task 機制本身故障不應該讓 commit 整個卡死
 
@@ -167,8 +180,14 @@ def check_task_gate_staged(staged_files, src_map, map_path=None):
         if mod_name is None or mod_name in checked_nodes:
             continue
         checked_nodes.add(mod_name)
+        staged_bytes = get_staged_bytes(f_norm)
+        candidate_hash = hashlib.sha256(staged_bytes).hexdigest() if staged_bytes is not None else None
         try:
-            gate = core.check_task_gate(f_norm)
+            gate = core.check_task_gate(
+                f_norm,
+                operation="commit",
+                candidate_hash=candidate_hash,
+            )
         except Exception:
             continue
         if gate.get("soft_warning"):
@@ -195,7 +214,7 @@ def check_atomic_scope(staged_files, src_map):
     return warnings
 
 
-def check_invariants_staged(py_files, modules, src_map, map_path):
+def check_invariants_staged(py_files, modules, src_map, map_path, project_root=None):
     """對 staged .py 檔執行 deny_imports 校驗（讀 git index 內容，不讀工作目錄）"""
     from adad_core import ADADCore
     errors = []
@@ -206,7 +225,11 @@ def check_invariants_staged(py_files, modules, src_map, map_path):
     # pre-commit 從「跟 Linter 一樣快」變成「卡到讓人想用 --no-verify」的元兇，
     # 必須修掉，而不是靠使用者忍耐。
     try:
-        core = ADADCore(map_path, check_validity=False)
+        core = ADADCore(
+            map_path,
+            check_validity=False,
+            project_root=project_root or os.getcwd(),
+        )
     except Exception:
         return errors  # 無法載入 core 時不阻斷其他檢查
     for f in py_files:
@@ -237,13 +260,43 @@ def check_invariants_staged(py_files, modules, src_map, map_path):
     return errors
 
 
-def check_verification_staged(py_files, modules, src_map, map_path):
+def _bounded_verification_diagnostics(result, text_limit=1000):
+    """Extract actionable command diagnostics without flooding hook output."""
+    diagnostics = []
+
+    def add_step(step):
+        if not isinstance(step, dict) or step.get("passed", False):
+            return
+        item = {
+            "cwd": step.get("cwd"),
+            "argv": step.get("argv"),
+            "returncode": step.get("returncode"),
+            "encoding_valid": step.get("encoding_valid"),
+            "error": step.get("error"),
+            "stdout": str(step.get("stdout") or "")[-text_limit:],
+            "stderr": str(step.get("stderr") or "")[-text_limit:],
+        }
+        diagnostics.append(json.dumps(item, ensure_ascii=False, separators=(",", ":")))
+
+    for step in result.get("command_results", []):
+        add_step(step)
+    for integration in result.get("integration_results", []):
+        for step in integration.get("step_results", []):
+            add_step(step)
+    return diagnostics
+
+
+def check_verification_staged(py_files, modules, src_map, map_path, project_root=None):
     """對 staged .py 檔執行 must_have_assertions 校驗（讀 git index 內容，不讀工作目錄）"""
     from adad_core import ADADCore
     errors = []
     # ponytail-fix: 同上，ADADCore 只在這裡載入一次，不要放進迴圈。
     try:
-        core = ADADCore(map_path, check_validity=False)
+        core = ADADCore(
+            map_path,
+            check_validity=False,
+            project_root=project_root or os.getcwd(),
+        )
     except Exception:
         return errors
     for f in py_files:
@@ -263,6 +316,8 @@ def check_verification_staged(py_files, modules, src_map, map_path):
             result = core.verify_implementation(mod_name, tmp_py)
             if not result.get("success", True):
                 errors.append(f"[VERIFICATION] {f} — {result.get('error', '校驗失敗')}")
+                for diagnostic in _bounded_verification_diagnostics(result):
+                    errors.append(f"[VERIFICATION DIAGNOSTIC] {f} — {diagnostic}")
         except Exception:
             pass
         finally:
@@ -271,7 +326,7 @@ def check_verification_staged(py_files, modules, src_map, map_path):
     return errors
 
 
-def check_domain_boundary_staged(staged_files, modules, src_map, map_path):
+def check_domain_boundary_staged(staged_files, modules, src_map, map_path, project_root=None):
     """
     只要本次 commit 有觸碰到任一模組的原始碼，就對「整份架構圖」做一次
     跨 Domain 依賴邊界檢查（而不只是被改動的模組），因為邊界違規往往是
@@ -285,7 +340,11 @@ def check_domain_boundary_staged(staged_files, modules, src_map, map_path):
     if not touched_any_module:
         return errors
     try:
-        core = ADADCore(map_path, check_validity=False)
+        core = ADADCore(
+            map_path,
+            check_validity=False,
+            project_root=project_root or os.getcwd(),
+        )
         result = core.check_domain_boundary()
         if not result.get("passed", True):
             for v in result.get("violations", []):
@@ -380,6 +439,7 @@ def check_dangling_dependencies(modules):
 def main():
     errors = []
     warnings = []
+    project_root = os.path.realpath(os.getcwd())
 
     # 1. Staleness 檢查（比對本機檔案 mtime，跟 git 暫存無關，維持讀磁碟）
     stale = check_staleness()
@@ -431,7 +491,11 @@ def main():
         if tmp_map_path:
             from adad_core import ADADCore
             try:
-                _core_for_binding = ADADCore(tmp_map_path, check_validity=False)
+                _core_for_binding = ADADCore(
+                    tmp_map_path,
+                    check_validity=False,
+                    project_root=project_root,
+                )
                 binding_result = _core_for_binding.check_source_binding()
                 if not binding_result["passed"]:
                     for v in binding_result["violations"]:
@@ -443,14 +507,25 @@ def main():
         if src_map:
             errors.extend(check_state_gate(staged_all, modules, src_map))
             warnings.extend(check_atomic_scope(staged_all, src_map))
-            task_errors, task_warnings = check_task_gate_staged(staged_all, src_map, map_path=tmp_map_path)
+            task_errors, task_warnings = check_task_gate_staged(
+                staged_all,
+                src_map,
+                map_path=tmp_map_path,
+                project_root=project_root,
+            )
             errors.extend(task_errors)
             warnings.extend(task_warnings)
         if py_files and src_map and tmp_map_path:
-            errors.extend(check_invariants_staged(py_files, modules, src_map, tmp_map_path))
-            errors.extend(check_verification_staged(py_files, modules, src_map, tmp_map_path))
+            errors.extend(check_invariants_staged(
+                py_files, modules, src_map, tmp_map_path, project_root=project_root
+            ))
+            errors.extend(check_verification_staged(
+                py_files, modules, src_map, tmp_map_path, project_root=project_root
+            ))
         if src_map and tmp_map_path:
-            errors.extend(check_domain_boundary_staged(staged_all, modules, src_map, tmp_map_path))
+            errors.extend(check_domain_boundary_staged(
+                staged_all, modules, src_map, tmp_map_path, project_root=project_root
+            ))
         if modules:
             errors.extend(check_dangling_dependencies(modules))
         if modules and domains:

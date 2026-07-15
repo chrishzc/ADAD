@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 6
+- Version: 11
 - Status: planning
 
 ## Environment
@@ -157,21 +157,95 @@
 ##### Module: adad_core
 - Type: library
 - Observability: not_required
-- Description: 核心引擎，提供 system_map 讀寫、DAG 依賴分析、狀態推進、Invariants/Domain 邊界檢查等共用邏輯，被本檔案登記的其餘所有工具 import 使用；本身不是獨立執行的 CLI 工具，沒有對外的輸入輸出介面。
+- Description: #60 核心層；保存人工核准的實作 hash，並區分 Edit Gate 與 Commit Gate，不修改 pre-commit。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
 - Preferred Pattern: none
-- Decisions: []
+- Complexity: medium
+- Algorithm:
+  - task_submit 驗證通過後，以來源檔原始 bytes 保存 SHA-256 implementation_hash。
+  - task_approve 將同值保存為 approved_implementation_hash。
+  - Edit Gate 只允許 assigned、in_progress。
+  - Commit Gate 只允許 approved 且 candidate_hash 完全相等；缺少 hash 時 fail-closed。
+  - source_hash 僅代表架構快照，不得與 implementation_hash 混用。
+- Decisions: [check_task_gate 預設 operation=edit 以維持相容；approved hash 綁定人工 CP-2；舊 Task 缺 hash 禁止 commit；本 Task 不修改 pre-commit]
 - Invariants: []
-- Verification: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_adad_task.py", "tests/test_adad_pretooluse_gate.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
 - Observability: not_required
 - Dependencies: []
-- Input: {}
-- Output: {}
+- Input:
+  - source_path: file
+  - gate_operation: string（edit｜commit）
+  - candidate_hash: string|null
+- Output:
+  - gate_result: object
+  - implementation_hash: string|null
+  - approved_implementation_hash: string|null
+- Retry Budget: 2
 - TODO:
-  - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
-  - [ ] 依賴此檔案的腳本改動共用邏輯時，目前沒有自動化的跨檔案影響分析
+  - [ ] #60：保存人工核准 hash 並分離 Edit/Commit Gate
 - Checkpoint:
-  - [ ] CP-1-005 (planned)
+  - [x] CP-1-060-CORE (validated：2026-07-15 medium Task 直接核發)
+
+##### Module: task_snapshot_schema
+- Type: schema
+- Observability: not_required
+- Description: 定義 Task Schema v3 的快照保真契約，與 v2 相容並防止 Decisions、施工約束及執行契約在核發時靜默遺失；本 Task 僅修改 schema，不切換 generator。
+- Source: adad_source/templates/task_schema.json
+- Preferred Pattern: schema_contract
+- Complexity: low
+- Algorithm:
+  - 保留既有 Task Schema v2 驗證能力。
+  - 新增 v3 分支並要求原始 decisions 與 preferred_pattern，不得只保存 summary。
+  - v3 同時保存施工約束、執行契約、context 契約與 Task 語意欄位。
+  - 缺少 v3 必填欄位時必須拒絕；空陣列仍視為明確值。
+  - 本 Task 不修改 read_context、generate_task 或既有 v2 核發行為。
+- Decisions: [v2 與 v3 並存；summary 不得取代原始欄位；canonical template 是唯一可編輯來源；生成副本只能由 sync_assets 更新]
+- Invariants: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_generate_task.py", "tests/test_validate_schema.py", "-q"], "cwd": "project", "expect_exit": 0}
+- Dependencies: [validate_schema]
+- Input:
+  - task_snapshot: object
+  - schema_version: integer（2 或 3）
+- Output:
+  - validation_result: object
+- Retry Budget: 2
+- TODO:
+  - [ ] #54-A：完成 v3 schema；後續獨立 Task 再切換 generator
+- Checkpoint:
+  - [x] CP-1-054-A (validated：2026-07-14 人工核准核發)
+
+##### Module: normalize_markdown_source
+- Type: function
+- Observability: not_required
+- Description: #57 第一原子步驟；正規化 Markdown Source 欄位值，只移除完整包覆整個值的一對單反引號，供後續 Task 接入 parse_markdown。
+- Source: adad_source/agents/skills/adad-workflow/scripts/source_normalization.py
+- Preferred Pattern: pure_function
+- Complexity: low
+- Algorithm:
+  - 值由一對單反引號完整包覆時只移除最外層該一對。
+  - 無反引號時保持原值。
+  - 未成對或多重反引號保持原值，本 Task 不推測其語意。
+  - 本 Task 不修改 parse_markdown、Source binding 或 verification 行為。
+- Decisions: [先建立獨立 helper 避免與 adad_core 的 Source Lock 衝突；完成度不包含接線；新檔唯一節點採整檔 Source 以相容現有 Invariants Gate]
+- Invariants:
+  - deny_imports: [subprocess]
+- Verification:
+  - case: {"input": {"value": "`file.py`"}, "expect": "file.py"}
+  - case: {"input": {"value": "file.py"}, "expect": "file.py"}
+  - case: {"input": {"value": "`file.py::function`"}, "expect": "file.py::function"}
+  - case: {"input": {"value": "file.py::function"}, "expect": "file.py::function"}
+- Dependencies: []
+- Input:
+  - value: string
+- Output:
+  - normalized_source: string
+- Retry Budget: 2
+- TODO:
+  - [ ] #57-A：建立 helper；後續 Task 再接入 parse_markdown
+- Checkpoint:
+  - [x] CP-1-057-A (validated：2026-07-14 人工核准核發)
 
 ##### Module: compile_map
 - Type: tool
@@ -335,23 +409,32 @@
 ##### Module: adad_pre_commit
 - Type: tool
 - Observability: not_required
-- Description: Git pre-commit hook，將 AGENTS.md 的軟規則轉為 commit 階段的機械硬閘門：Staleness 阻斷、狀態門禁、原子範圍警告、Invariants/Verification 校驗、跨 Domain 依賴邊界、未登記函式掃描、懸空依賴、模組落點校驗。
+- Description: #60 Hook 整合層；從 Git index 原始 bytes 計算 candidate hash，並呼叫 Commit Gate。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
 - Preferred Pattern: none
-- Decisions: []
+- Complexity: medium
+- Algorithm:
+  - 讀取每個 staged Source 在 Git index 中的原始 bytes。
+  - 直接以該 bytes 計算 SHA-256 candidate_hash，不讀取 working tree。
+  - 呼叫 check_task_gate(operation="commit", candidate_hash=...)。
+  - Task 非 approved、缺少 approved hash 或 hash 不符時，以明確原因阻斷 commit。
+- Decisions: [candidate hash 唯一來源為 Git index；不得建立假的 assigned Task 繞過 CP-2；保留 #59 bounded Verification 診斷]
 - Invariants: []
-- Verification: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_adad_pre_commit.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
-  - git_staged_files: file（讀取 git staged diff，無 CLI 參數）
+  - staged_source_bytes: bytes
+  - staged_source_path: file
 - Output:
   - errors: array
-  - warnings: array
+  - commit_gate_result: object
+- Retry Budget: 2
 - TODO:
-  - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
+  - [ ] #60：以 staged hash 執行 Commit Gate
 - Checkpoint:
-  - [ ] CP-1-011 (planned)
+  - [x] CP-1-060-HOOK (validated：2026-07-15 medium Task 直接核發)
 
 ##### Module: adad_pretooluse_gate
 - Type: tool

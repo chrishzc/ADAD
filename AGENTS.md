@@ -99,4 +99,47 @@
 ## 🚧 Checkpoint 決策處理與限制
 
 * **被拒絕的應對 (On Reject)**：若 Checkpoint 提案被人類拒絕（Reject），你只能在原被拒絕的節點範圍內重新調整實作或架構，**禁止自行擴大修改範圍至其他節點**。
-* **自我修正限制 (Self-Fix Policy)**：在 Phase 2 代碼生成因 Lint/Type Check 失敗進行 Self-Fix時，最多嘗試 3 次。若 3 次皆失敗，必須立刻停止生成，將錯誤日誌填入 Checkpoint Payload 並呈報給人類。
+* **自我修正限制 (Self-Fix Policy)**：在 Phase 2 代碼生成因 Lint/Type Check 失敗進行 Self-Fix時，最多嘗試 2 次。若 2 次皆失敗，必須立刻停止生成，保留現有 diff，並將進度、錯誤與阻塞原因填入 Checkpoint Payload 呈報給人類。任務未完成不視為格式失敗。
+
+---
+
+## 子代理模式
+
+### 主代理（Orchestrator）
+- 唯一對人類負責，分派、整合及停止任務。
+- 先讀取 `system_map.yaml`，每次只派發單一節點。
+- 確認節點狀態、Checkpoint 與 Task Gate 合法後，才允許實作。
+- 子代理不得自行擴大範圍；跨節點需求須停止並回報。
+- Reviewer 退回後，必須立即交由 Planner 在原節點範圍修訂 Task，重新執行格式、Readiness 與 Gate 驗證；通過後再核發給 Implementer。
+- 每個 Task 最多退回 3 次；第 3 次仍未通過時停止迴圈，保留歷程並提交人類 Checkpoint。
+
+### 架構子代理（Planner）
+- 僅分析架構、依賴、正規化及髒點級聯。
+- 架構結果只能形成提案；未經 Checkpoint 不得推進狀態或要求實作。
+- `system_map.yaml` 為唯一事實來源，不得假設未記載規格。
+
+### 實作子代理（Implementer）
+- 每次只能修改一個已授權節點及其必要測試。
+- 僅依 Task Spec 與節點上下文實作，不得自行變更介面、輸入輸出或依賴。
+- 發現規格不足時立即停止，提交 `Schema Update Request`。
+- 每個 Task 最多進行 2 次「修改＋驗證」循環；Task 格式、契約或上下文有缺陷時立即停止，不消耗第二次嘗試。
+- 兩次後仍未完成，保留現有 diff，回報進度、錯誤與阻塞；不得補猜規格或自行重發 Task。
+
+### 驗證子代理（Verifier）
+- 原則上唯讀，只執行 lint、type check、test、invariants 與 verification。
+- 不得順手修碼；失敗時回報節點、指令、錯誤與建議。
+- 只有主代理重新授權後，才能交由實作子代理修正。
+
+### 審查子代理（Reviewer）
+- 僅在 `development` 分支啟用，審查 ADAD 架構、Schema、格式、工具輸出與工作流缺口。
+- 統計每個 Task 的核發、退回、修改與 Coding 嘗試次數，並分類退回原因。
+- 每筆紀錄至少包含：證據、影響、重現方式、改善建議、嚴重度與 fingerprint；相同問題不得重複建立。
+- 只能將具證據的缺陷與主代理核發改善建議寫入 `task_backlog`，不得修改程式碼、`system_map`、Task 狀態或批准 Checkpoint。
+- 評估目標是 Task 格式正確且無須猜測即可執行，不要求 Task 一次完成。
+- 退回時必須遞增該 Task 的 `return_count`、記錄原因並送回主代理；`return_count < 3` 時不得直接結案。
+
+### 共通規則
+- 子代理輸出必須包含：`節點／範圍／結果／驗證／阻塞`。
+- 不得批准 Checkpoint、修改其他節點、提交或繞過 hook。
+- 規範衝突時：`system_map.yaml > Task Spec > 主代理指令`。
+- 任一子代理發現越權、規格衝突或跨節點需求，必須 Fail-Fast。

@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260714T152129421983Z-task_snapshot_schema
+  phase: 2
+  timestamp: '2026-07-14T15:21:29.421983+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: task_snapshot_schema
+    task_id: task_snapshot_schema@v7@88d26f
+    system_map_version: 7
+    source_hash: 88d26f8921aa8662858c15fce11ba42e782616f084af848784cb89a53c80fcea
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''
