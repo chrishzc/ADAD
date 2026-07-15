@@ -1,7 +1,23 @@
 # -*- coding: utf-8 -*-
+import hashlib
 import sqlite3
+import importlib.util
+import os
+import subprocess
+import sys
 
-from conftest import run_script, write_yaml
+from conftest import SCRIPTS_DIR, run_script, write_yaml
+
+
+def _load_adad_core():
+    spec = importlib.util.spec_from_file_location("test_adad_core", SCRIPTS_DIR / "adad_core.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module.ADADCore
 
 
 def test_verify_implementation_must_have_assertions_pass(project_dir, base_modules):
@@ -119,6 +135,197 @@ def test_verify_implementation_command_can_opt_into_project_cwd(project_dir, bas
     code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
     assert code == 0, err
     assert data["command_results"][0]["cwd"] == str(project_dir)
+
+
+def test_verification_command_ignores_outer_git_index_and_preserves_other_env(
+    project_dir, base_modules, tmp_path, monkeypatch
+):
+    outer = tmp_path / "outer"
+    outer.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=outer, check=True)
+    (outer / "outer.txt").write_text("outer", encoding="utf-8")
+    subprocess.run(["git", "add", "outer.txt"], cwd=outer, check=True)
+    outer_index = outer / ".git" / "index"
+    index_hash_before = hashlib.sha256(outer_index.read_bytes()).hexdigest()
+    files_before = subprocess.run(
+        ["git", "ls-files"], cwd=outer, check=True, capture_output=True, text=True
+    ).stdout
+
+    subprocess.run(["git", "init", "-q"], cwd=project_dir, check=True)
+    probe = project_dir / "git_env_probe.py"
+    probe.write_text(
+        """import os
+import subprocess
+import sys
+from pathlib import Path
+
+blocked = {
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
+    'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_PREFIX', 'GIT_IMPLICIT_WORK_TREE',
+}
+if blocked.intersection(os.environ):
+    raise SystemExit(2)
+if os.environ.get('ADAD_VERIFICATION_ENV_MARKER') != 'preserved':
+    raise SystemExit(3)
+root = subprocess.run(
+    ['git', 'rev-parse', '--show-toplevel'], check=True,
+    capture_output=True, text=True,
+).stdout.strip()
+if Path(root).resolve() != Path(sys.argv[1]).resolve():
+    raise SystemExit(4)
+Path('inner.txt').write_text('inner', encoding='utf-8')
+subprocess.run(['git', 'add', 'inner.txt'], check=True)
+""",
+        encoding="utf-8",
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "git_env_probe.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {
+            "command": {
+                "argv": ["{project_python}", "{source}", "{project}"],
+                "cwd": "project",
+            }
+        }
+    ]
+    write_yaml(project_dir, base_modules)
+
+    monkeypatch.setenv("GIT_INDEX_FILE", str(outer_index))
+    monkeypatch.setenv("GIT_PREFIX", "outer-prefix/")
+    monkeypatch.setenv("ADAD_VERIFICATION_ENV_MARKER", "preserved")
+    core = _load_adad_core()(project_dir / "system_map.yaml", check_validity=False)
+    result = core.verify_implementation("sample_tool", str(probe))
+
+    assert result["success"] is True, result
+    assert hashlib.sha256(outer_index.read_bytes()).hexdigest() == index_hash_before
+    clean_env = core._verification_subprocess_environment()
+    files_after = subprocess.run(
+        ["git", "ls-files"],
+        cwd=outer,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    ).stdout
+    assert files_after == files_before
+    inner_files = subprocess.run(
+        ["git", "ls-files"],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=clean_env,
+    ).stdout.splitlines()
+    assert inner_files == ["inner.txt"]
+
+
+def test_verify_implementation_explicit_project_root_is_independent_of_map_path(
+    project_dir, base_modules, tmp_path
+):
+    src = project_dir / "read_marker.py"
+    src.write_text(
+        "from pathlib import Path\nraise SystemExit(0 if Path('marker.txt').read_text() == 'ok' else 1)\n",
+        encoding="utf-8",
+    )
+    (project_dir / "marker.txt").write_text("ok", encoding="utf-8")
+    base_modules["modules"]["sample_tool"]["source"] = str(src)
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{project_python}", "{source}"], "cwd": "project"}}
+    ]
+    staged_map_dir = tmp_path / "staged-map"
+    staged_map_dir.mkdir()
+    write_yaml(staged_map_dir, base_modules)
+
+    core = _load_adad_core()(
+        staged_map_dir / "system_map.yaml",
+        check_validity=False,
+        project_root=project_dir,
+    )
+    result = core.verify_implementation("sample_tool", str(src))
+
+    assert result["success"] is True
+    assert result["command_results"][0]["cwd"] == str(project_dir.resolve())
+
+
+def test_verify_implementation_command_rejects_non_utf8_output(project_dir, base_modules):
+    src = project_dir / "non_utf8_cli.py"
+    src.write_text(
+        "import sys\nsys.stdout.buffer.write(b'\\xb7 OUTPUT_OK')\nsys.stderr.buffer.write(b'\\xb7')\n",
+        encoding="utf-8",
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "non_utf8_cli.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{python}", "{source}"], "expect_stdout_contains": "OUTPUT_OK"}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
+
+    assert code == 1
+    result = data["command_results"][0]
+    assert data["success"] is False
+    assert result["returncode"] == 0
+    assert result["encoding_valid"] is False
+    assert result["encoding_error"]
+    assert "OUTPUT_OK" in result["stdout"]
+    assert result["passed"] is False
+
+
+def test_verify_implementation_command_reports_valid_utf8(project_dir, base_modules):
+    src = project_dir / "utf8_cli.py"
+    src.write_text("print('輸出正常')\n", encoding="utf-8")
+    base_modules["modules"]["sample_tool"]["source"] = "utf8_cli.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{python}", "{source}"], "expect_stdout_contains": "輸出正常"}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
+
+    assert code == 0, err
+    result = data["command_results"][0]
+    assert result["encoding_valid"] is True
+    assert result["encoding_error"] is None
+
+
+def test_verify_implementation_command_rejects_unsupported_output_encoding(project_dir, base_modules):
+    src = project_dir / "encoded_cli.py"
+    src.write_text("print('OUTPUT_OK')\n", encoding="utf-8")
+    base_modules["modules"]["sample_tool"]["source"] = "encoded_cli.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{python}", "{source}"], "output_encoding": "big5"}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
+
+    assert code == 1
+    result = data["command_results"][0]
+    assert result["returncode"] == 0
+    assert result["encoding_valid"] is False
+    assert "unsupported output_encoding" in result["encoding_error"]
+
+
+def test_verify_implementation_command_timeout_decodes_bytes(project_dir, base_modules):
+    src = project_dir / "timeout_cli.py"
+    src.write_text(
+        "import sys, time\nsys.stdout.buffer.write(b'\\xff PARTIAL')\nsys.stdout.flush()\ntime.sleep(5)\n",
+        encoding="utf-8",
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "timeout_cli.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{python}", "{source}"], "timeout": 1}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
+
+    assert code == 1
+    result = data["command_results"][0]
+    assert result["returncode"] is None
+    assert "PARTIAL" in result["stdout"]
+    assert result["encoding_valid"] is False
+    assert result["encoding_error"]
 
 
 def test_verify_implementation_migration_integration_isolated_and_idempotent(

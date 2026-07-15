@@ -630,8 +630,13 @@ def find_misplaced_modules(data):
 
 
 class ADADCore:
-    def __init__(self, map_path=MAP_FILE, check_validity=True):
+    def __init__(self, map_path=MAP_FILE, check_validity=True, project_root=None):
         self.map_path = map_path
+        self.project_root = os.path.realpath(
+            os.fspath(project_root)
+            if project_root is not None
+            else os.path.dirname(os.path.abspath(os.fspath(map_path)))
+        )
         self.data = self._load_map()
         if check_validity:
             valid_res = self.check_ir_validity()
@@ -1366,6 +1371,15 @@ class ADADCore:
         node = self.get_node(node_name) or {}
         return node.get("source", "").split("::", 1)[0].strip().replace("\\", "/")
 
+    def _implementation_hash(self, node_name, file_path=None):
+        """Return the SHA-256 of the implementation bytes for one Task."""
+        source_path = file_path or self._source_path_for_node(node_name)
+        if not source_path:
+            return None
+        if not os.path.isabs(source_path):
+            source_path = os.path.join(self.project_root, source_path)
+        return self._file_hash(source_path)
+
     def _source_lock_path(self, source_path):
         digest = hashlib.sha256(source_path.encode("utf-8")).hexdigest()
         return os.path.join(SOURCE_LOCK_DIR, f"{digest}.lock.json")
@@ -1552,11 +1566,26 @@ class ADADCore:
         if not ver_res.get("success"):
             return {"success": False, "error": f"Verification 檢查未通過，不能提交: {ver_res.get('error')}"}
 
+        implementation_hash = self._implementation_hash(node_name, file_path)
+        if implementation_hash is None:
+            return {
+                "success": False,
+                "error": "[BLOCKED] 無法讀取實作檔案，不能建立 implementation_hash。",
+            }
+
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         task_data["status"] = "submitted"
-        task_data.setdefault("history", []).append({"event": "submitted", "at": now})
+        task_data["implementation_hash"] = implementation_hash
+        task_data.setdefault("history", []).append({
+            "event": "submitted", "at": now, "implementation_hash": implementation_hash,
+        })
         self._save_task(node_name, task_data)
-        return {"success": True, "task_id": task_data["task_id"], "status": "submitted"}
+        return {
+            "success": True,
+            "task_id": task_data["task_id"],
+            "status": "submitted",
+            "implementation_hash": implementation_hash,
+        }
 
     def _advance_module_to_validated(self, node_name):
         """approve 通過後，把模組狀態推進到 validated，處理 draft 需要先經過
@@ -1620,6 +1649,7 @@ class ADADCore:
         try:
             if action == "approved":
                 task_data["status"] = "approved"
+                task_data["approved_implementation_hash"] = task_data.get("implementation_hash")
                 self._advance_module_to_validated(node_name)
             else:
                 task_data["status"] = "assigned"
@@ -1739,7 +1769,7 @@ class ADADCore:
 
         return {"success": True, "task_id": task_data["task_id"], "status": "blocked", "reason": reason}
 
-    def check_task_gate(self, rel_path):
+    def check_task_gate(self, rel_path, operation="edit", candidate_hash=None):
         """
         給 adad_pretooluse_gate.py / adad_pre_commit.py 共用的政策判斷：
         這個檔案現在能不能被寫入？回傳 {"allow": bool, "reason": str, "node_name": str|None}。
@@ -1752,6 +1782,13 @@ class ADADCore:
           - 有 Task 快照且 status 屬於「開放編輯」集合 → allow
           - 其餘狀態（submitted / approved）→ 阻擋
         """
+        if operation not in {"edit", "commit"}:
+            return {
+                "allow": False,
+                "reason": f"[TASK GATE] 不支援的 operation: `{operation}`。",
+                "node_name": None,
+            }
+
         src_map = {}
         for name, info in (self.data.get("modules", {}) or {}).items():
             src = (info or {}).get("source", "")
@@ -1794,7 +1831,7 @@ class ADADCore:
                 "node_name": node_name,
             }
 
-        if self.task_is_expired(node_name, task_data):
+        if operation == "edit" and self.task_is_expired(node_name, task_data):
             return {
                 "allow": False,
                 "node_name": node_name,
@@ -1803,15 +1840,46 @@ class ADADCore:
             }
 
         status = task_data.get("status")
-        if status in TASK_EDITABLE_STATUSES:
-            return {"allow": True, "node_name": node_name, "reason": f"Task 狀態為 `{status}`，允許編輯"}
+        if operation == "edit":
+            if status in TASK_EDITABLE_STATUSES:
+                return {"allow": True, "node_name": node_name, "reason": f"Task 狀態為 `{status}`，允許編輯"}
+            return {
+                "allow": False,
+                "node_name": node_name,
+                "reason": f"模組 `{node_name}` 的 Task 狀態為 `{status}`，不允許編輯。"
+                          + ("任務待人類審查中，請等候 CP-2 核准或駁回。" if status == "submitted"
+                             else "此輪任務已核准結案，如需再修改請重新執行 generate_task.py。"),
+            }
 
+        approved_hash = task_data.get("approved_implementation_hash")
+        if status != "approved":
+            return {
+                "allow": False,
+                "node_name": node_name,
+                "reason": f"[TASK GATE] Commit 僅允許 `approved` Task；目前為 `{status}`。",
+            }
+        if not approved_hash:
+            return {
+                "allow": False,
+                "node_name": node_name,
+                "reason": "[TASK GATE] 舊 Task 缺少 approved_implementation_hash，依 fail-closed 規則拒絕 commit。",
+            }
+        if not candidate_hash:
+            return {
+                "allow": False,
+                "node_name": node_name,
+                "reason": "[TASK GATE] Commit 缺少 candidate_hash，依 fail-closed 規則拒絕。",
+            }
+        if candidate_hash != approved_hash:
+            return {
+                "allow": False,
+                "node_name": node_name,
+                "reason": "[TASK GATE] staged implementation hash 與 CP-2 核准內容不一致。",
+            }
         return {
-            "allow": False,
+            "allow": True,
             "node_name": node_name,
-            "reason": f"模組 `{node_name}` 的 Task 狀態為 `{status}`，不允許編輯。"
-                      + ("任務待人類審查中，請等候 CP-2 核准或駁回。" if status == "submitted"
-                         else "此輪任務已核准結案，如需再修改請重新執行 generate_task.py。"),
+            "reason": "Task 已核准，且 candidate_hash 符合 approved_implementation_hash。",
         }
 
 
@@ -2174,6 +2242,39 @@ class ADADCore:
         project_python = os.path.realpath(os.path.join(project_root, relative_path))
         return project_python if os.path.isfile(project_python) else sys.executable
 
+    @staticmethod
+    def _decode_verification_output(value, output_encoding="utf-8"):
+        """Strictly validate UTF-8 while retaining replacement text for diagnostics."""
+        raw = value or b""
+        supported = str(output_encoding or "utf-8").lower().replace("_", "-") in {
+            "utf-8", "utf8"
+        }
+        if isinstance(raw, str):
+            return raw, supported, None if supported else f"unsupported output_encoding: {output_encoding}"
+        if not supported:
+            return raw.decode("utf-8", errors="replace"), False, f"unsupported output_encoding: {output_encoding}"
+        try:
+            return raw.decode("utf-8"), True, None
+        except UnicodeDecodeError as error:
+            return raw.decode("utf-8", errors="replace"), False, str(error)
+
+    @staticmethod
+    def _verification_subprocess_environment():
+        """Copy the environment without inheriting an outer Git repository route."""
+        environment = os.environ.copy()
+        for name in (
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_PREFIX",
+            "GIT_IMPLICIT_WORK_TREE",
+        ):
+            environment.pop(name, None)
+        return environment
+
     def _run_verification_command(self, command, workspace, placeholders, step_index):
         result = {"step_index": step_index, "passed": False}
         if not isinstance(command, dict):
@@ -2197,32 +2298,46 @@ class ADADCore:
             completed = subprocess.run(
                 argv,
                 cwd=execution_cwd,
+                env=self._verification_subprocess_environment(),
                 shell=False,
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="strict",
+                text=False,
                 timeout=timeout,
             )
-            stdout = completed.stdout[-4000:]
-            stderr = completed.stderr[-4000:]
+            output_encoding = command.get("output_encoding", "utf-8")
+            stdout, stdout_valid, stdout_error = self._decode_verification_output(completed.stdout, output_encoding)
+            stderr, stderr_valid, stderr_error = self._decode_verification_output(completed.stderr, output_encoding)
+            stdout = stdout[-4000:]
+            stderr = stderr[-4000:]
+            encoding_valid = stdout_valid and stderr_valid
+            encoding_error = "; ".join(detail for detail in (stdout_error, stderr_error) if detail) or None
             exit_ok = completed.returncode != 0 if expected_exit == "nonzero" else completed.returncode == expected_exit
             stdout_expected = command.get("expect_stdout_contains")
             stderr_expected = command.get("expect_stderr_contains")
-            stdout_ok = stdout_expected is None or stdout_expected in completed.stdout
-            stderr_ok = stderr_expected is None or stderr_expected in completed.stderr
+            stdout_ok = encoding_valid and (stdout_expected is None or stdout_expected in stdout)
+            stderr_ok = encoding_valid and (stderr_expected is None or stderr_expected in stderr)
             result.update({
                 "returncode": completed.returncode,
                 "stdout": stdout,
                 "stderr": stderr,
+                "encoding_valid": encoding_valid,
+                "encoding_error": encoding_error,
                 "passed": exit_ok and stdout_ok and stderr_ok,
             })
             if not result["passed"]:
                 result["error"] = "command 結果不符合預期。"
         except subprocess.TimeoutExpired as e:
             result["error"] = f"command 執行逾時（{timeout} 秒）。"
-            result["stdout"] = (e.stdout or "")[-4000:] if isinstance(e.stdout, str) else ""
-            result["stderr"] = (e.stderr or "")[-4000:] if isinstance(e.stderr, str) else ""
+            output_encoding = command.get("output_encoding", "utf-8")
+            stdout, stdout_valid, stdout_error = self._decode_verification_output(e.stdout, output_encoding)
+            stderr, stderr_valid, stderr_error = self._decode_verification_output(e.stderr, output_encoding)
+            result.update({
+                "returncode": None,
+                "stdout": stdout[-4000:],
+                "stderr": stderr[-4000:],
+                "encoding_valid": stdout_valid and stderr_valid,
+                "encoding_error": "; ".join(detail for detail in (stdout_error, stderr_error) if detail) or None,
+            })
         except Exception as e:
             result["error"] = f"command 執行失敗：{e}"
         return result
@@ -2242,7 +2357,7 @@ class ADADCore:
             integration_result["error"] = "integration_case.steps 必須是非空陣列。"
             return integration_result
 
-        project_root = os.path.realpath(os.path.dirname(os.path.abspath(self.map_path)))
+        project_root = self.project_root
         source_path = os.path.realpath(os.path.abspath(real_file_path))
         try:
             with tempfile.TemporaryDirectory(prefix="adad_verify_") as workspace:

@@ -1,6 +1,6 @@
 ## 5. 代辦事項總表（合併版，執行清單）
 
-以下代辦目前編號至 #54，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
+以下代辦目前編號至 #61，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
 待辦事項。**這節才是「現在要動手做哪一項」的答案**，第 1~4 節是「做完之後系統該
 長什麼樣子」的規格。
 
@@ -15,6 +15,7 @@
 |5|~~沒有正式測試套件（無 `/tests`、無 pytest），CLI 腳本缺少自動化覆蓋~~ **✅ 已完成**（已建立 pytest 套件，涵蓋 workflow CLI、Task lifecycle、schema、跨平台 I/O、hook 與 Verification fixture；`pyproject.toml` 提供 `dev` extra 與 pytest 設定。2026-07-13 使用全域 `C:\Python314\python.exe -m pytest -q` 實際執行，135 項全數通過。）|測試|已完成|
 |6|~~沒有 CI/CD（無 `.github/workflows`），README 建議的「CI 跑 `adad_pre_commit.py`」自己沒做到~~ **✅ 已完成**（GitHub Actions 會在 push／pull request 執行資產同步檢查、ADAD guardrail、架構編譯與完整 pytest。）|CI|已完成|
 |7|~~沒有 `CHANGELOG.md`，Improvements 都寫在 README 尾巴長條文字，無版本對照~~ **✅ 已完成**（已建立 `CHANGELOG.md`，維護版本化與 Unreleased 改善紀錄。）|文件|已完成|
+|61|Verification command 在 linked worktree 的 commit hook 內繼承 `GIT_INDEX_FILE` 等 repo-scoped 環境，巢狀 Git 測試會誤讀／污染外層 release index；runner 必須清除 repo-routing Git 變數並驗證外層 index 不變。|ADAD Core / Dogfooding|**P0**|
 
 ### B. Schema / 架構層級缺口（Architecture Proposal / 模組定義）
 
@@ -80,6 +81,11 @@
 |38|Coverage Gate（`verify_implementation.py` 升級成真的跑 coverage 工具）|Kernel|**P2，先不做**——複雜度躍升一個量級|
 |39|Property-based / Golden Test|Kernel，可選|低優先|
 |55|**Command／Integration Verification 強化測試**：補齊 unknown placeholder、POSIX absolute／Windows drive／UNC、fixture source/target 穿越、timeout、UTF-8 decode failure、stdout/stderr contains、目錄 fixture 複製與清理，以及 integration fail-fast。|Kernel pytest|中——核心流程已可用，這些是邊界與失敗路徑補強|
+|56|**相對專案路徑的 cwd 診斷**：當 `command` 在預設 `workspace` 執行、argv 或 inline script 使用相對專案檔案路徑而未指定 `cwd: "project"` 時，輸出可行動的診斷／lint，明確提示隔離暫存目錄與 `cwd: "project"` 選項；補齊對應 pytest。|ADAD verification runner + Kernel pytest|中——避免既有 cwd 功能因設定遺漏造成難以辨識的檔案不存在錯誤|
+|57|**Source Markdown 反引號正規化**：`parse_markdown()` 必須移除 `Source` 欄位成對的外層 Markdown 反引號，避免 `file.py::function` 的函式名稱殘留反引號並使 `verify_implementation` 找不到實作；補齊帶／不帶反引號、整檔／逐函式 Source 的編譯與驗證 pytest。|ADAD parser + Kernel pytest|中——合法 Markdown 表示法會使通過的業務邊界測試被 ADAD 誤擋|
+|58|**Command 輸出容錯解碼**：verification runner 必須以 bytes 擷取 stdout/stderr，再以 UTF-8 優先、系統偏好編碼 fallback 與 `errors="replace"` 解碼；不得因外部工具輸出非 UTF-8 位元組而覆蓋 command 的 exit code 或中斷 Task submit。timeout 的 bytes stdout/stderr 亦須採同一邏輯，並補齊 UTF-8、非 UTF-8 stdout/stderr、輸出契約與 timeout pytest。|ADAD verification runner + Kernel pytest|高——Windows／pytest 非 UTF-8 輸出會使合法驗證誤判失敗並阻斷提交|
+|59|**Release Gate project_root 分離**：pre-commit 解析 staged YAML 時可使用暫存檔，但 Verification 的 `project_root`、`cwd: project`、`project_python`、fixture 與 placeholder 必須固定指向正式 repository root；補齊 staged map 位於 Temp 時仍可執行專案 pytest 的整合測試及 bounded 診斷。|ADAD Core + Enforcement Gate pytest|P0——目前 Temp YAML 會把 Verification 導向錯誤目錄，造成 gate 假失敗|
+|60|**Approved Commit Hash Gate**：Edit Gate 與 Commit Gate 分離；submit/approve 保存實作 SHA-256，pre-commit 僅允許 `approved` 且 staged hash 與核准 hash 相同的內容。`assigned` 不得 commit，`approved` 不得 edit；舊 Task 缺少核准 hash 時 fail-closed。|ADAD Task lifecycle + Enforcement Gate pytest|P0——目前 approved 反而不能 commit，SOP 被迫重新核發未核准 Task|
 
 #### Task Readiness
 
@@ -140,6 +146,36 @@
 - migration 驗證可依序執行 `--check`、`--apply`、資料快照 checker 與第二次 apply，確認阻擋條件、資料保持及 idempotent。
 - 四個 runner helper 已納入 `adad_core.known_symbols`；重新編譯確認 `untracked_symbols: []`。
 - 登記 #55，追蹤 command／integration runner 尚待補齊的邊界與失敗路徑 pytest。
+- 登記 #56，追蹤相對專案路徑的 command 在預設隔離 workspace 執行時，缺少 `cwd: "project"` 的可行動診斷。
+- 登記 #57，追蹤 `Source` 外層 Markdown 反引號未正規化而污染函式綁定的問題。
+- 登記 #58，追蹤 command runner 對非 UTF-8 stdout/stderr 的容錯解碼，避免誤擋 Task submit。
+
+#### Development Dogfood Reviewer 紀錄
+
+|Backlog|核發|退回／上限|修改|Coding 嘗試|目前處置|Fingerprint|
+|---|---:|---:|---:|---:|---|---|
+|#58|2|2／3|2|1|v8 Task 已提交；13 focused tests 通過，UTF-8 Gate 與診斷契約完成|`task58-adad_core-missing-task-gate-and-acceptance`|
+|#54|1|1／3|1|2|v7 Task 已提交；Schema v3/v2 相容驗證完成|`task-54.snapshot-fidelity.unbound-schema-and-core-conflict`|
+|#57|2|2／3|2|1|v8 Task 已提交；整檔 Source 修訂後 Invariants 與 4 cases 通過|`task-57.source-backtick-unbound-parser-contract`|
+|#59/#60|1|1／3|1|0|合併規格被 Readiness Gate 退回；已拆為四個 sequential medium Task|`task-59-60.combined-high-readiness-atomicity`|
+|#59 Hook|2|1／3|1|2|R1 明定解析 diagnostic JSON 後比較 Windows Path；舊 Task 停止，新 Task 重發|`task-59-hook.raw-json-windows-path-escaping`|
+
+Reviewer 對主代理的核發改善建議：
+
+- Task 必須明列唯一節點、canonical Source、必要同步產物、驗收案例、Non-goals、`task_id`、`source_hash` 與合法狀態。
+- `adad_core` 內可獨立施工的函式應拆成可核發的原子節點，避免 wrapper 節點與真正修改來源不一致。
+- 同一 Source 已有未整合 diff 時不得重複核發；先完成、退回或隔離既有工作。
+- Coding Agent 每個 Task 最多兩次「修改＋驗證」；Task 格式或上下文缺陷應在第一次修改前退回。
+- Reviewer 退回後由主代理立即路由 Planner 修訂；每個 Task 最多退回 3 次，第 3 次仍不合格才提交人工 Checkpoint。
+
+R1 修訂摘要：
+
+- **#58**：唯一施工範圍為 `ADADCore._decode_verification_output` 與 `_run_verification_command`；不得改 argv、cwd、fixture 或 placeholder。驗收涵蓋 UTF-8、非 UTF-8 stdout/stderr、replacement、exit code 與 timeout bytes。
+- **#54-A**：新增 `task_snapshot_schema`，先讓 Task Schema v3 與 v2 並存；v3 強制保存原始 `decisions`、`preferred_pattern`、施工約束、執行契約與 Task 語意，summary 不得取代原值。本 Task 不修改 generator。
+- **#57**：新增 `parse_markdown` 原子契約；僅移除完整包覆 Source 值的一對單反引號，未成對／多重反引號不處理；驗收為帶／不帶反引號 × 整檔／逐函式四組。
+- 三項 R1 當時已達 Task 內容可審查程度，但涉及新增節點、非法現態或整檔／逐函式 Source 拆分，須人工 Checkpoint 後才能核發 Coding Task。
+- 人工核准後三項均已核發並轉為 `submitted`；整合驗證共 32 tests 通過，`sync_assets --check` 無差異。
+- #58 submit 的 schema-gap warning 指向自然語言 `timeout` 尚未結構化；已去重歸入既有 #29 Resource／Timeout Contract，不新增重複 backlog 項目。Fingerprint：`task58.timeout-natural-language-without-structured-contract`。
 
 ### 2026-07-12 分支差異與合併紀錄
 
@@ -150,6 +186,6 @@
 
 
 ### 代辦事項優先順序
-- #54、#37（剩餘 case fixture schema + verifier 接線）、#55、#33、#29；低優先再評估 #28、#47。
+- #59、#60、#58、#54、#37（剩餘 case fixture schema + verifier 接線）、#55、#56、#57、#33、#29；低優先再評估 #28、#47。
 
 `#25/#27/#30/#34/#38/#39` 這幾項工程量大或收益不確定，建議明確標記 P2，避免搶資源。

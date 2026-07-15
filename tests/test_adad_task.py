@@ -31,6 +31,9 @@ def test_submit_succeeds_when_checks_pass(project_dir, base_modules):
     assert code == 0, err
     assert data["success"] is True
     assert data["status"] == "submitted"
+    assert data["implementation_hash"] == ADADCore._file_hash(src)
+    saved = ADADCore(project_dir / "system_map.yaml", check_validity=False).load_task("sample_tool")
+    assert saved["implementation_hash"] == data["implementation_hash"]
 
 
 def test_submit_blocked_when_invariants_fail(project_dir, base_modules):
@@ -106,7 +109,43 @@ def test_approval_writes_auditable_checkpoint(project_dir, base_modules):
     assert audit["decision"]["reviewer"] == "Chris"
     assert audit["target"]["task_id"] == generated["task_id"]
     assert core.load_task("sample_tool")["history"][-1]["checkpoint_id"] == audit["id"]
+    approved_task = core.load_task("sample_tool")
+    assert approved_task["approved_implementation_hash"] == approved_task["implementation_hash"]
     assert read_yaml(project_dir)["modules"]["sample_tool"]["state"] == "validated"
+
+
+def test_commit_gate_allows_only_approved_matching_hash(project_dir, base_modules):
+    source = project_dir / "sample_tool.py"
+    source.write_text("def sample_tool(x):\n    return x\n", encoding="utf-8")
+    write_yaml(project_dir, base_modules)
+    core = ADADCore(project_dir / "system_map.yaml", check_validity=False)
+    generated = core.generate_task("sample_tool")
+    submitted = core.task_submit("sample_tool")
+    assert submitted["success"] is True
+    assert core.check_task_gate(
+        "sample_tool.py", operation="commit", candidate_hash=submitted["implementation_hash"]
+    )["allow"] is False
+
+    assert core.task_approve("sample_tool", generated["task_id"][-6:], "Chris")["success"] is True
+    assert core.check_task_gate(
+        "sample_tool.py", operation="commit", candidate_hash=submitted["implementation_hash"]
+    )["allow"] is True
+    assert core.check_task_gate(
+        "sample_tool.py", operation="commit", candidate_hash="0" * 64
+    )["allow"] is False
+
+
+def test_commit_gate_fails_closed_for_legacy_approved_task(project_dir, base_modules):
+    write_yaml(project_dir, base_modules)
+    core = ADADCore(project_dir / "system_map.yaml", check_validity=False)
+    assert core.generate_task("sample_tool")["success"] is True
+    task = core.load_task("sample_tool")
+    task["status"] = "approved"
+    core._save_task("sample_tool", task)
+
+    gate = core.check_task_gate("sample_tool.py", operation="commit", candidate_hash="0" * 64)
+    assert gate["allow"] is False
+    assert "approved_implementation_hash" in gate["reason"]
 
 
 def test_source_lock_blocks_parallel_tasks_and_releases_after_approval(project_dir, base_modules):

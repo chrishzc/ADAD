@@ -1,7 +1,123 @@
 # -*- coding: utf-8 -*-
 import json
+import importlib.util
+from pathlib import Path
 
 from conftest import run_script, write_yaml
+
+
+TASK_SCHEMA_PATH = (
+    Path(__file__).parents[1]
+    / "adad_source"
+    / "templates"
+    / "task_schema.json"
+)
+VALIDATE_SCHEMA_PATH = (
+    Path(__file__).parents[1]
+    / "adad_source"
+    / "agents"
+    / "skills"
+    / "adad-workflow"
+    / "scripts"
+    / "validate_schema.py"
+)
+
+
+def _load_minimal_validator():
+    spec = importlib.util.spec_from_file_location("adad_validate_schema", VALIDATE_SCHEMA_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._MinimalValidator
+
+
+def _task_snapshot(schema_version):
+    target_node = {
+        "name": "sample_tool",
+        "type": "tool",
+        "state": "planned",
+        "source": "sample_tool.py",
+        "input": {"x": "int"},
+        "output": {"y": "int"},
+        "exceptions": [],
+        "invariants": [],
+        "verification": [],
+        "observability": {"mode": "not_required", "signals": []},
+    }
+    if schema_version == 3:
+        target_node.update(
+            {
+                "description": "測試用範例模組",
+                "map_file": "system_map.md",
+                "dependencies": [],
+                "preferred_pattern": "none",
+                "decisions": [],
+                "complexity": "low",
+                "algorithm": [],
+                "idempotency": {},
+                "retry_budget": 0,
+                "required_context": [],
+                "forbidden_context": [],
+                "context_priority": {},
+            }
+        )
+    return {
+        "schema_version": schema_version,
+        "task_id": "sample_tool@v1@test",
+        "node_name": "sample_tool",
+        "exported_at": "2026-07-14T00:00:00+00:00",
+        "system_map_version": 1,
+        "source_hash": "test-hash",
+        "status": "assigned",
+        "source_lock": {
+            "source_path": "sample_tool.py",
+            "node_name": "sample_tool",
+            "task_id": "sample_tool@v1@test",
+            "acquired_at": "2026-07-14T00:00:00+00:00",
+        },
+        "rollback": {
+            "strategy": "preserve_diff",
+            "source_path": "sample_tool.py",
+            "baseline_file_hash": None,
+            "instruction": "preserve diff",
+        },
+        "history": [],
+        "spec": {"target_node": target_node, "dependency_interfaces": {}},
+    }
+
+
+def _task_schema_validator():
+    schema = json.loads(TASK_SCHEMA_PATH.read_text(encoding="utf-8"))
+    return _load_minimal_validator()(schema)
+
+
+def test_task_schema_keeps_v2_compatible():
+    assert list(_task_schema_validator().iter_errors(_task_snapshot(2))) == []
+
+
+def test_task_schema_accepts_complete_v3_snapshot():
+    assert list(_task_schema_validator().iter_errors(_task_snapshot(3))) == []
+
+
+def test_task_schema_v3_rejects_missing_fidelity_field():
+    required_v3_fields = (
+        "description",
+        "map_file",
+        "dependencies",
+        "preferred_pattern",
+        "decisions",
+        "complexity",
+        "algorithm",
+        "idempotency",
+        "retry_budget",
+        "required_context",
+        "forbidden_context",
+        "context_priority",
+    )
+    validator = _task_schema_validator()
+    for field in required_v3_fields:
+        snapshot = _task_snapshot(3)
+        del snapshot["spec"]["target_node"][field]
+        assert list(validator.iter_errors(snapshot)), field
 
 
 def test_generate_task_creates_snapshot(project_dir, base_modules):

@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260715T012430588878Z-normalize_markdown_source
+  phase: 2
+  timestamp: '2026-07-15T01:24:30.588878+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: normalize_markdown_source
+    task_id: normalize_markdown_source@v8@449915
+    system_map_version: 8
+    source_hash: 4499155cb71fe1bfb40e56ffc5983fdbac13e93e07a056624c8edd077b04c5ac
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

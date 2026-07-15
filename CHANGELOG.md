@@ -4,6 +4,19 @@
 
 ## Unreleased
 
+## 1.5.0 — 2026-07-14
+
+### Added
+
+- 新增 development 子代理角色規範：Orchestrator、Planner、Implementer、Verifier 與 Reviewer；Reviewer 追蹤 Task 核發、退回、修改及 Coding 嘗試次數。
+- 新增 Task Schema v3 保真契約並保留 v2 相容；v3 強制保存架構決策、施工約束、執行契約與 context 契約。
+- 新增 `normalize_markdown_source` 原子 helper，支援 Source 外層單反引號正規化；接入 parser 留待後續 Task。
+
+### Changed
+
+- Coding 自我修正上限調整為 2 次；Reviewer 退回上限為 3 次，退回後必須記錄原因並立即送回 Planner 修訂。
+- Verification command 改以 bytes 擷取輸出並嚴格驗證 UTF-8；非法編碼會保留 exit code 與替代文字供診斷，但不得通過輸出契約。
+
 ## 1.4.2 — 2026-07-14
 
 ### Fixed
