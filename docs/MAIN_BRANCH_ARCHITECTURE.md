@@ -36,3 +36,4 @@
 1. `adad_source/` 與 `.agents/`、`adad_cli/resources/` 的受管理資產一致。
 2. 受版控樹沒有「禁止納入 main」所列路徑。
 3. 套件測試不依賴根目錄 dogfood maps、checkpoint 或 task 狀態。
+4. CI 在 `main` 與以 `main` 為目標的 PR 上自動檢查第 2 項；違反即拒絕發布。
