@@ -1,4 +1,4 @@
-version: 12
+version: 14
 modules:
   sync_adad_assets:
     type: tool
@@ -279,7 +279,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     state: validated
-    fan_in_snapshot: 11
+    fan_in_snapshot: 12
     known_symbols:
     - ADADCore.__init__
     - ADADCore._acquire_source_lock
@@ -307,6 +307,7 @@ modules:
     - ADADCore._source_lock_path
     - ADADCore._source_path_for_node
     - ADADCore._task_path
+    - ADADCore._verification_subprocess_environment
     - ADADCore._write_checkpoint_audit
     - ADADCore.analyze_dirty_cascade
     - ADADCore.check_domain_boundary
@@ -740,7 +741,8 @@ modules:
     fan_in_snapshot: 0
   adad_pre_commit:
     type: tool
-    description: '#60 Hook 整合層；從 Git index 原始 bytes 計算 candidate hash，並呼叫 Commit Gate。'
+    description: '#62 CI diff base 解析；GitHub push 的空 GITHUB_BASE_REF 必須回退 HEAD~1，PR
+      則使用 origin/<base>。'
     source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
     domain: ADAD_Workflow
     subsystem: Enforcement_Gates
@@ -748,11 +750,11 @@ modules:
     dependencies:
     - adad_core
     input:
-      staged_source_bytes: bytes
-      staged_source_path: file
+      ci_environment: object
+      github_base_ref: string|null
     output:
-      errors: array
-      commit_gate_result: object
+      diff_target: array
+      staged_files: array
     exceptions: []
     invariants: []
     preferred_pattern: none
@@ -769,21 +771,21 @@ modules:
         cwd: project
         expect_exit: 0
     decisions:
-    - 'candidate hash 唯一來源為 Git index；不得建立假的 assigned Task 繞過 CP-2；保留 #59 bounded
-      Verification 診斷'
+    - 空字串不得視為合法 ref；workflow 已使用 fetch-depth 0，允許 HEAD~1；本 Task 不修改 Verification 或
+      Commit Gate
     todo:
-    - '[ ] #60：以 staged hash 執行 Commit Gate'
+    - '[ ] #62：修正 GitHub push 空 GITHUB_BASE_REF 產生 origin/'
     checkpoint:
-    - '[x] CP-1-060-HOOK (validated：2026-07-15 medium Task 直接核發)'
+    - '[x] CP-1-062-HOOK (validated：2026-07-15 人工核准 CI 修正)'
     observability:
       mode: not_required
       signals: []
     complexity: medium
     algorithm:
-    - 讀取每個 staged Source 在 Git index 中的原始 bytes。
-    - 直接以該 bytes 計算 SHA-256 candidate_hash，不讀取 working tree。
-    - 呼叫 check_task_gate(operation="commit", candidate_hash=...)。
-    - Task 非 approved、缺少 approved hash 或 hash 不符時，以明確原因阻斷 commit。
+    - 非 CI 環境維持 git diff --cached。
+    - CI 中以 GITHUB_BASE_REF 的非空值作為 PR base；空值或缺值回退 HEAD~1。
+    - 只有非 HEAD、非 origin/ 開頭的 base 才補 origin/ 前綴。
+    - 測試覆蓋 GitHub push 空值、CI 缺值、PR base 與非 CI 四條路徑。
     idempotency:
       level: unknown
       side_effects: []
@@ -792,7 +794,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     state: validated
-    fan_in_snapshot: 1
+    fan_in_snapshot: 2
     known_symbols:
     - _bounded_verification_diagnostics
     - build_source_to_module_map
@@ -1999,7 +2001,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     state: dirty
-    fan_in_snapshot: 0
+    fan_in_snapshot: 1
   release_changelog:
     type: documentation
     description: 以 CHANGELOG 維護版本化改善紀錄，取代 README 尾端長篇變更文字（#7）。
@@ -2030,6 +2032,46 @@ modules:
       level: unknown
       side_effects: []
     retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+  release_sop:
+    type: documentation
+    description: '#63 將 main release worktree、Git 環境隔離、index 污染復原、CI push base 與發布後
+      Actions 驗證整理為可重複執行的發佈契約。'
+    source: docs/RELEASE_SOP.md
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - adad_pre_commit
+    - adad_core
+    - continuous_integration
+    input:
+      release_incidents: array
+    output:
+      release_procedure: markdown
+    exceptions: []
+    invariants: []
+    preferred_pattern: documentation_as_contract
+    verification: []
+    decisions:
+    - release worktree 必須從 origin/main 建立；禁止 no-verify；失敗經驗必須形成前置檢查或復原步驟
+    todo:
+    - '[ ] #63：補齊 linked-worktree、CI push 與發布後驗證 SOP'
+    checkpoint:
+    - '[x] CP-1-063-SOP (validated：2026-07-15 人工核准納入發布經驗)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
     required_context: []
     forbidden_context: []
     context_priority: {}

@@ -29,6 +29,17 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 
+def _get_diff_target():
+    """Return the Git diff target for local commits and GitHub CI runs."""
+    if not os.environ.get("CI"):
+        return ["--cached"]
+
+    base_ref = os.environ.get("GITHUB_BASE_REF") or "HEAD~1"
+    if not base_ref.startswith("HEAD") and not base_ref.startswith("origin/"):
+        base_ref = f"origin/{base_ref}"
+    return [base_ref, "HEAD"]
+
+
 def get_staged_files(diff_filter="ACM"):
     """
     取得 git staged 且符合指定 diff-filter 的檔案清單。
@@ -40,9 +51,7 @@ def get_staged_files(diff_filter="ACM"):
     的變更。
     """
     # ponytail: CI 環境下 index 是空的，改跟 base branch 比對
-    diff_target = [os.environ.get("GITHUB_BASE_REF", "HEAD~1"), "HEAD"] if os.environ.get("CI") else ["--cached"]
-    if diff_target[0] != "--cached" and not diff_target[0].startswith("HEAD") and not diff_target[0].startswith("origin/"):
-        diff_target[0] = f"origin/{diff_target[0]}"
+    diff_target = _get_diff_target()
 
     result = subprocess.run(
         ["git", "diff", *diff_target, "--name-only", f"--diff-filter={diff_filter}"],
