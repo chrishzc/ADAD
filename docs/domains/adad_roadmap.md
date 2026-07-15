@@ -486,6 +486,27 @@
 - Checkpoint:
   - [ ] CP-1-032 (planned)
 
+##### Module: release_sop
+- Type: documentation
+- Observability: not_required
+- Description: #63 將 main release worktree、Git 環境隔離、index 污染復原、CI push base 與發布後 Actions 驗證整理為可重複執行的發佈契約。
+- Source: docs/RELEASE_SOP.md
+- Preferred Pattern: documentation_as_contract
+- Complexity: low
+- Decisions: [release worktree 必須從 origin/main 建立；禁止 no-verify；失敗經驗必須形成前置檢查或復原步驟]
+- Invariants: []
+- Verification: []
+- Dependencies: [adad_pre_commit, adad_core, continuous_integration]
+- Input:
+  - release_incidents: array
+- Output:
+  - release_procedure: markdown
+- Retry Budget: 2
+- TODO:
+  - [ ] #63：補齊 linked-worktree、CI push 與發布後驗證 SOP
+- Checkpoint:
+  - [x] CP-1-063-SOP (validated：2026-07-15 人工核准納入發布經驗)
+
 ##### Module: project_venv_python
 - Type: function
 - Observability: not_required

@@ -1,12 +1,66 @@
 # -*- coding: utf-8 -*-
 import json
 import hashlib
+import importlib.util
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from conftest import run_script, write_yaml, make_module
+
+
+def _load_pre_commit_module():
+    source = (
+        Path(__file__).parents[1]
+        / "adad_source"
+        / "agents"
+        / "skills"
+        / "adad-workflow"
+        / "scripts"
+        / "adad_pre_commit.py"
+    )
+    spec = importlib.util.spec_from_file_location("adad_pre_commit_under_test", source)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    ("ci", "base_ref", "expected_target"),
+    [
+        (None, None, ["--cached"]),
+        ("true", None, ["HEAD~1", "HEAD"]),
+        ("true", "", ["HEAD~1", "HEAD"]),
+        ("true", "main", ["origin/main", "HEAD"]),
+    ],
+)
+def test_get_staged_files_selects_expected_diff_target(
+    monkeypatch, ci, base_ref, expected_target
+):
+    module = _load_pre_commit_module()
+    if ci is None:
+        monkeypatch.delenv("CI", raising=False)
+    else:
+        monkeypatch.setenv("CI", ci)
+    if base_ref is None:
+        monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_BASE_REF", base_ref)
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="sample.py\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.get_staged_files() == ["sample.py"]
+    assert calls == [
+        ["git", "diff", *expected_target, "--name-only", "--diff-filter=ACM"]
+    ]
 
 
 def _git(args, cwd):

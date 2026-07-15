@@ -65,6 +65,8 @@ release worktree 預設沒有 `.venv`，但 Git hook 會使用相對 `.venv\Scri
 New-Item -ItemType Junction -Path "$release\.venv" -Target "<ADAD_REPO>\.venv"
 ```
 
+linked worktree 的 commit hook 可能把 `GIT_INDEX_FILE`、`GIT_DIR`、`GIT_WORK_TREE` 等 repo-scoped `GIT_*` 傳給 Verification 子程序。Verification runner 必須清除這些變數，讓子程序依自己的 `cwd` 找 Git repo；不可直接繼承 release index。
+
 執行完整驗證與正常提交：
 
 ```powershell
@@ -75,13 +77,41 @@ git commit -m "Release ADAD <VERSION>"
 Pop-Location
 ```
 
-不要以 `--no-verify` 取代驗證。若 hook 不能啟動，先確認 Junction 與 `.venv\Scripts\python.exe` 存在。
+測試前後都檢查 index，禁止出現 `sample_tool.py`、`second_tool.py` 或其他 fixture 假檔：
 
-## 4. 發布 main 並更新本機
+```powershell
+git -C $release diff --cached --name-only
+```
+
+若發現污染，只移除已確認的假路徑，再從已驗證 commit 重建正式檔案：
+
+```powershell
+git -C $release rm --cached --ignore-unmatch -- sample_tool.py second_tool.py
+$files = git diff-tree --no-commit-id --name-only -r <DEV_COMMIT>
+git -C $release checkout <DEV_COMMIT> -- $files
+git -C $release diff --cached --check
+```
+
+禁止使用 `git reset` 或 `--no-verify`。若 hook 不能啟動，先確認 Junction 與 `.venv\Scripts\python.exe` 存在。
+
+## 4. GitHub Actions 前置條件
+
+push workflow 的 `GITHUB_BASE_REF` 可能存在但為空字串；hook 必須以 `HEAD~1` fallback，不得組成無效的 `origin/`。checkout workflow 必須保留完整歷史：
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+```
+
+## 5. 發布 main、驗收 Actions 並更新本機
 
 ```powershell
 git -C $release push origin HEAD:main
 git branch -f main origin/main
+
+gh run list --branch main --commit <RELEASE_COMMIT> --limit 5
+gh run view <RUN_ID> --exit-status
 
 Push-Location $release
 <ADAD_REPO>\.venv\Scripts\python.exe -m pip install --upgrade .
@@ -89,8 +119,18 @@ Push-Location $release
 Pop-Location
 ```
 
-最後確認：GitHub `main` 指向 release commit、`adad --version` 顯示 `<VERSION>`、完整 pytest 通過。
+`gh run view --exit-status` 成功後才能宣告發布完成。Actions 失敗時保留 release worktree 與日誌，建立修正 Task，不得宣告完成。最後確認：GitHub `main` 指向 release commit、`adad --version` 顯示 `<VERSION>`、完整 pytest 與 Actions 均通過。
 
-## 5. 清理
+## 6. 最小故障排查
+
+每個故障最多進行 2 次「修正＋驗證」：
+
+1. 先記錄失敗指令、exit code、首個有效錯誤與 `git status --short`。
+2. 只修正已確認的單一原因，重跑原失敗指令及必要 gate。
+3. 第 2 次仍失敗即停止，保留 diff、index、worktree 與 Actions run ID，建立 Task／Checkpoint，不再試錯。
+
+常見檢查順序：Junction 與 Python 路徑 → release index 假檔 → repo-scoped `GIT_*` 洩漏 → `GITHUB_BASE_REF` 空值與 fetch depth → Actions 日誌。
+
+## 7. 清理
 
 `.venv` Junction 只存在於 `C:\tmp` 的 release worktree，不能對它使用 `Remove-Item -Recurse`。完成後可保留 worktree 供稽核；若要清理，先確認它仍是 Junction，再移除 link 本身，不得遞迴刪除 target 的實體 `.venv`。

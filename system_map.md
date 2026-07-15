@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 12
+- Version: 14
 - Status: planning
 
 ## Environment
@@ -406,32 +406,32 @@
 ##### Module: adad_pre_commit
 - Type: tool
 - Observability: not_required
-- Description: #60 Hook 整合層；從 Git index 原始 bytes 計算 candidate hash，並呼叫 Commit Gate。
+- Description: #62 CI diff base 解析；GitHub push 的空 GITHUB_BASE_REF 必須回退 HEAD~1，PR 則使用 origin/<base>。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
 - Preferred Pattern: none
 - Complexity: medium
 - Algorithm:
-  - 讀取每個 staged Source 在 Git index 中的原始 bytes。
-  - 直接以該 bytes 計算 SHA-256 candidate_hash，不讀取 working tree。
-  - 呼叫 check_task_gate(operation="commit", candidate_hash=...)。
-  - Task 非 approved、缺少 approved hash 或 hash 不符時，以明確原因阻斷 commit。
-- Decisions: [candidate hash 唯一來源為 Git index；不得建立假的 assigned Task 繞過 CP-2；保留 #59 bounded Verification 診斷]
+  - 非 CI 環境維持 git diff --cached。
+  - CI 中以 GITHUB_BASE_REF 的非空值作為 PR base；空值或缺值回退 HEAD~1。
+  - 只有非 HEAD、非 origin/ 開頭的 base 才補 origin/ 前綴。
+  - 測試覆蓋 GitHub push 空值、CI 缺值、PR base 與非 CI 四條路徑。
+- Decisions: [空字串不得視為合法 ref；workflow 已使用 fetch-depth 0，允許 HEAD~1；本 Task 不修改 Verification 或 Commit Gate]
 - Invariants: []
 - Verification:
   - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_adad_pre_commit.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
-  - staged_source_bytes: bytes
-  - staged_source_path: file
+  - ci_environment: object
+  - github_base_ref: string|null
 - Output:
-  - errors: array
-  - commit_gate_result: object
+  - diff_target: array
+  - staged_files: array
 - Retry Budget: 2
 - TODO:
-  - [ ] #60：以 staged hash 執行 Commit Gate
+  - [ ] #62：修正 GitHub push 空 GITHUB_BASE_REF 產生 origin/
 - Checkpoint:
-  - [x] CP-1-060-HOOK (validated：2026-07-15 medium Task 直接核發)
+  - [x] CP-1-062-HOOK (validated：2026-07-15 人工核准 CI 修正)
 
 ##### Module: adad_pretooluse_gate
 - Type: tool

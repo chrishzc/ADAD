@@ -1,6 +1,6 @@
 ## 5. 代辦事項總表（合併版，執行清單）
 
-以下代辦目前編號至 #61，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
+以下代辦目前編號至 #63，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
 待辦事項。**這節才是「現在要動手做哪一項」的答案**，第 1~4 節是「做完之後系統該
 長什麼樣子」的規格。
 
@@ -16,6 +16,8 @@
 |6|~~沒有 CI/CD（無 `.github/workflows`），README 建議的「CI 跑 `adad_pre_commit.py`」自己沒做到~~ **✅ 已完成**（GitHub Actions 會在 push／pull request 執行資產同步檢查、ADAD guardrail、架構編譯與完整 pytest。）|CI|已完成|
 |7|~~沒有 `CHANGELOG.md`，Improvements 都寫在 README 尾巴長條文字，無版本對照~~ **✅ 已完成**（已建立 `CHANGELOG.md`，維護版本化與 Unreleased 改善紀錄。）|文件|已完成|
 |61|Verification command 在 linked worktree 的 commit hook 內繼承 `GIT_INDEX_FILE` 等 repo-scoped 環境，巢狀 Git 測試會誤讀／污染外層 release index；runner 必須清除 repo-routing Git 變數並驗證外層 index 不變。|ADAD Core / Dogfooding|**P0**|
+|62|GitHub push 事件的 `GITHUB_BASE_REF` 為空字串，CI diff base 被組成無效的 `origin/`；空值／缺值須回退 `HEAD~1`，並補 push、PR、非 CI 測試。|Pre-commit / CI|**P0**|
+|63|Release SOP 缺少 linked-worktree `GIT_*` 洩漏、release index 污染檢查、GitHub push 空 `GITHUB_BASE_REF` 與發布後 Actions 驗證；補成可重複執行的故障預防清單。|文件 / Dogfooding|**P0**|
 
 ### B. Schema / 架構層級缺口（Architecture Proposal / 模組定義）
 
@@ -159,6 +161,7 @@
 |#57|2|2／3|2|1|v8 Task 已提交；整檔 Source 修訂後 Invariants 與 4 cases 通過|`task-57.source-backtick-unbound-parser-contract`|
 |#59/#60|1|1／3|1|0|合併規格被 Readiness Gate 退回；已拆為四個 sequential medium Task|`task-59-60.combined-high-readiness-atomicity`|
 |#59 Hook|2|1／3|1|2|R1 明定解析 diagnostic JSON 後比較 Windows Path；舊 Task 停止，新 Task 重發|`task-59-hook.raw-json-windows-path-escaping`|
+|#62|2|1／3|0|1|首版實作與 18 tests 通過，但核發後新增 #63 使 Task source_hash 過期；依 v14 重發，不計 coding 失敗|`task-62.issue-before-architecture-batch-finalized`|
 
 Reviewer 對主代理的核發改善建議：
 
@@ -167,6 +170,7 @@ Reviewer 對主代理的核發改善建議：
 - 同一 Source 已有未整合 diff 時不得重複核發；先完成、退回或隔離既有工作。
 - Coding Agent 每個 Task 最多兩次「修改＋驗證」；Task 格式或上下文缺陷應在第一次修改前退回。
 - Reviewer 退回後由主代理立即路由 Planner 修訂；每個 Task 最多退回 3 次，第 3 次仍不合格才提交人工 Checkpoint。
+- 同批架構節點必須全部編譯完成後才核發 Task；禁止核發第一個 Task 後再升版新增同批節點，避免 source_hash 人為過期。
 
 R1 修訂摘要：
 
