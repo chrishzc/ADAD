@@ -17,8 +17,18 @@ jobs:
       - name: Install project and test dependencies
         run: python -m pip install -e ".[dev]"
       - name: Run ADAD guardrail
+        if: github.ref_name == 'development' || github.base_ref == 'development'
         run: python .agents/skills/adad-workflow/scripts/adad_pre_commit.py
       - name: Compile architecture map
+        if: github.ref_name == 'development' || github.base_ref == 'development'
         run: python .agents/skills/adad-workflow/scripts/compile_map.py
+      - name: Verify release assets
+        if: github.ref_name == 'main' || github.base_ref == 'main'
+        run: python adad_cli/sync_assets.py --check
+      - name: Run release CLI smoke test
+        if: github.ref_name == 'main' || github.base_ref == 'main'
+        run: |
+          python -m pip install .
+          adad --version
       - name: Run test suite
         run: python -m pytest -q
