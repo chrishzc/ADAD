@@ -132,6 +132,33 @@
 - Checkpoint:
   - [x] CP-1-068-REVIEW (validated：2026-07-15 人工核准核發)
 
+##### Module: sub_map_schema
+- Type: schema
+- Observability: not_required
+- Description: #71 正式定義 root YAML 的 sub_maps mapping 與模組 Sub Map ownership 欄位。
+- Source: adad_source/templates/system_map.schema.json
+- Preferred Pattern: schema_contract
+- Complexity: medium
+- Algorithm:
+  - root sub_maps 必須是 scope 到非空相對 YAML 路徑的 object mapping，不接受 array。
+  - module.sub_map 必須是非空字串，值為 root 或 root sub_maps 已宣告的 scope；跨欄位 scope 驗證由 loader 執行。
+  - 保持沒有 sub_maps 的既有 flat IR 完全相容。
+  - schema 只處理結構；absolute、path traversal、cycle、missing 與 duplicate module 由 adad_core fail-fast。
+- Decisions: [不以 additionalProperties 靜默接受 sub_maps；不要求 child shard 具備完整 root environment/domains；runtime path safety 不能只靠 JSON Schema]
+- Invariants: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_sub_map_schema.py", "-q", "--basetemp", "{workspace}/pytest-submap-schema"], "cwd": "project", "expect_exit": 0}
+- Dependencies: [adad_core, compile_map]
+- Input:
+  - root_ir: object
+- Output:
+  - validated_sub_map_contract: object
+- Retry Budget: 2
+- TODO:
+  - [ ] #71：補齊 sub_maps 與 owner schema
+- Checkpoint:
+  - [x] CP-1-071-SUBMAP-SCHEMA (validated：2026-07-15 人工要求解決)
+
 #### Subsystem: Contract_Evolution
 - Description: Schema、Task 與執行契約缺口的可獨立施工節點。
 
@@ -578,11 +605,11 @@
 ##### Module: release_sop
 - Type: documentation
 - Observability: not_required
-- Description: #65 將 main release worktree、Git 環境隔離、巢狀測試的 CI event context、index 污染復原與發布後 Actions 驗證整理為可重複執行的發佈契約。
+- Description: #65 整理 CI/linked-worktree 發布契約；#72 新增 sub_maps root-count、upgrade 與外部專案驗收。
 - Source: docs/RELEASE_SOP.md
 - Preferred Pattern: documentation_as_contract
 - Complexity: low
-- Decisions: [release worktree 必須從 origin/main 建立；巢狀測試預設隔離外層 CI event context 並只允許明確 opt-in；禁止 no-verify；失敗經驗必須形成前置檢查或復原步驟]
+- Decisions: [release worktree 必須從 origin/main 建立；sub_maps 發布必須驗證 root/child count 不變、FinanceImport 可查與 upgrade 後不膨脹；禁止 no-verify；Actions 成功後才更新本機]
 - Invariants: []
 - Verification: []
 - Dependencies: [adad_pre_commit, adad_core, continuous_integration]
@@ -593,9 +620,11 @@
 - Retry Budget: 2
 - TODO:
   - [ ] #65：補齊巢狀臨時 repo 的 CI event context 隔離 SOP
+  - [ ] #72：補齊 sub_maps 發布、安裝與外部專案 upgrade 驗收
 - Checkpoint:
   - [x] CP-1-063-SOP (validated：2026-07-15 人工核准納入發布經驗)
   - [x] CP-1-065-SOP (validated：2026-07-15 人工核准納入巢狀 CI 經驗)
+  - [x] CP-1-072-SUBMAP-RELEASE (validated：2026-07-15 人工要求更新本機版本)
 
 ##### Module: project_venv_python
 - Type: function

@@ -1,6 +1,6 @@
 ## 5. 代辦事項總表（合併版，執行清單）
 
-以下代辦目前編號至 #68，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
+以下代辦目前編號至 #72，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
 待辦事項。**這節才是「現在要動手做哪一項」的答案**，第 1~4 節是「做完之後系統該
 長什麼樣子」的規格。
 
@@ -23,6 +23,10 @@
 |66|Task 匯出的 pattern／decision summary 在參考文件不存在時夾帶載入錯誤文字，污染子代理上下文；應改為乾淨的缺省摘要或結構化 warning。|Task 核發品質|**P1**|
 |67|Verification 對「鍵不存在」與 `null` 缺少明確語意及核發前一致性檢查，造成規格與 Algorithm 衝突；應提供 deletion assertion 或 Readiness gate。|Task 核發品質|**P1**|
 |68|Reviewer 判定 Task 編碼異常前應做 strict UTF-8 byte decode、replacement character 與 JSON read-back；不得只憑終端顯示退回，避免誤算退回次數。|Reviewer 品質|**P1**|
+|69|ADADCore 必須遞迴載入 YAML `sub_maps`、追蹤 module owner 並依 owner 儲存；禁止合併讀取後整份倒回 root。|ADAD Core / Split IR|**P0**|
+|70|`compile_map` 必須沿用既有 owner 或明確 `Sub Map` 分流，阻斷新節點 owner 不明，避免 63 節點再次膨脹進 root。|Compiler / Split IR|**P0**|
+|71|正式 Schema 必須定義 `sub_maps` mapping 與 module ownership；路徑、循環、重名交由 runtime fail-fast。|Schema / Split IR|**P0**|
+|72|Release SOP 增加 root/child count、FinanceImport context、upgrade 後不膨脹及 Actions 成功後更新本機的驗收。|Release / Dogfooding|**P0**|
 
 ### B. Schema / 架構層級缺口（Architecture Proposal / 模組定義）
 

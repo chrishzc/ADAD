@@ -100,3 +100,11 @@
 
 * **被拒絕的應對 (On Reject)**：若 Checkpoint 提案被人類拒絕（Reject），你只能在原被拒絕的節點範圍內重新調整實作或架構，**禁止自行擴大修改範圍至其他節點**。
 * **自我修正限制 (Self-Fix Policy)**：在 Phase 2 代碼生成因 Lint/Type Check 失敗進行 Self-Fix時，最多嘗試 3 次。若 3 次皆失敗，必須立刻停止生成，將錯誤日誌填入 Checkpoint Payload 並呈報給人類。
+
+### Reviewer Unicode 證據規則
+
+* 不得只依終端畫面或工具渲染判定檔案編碼異常。
+* 退回前必須檢查原始 bytes 能否 strict UTF-8 解碼、內容是否包含 replacement character (`U+FFFD`)；JSON 檔另須完成 UTF-8 strict 讀回與解析。
+* 編碼退回必須附上可重現命令、上述檢查結果與 fingerprint。
+* Task submit 前須確認受管文字檔的 working tree bytes 已符合 `.gitattributes`，避免 CRLF／LF 正規化造成 staged hash 與核准 hash 不一致。
+* 若證據確認只是顯示誤判，必須撤回該次退回，且 `return_count` 不得增加；若已遞增則恢復為退回前數值。

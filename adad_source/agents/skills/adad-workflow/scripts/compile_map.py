@@ -10,6 +10,48 @@ from validate_schema import validate_schema_conformance
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+def _shard_module_counts(core, modules=None):
+    """Return deterministic per-shard counts without flattening child modules."""
+    counts = {owner: 0 for owner in core.shard_documents}
+    if modules is None:
+        for owner, document in core.shard_documents.items():
+            counts[owner] = len(document.get("modules", {}))
+        return counts
+
+    for name in modules:
+        owner = core.module_owners.get(name)
+        if owner in counts:
+            counts[owner] += 1
+    return counts
+
+
+def _assign_module_owners(core, modules):
+    """Resolve explicit Markdown ownership or preserve the existing shard owner."""
+    known_owners = set(core.shard_documents)
+    has_sub_maps = bool(core.shard_documents.get("root", {}).get("sub_maps"))
+
+    for name, module in modules.items():
+        explicit_owner = module.get("sub_map")
+        existing_owner = core.module_owners.get(name)
+
+        if explicit_owner is not None:
+            if explicit_owner not in known_owners:
+                raise ValueError(
+                    f"模組 {name} 指定不存在的 Sub Map scope: {explicit_owner}"
+                )
+            owner = explicit_owner
+        elif existing_owner is not None:
+            owner = existing_owner
+        elif has_sub_maps:
+            raise ValueError(
+                f"存在 sub_maps 時，全新模組 {name} 必須明確指定 Sub Map: root|<scope>"
+            )
+        else:
+            owner = "root"
+
+        core.module_owners[name] = owner
+
+
 def main():
     md_path = "system_map.md"
     yaml_path = "system_map.yaml"
@@ -40,8 +82,19 @@ def main():
             
     # 2. 智慧狀態合併
     # 讀取舊的 YAML (若存在)
-    core = ADADCore(yaml_path, check_validity=False)
+    try:
+        core = ADADCore(yaml_path, check_validity=False)
+    except Exception as e:
+        print(json.dumps({"success": False, "error": f"載入既有架構 IR 失敗: {e}"}, ensure_ascii=False))
+        sys.exit(1)
     old_modules = core.data.get("modules", {})
+    shard_counts_before = _shard_module_counts(core)
+
+    try:
+        _assign_module_owners(core, compiled_data.get("modules", {}))
+    except ValueError as e:
+        print(json.dumps({"success": False, "error": str(e)}, ensure_ascii=False))
+        sys.exit(1)
     
     for mod_name, mod_info in compiled_data.get("modules", {}).items():
         # 如果舊 YAML 存在該模組
@@ -88,7 +141,12 @@ def main():
 
     # 3.5 Draft Debt Ledger 偵測
     debt_result = core.check_draft_debt()
-    core.save()
+    shard_counts_after = _shard_module_counts(core, core.data["modules"])
+    try:
+        core.save()
+    except Exception as e:
+        print(json.dumps({"success": False, "error": f"分區寫入架構 IR 失敗: {e}"}, ensure_ascii=False))
+        sys.exit(1)
     
     # 強制確保 system_map.yaml 的修改時間稍微新於 system_map.md (大於 1.5 秒)
     # 這能確保編譯後 read_context 不會被過期阻斷判定誤導
@@ -252,7 +310,11 @@ def main():
         "untracked_symbols": untracked,
         "high_complexity_missing_algorithm": high_complexity_missing_algorithm,
         "precommit_hook_installed": hook_status["hook_installed"],
-        "unbound_source_modules": binding_result["unbound"]
+        "unbound_source_modules": binding_result["unbound"],
+        "shard_module_counts": {
+            "before": shard_counts_before,
+            "after": shard_counts_after,
+        }
     }, ensure_ascii=False, indent=2))
     sys.exit(0)
 

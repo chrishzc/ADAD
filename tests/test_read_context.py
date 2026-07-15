@@ -43,3 +43,54 @@ def test_read_context_missing_node_name_arg(project_dir, base_modules):
     code, data, out, err = run_script("read_context.py", [], cwd=project_dir)
     assert code == 1
     assert "error" in data
+
+
+def test_read_context_missing_references_are_structured_warnings(project_dir, base_modules):
+    base_modules["modules"]["sample_tool"]["decisions"] = ["ADR-MISSING"]
+    base_modules["modules"]["sample_tool"]["preferred_pattern"] = "missing-pattern"
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("read_context.py", ["sample_tool"], cwd=project_dir)
+
+    assert code == 0, err
+    assert "decisions_summary" not in data["target_node"]
+    assert "preferred_pattern_summary" not in data["target_node"]
+    assert data["context_warnings"] == [
+        {
+            "kind": "missing_reference",
+            "reference_type": "decision",
+            "reference_id": "ADR-MISSING",
+            "error": "決策文件不存在",
+        },
+        {
+            "kind": "missing_reference",
+            "reference_type": "pattern",
+            "reference_id": "missing-pattern",
+            "error": "模式說明文件不存在",
+        },
+    ]
+
+
+def test_read_context_successful_references_do_not_emit_warnings(project_dir, base_modules):
+    adr_dir = project_dir / "docs" / "adr"
+    pattern_dir = project_dir / "docs" / "patterns"
+    adr_dir.mkdir(parents=True)
+    pattern_dir.mkdir(parents=True)
+    (adr_dir / "ADR-OK.md").write_text(
+        "# Accepted ADR\n\n## Status\nAccepted\n\n## Decision\nKeep it small.\n",
+        encoding="utf-8",
+    )
+    (pattern_dir / "safe-pattern.md").write_text(
+        "# Safe Pattern\n\n## Description\nSafe.\n\n## Rules\nValidate input.\n",
+        encoding="utf-8",
+    )
+    base_modules["modules"]["sample_tool"]["decisions"] = ["ADR-OK"]
+    base_modules["modules"]["sample_tool"]["preferred_pattern"] = "safe-pattern"
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("read_context.py", ["sample_tool"], cwd=project_dir)
+
+    assert code == 0, err
+    assert data["context_warnings"] == []
+    assert data["target_node"]["decisions_summary"]
+    assert data["target_node"]["preferred_pattern_summary"].startswith("Safe Pattern")

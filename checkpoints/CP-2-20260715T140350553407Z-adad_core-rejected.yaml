@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260715T140350553407Z-adad_core
+  phase: 2
+  timestamp: '2026-07-15T14:03:50.553407+00:00'
+  triggered_by: human
+  status: rejected
+  target:
+    node_name: adad_core
+    task_id: adad_core@v17@882467
+    system_map_version: 17
+    source_hash: 8824678028cd89842c0daeab79b648fa13cbd56b4979d71de11f73343c0e5b59
+  decision:
+    action: rejected
+    reviewer: chris
+    comment: 驗證 module.sub_map 必須符合實際 owner scope；拒絕 ghost 或錯誤 root 宣告

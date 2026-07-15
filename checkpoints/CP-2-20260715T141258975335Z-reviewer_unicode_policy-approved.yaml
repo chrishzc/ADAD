@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260715T141258975335Z-reviewer_unicode_policy
+  phase: 2
+  timestamp: '2026-07-15T14:12:58.975335+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: reviewer_unicode_policy
+    task_id: reviewer_unicode_policy@v17@982c73
+    system_map_version: 17
+    source_hash: 982c731511dafea3714d36bf55b8d64fe88d65b23f54c24c0c00e0591a05dab6
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''
