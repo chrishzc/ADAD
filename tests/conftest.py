@@ -40,6 +40,28 @@ SCRIPTS_DIR = (
     / "scripts"
 )
 
+CI_EVENT_ENV_VARS = {
+    "CI",
+    "GITHUB_ACTIONS",
+    "GITHUB_BASE_REF",
+    "GITHUB_HEAD_REF",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_PATH",
+    "GITHUB_REF",
+    "GITHUB_REF_NAME",
+    "GITHUB_SHA",
+}
+
+
+def workflow_test_harness(inherited_environment, explicit_env_overrides=None):
+    """建立隔離外層 CI event context、但允許測試明確 opt-in 的子程序環境。"""
+    child_environment = dict(inherited_environment)
+    for name in CI_EVENT_ENV_VARS:
+        child_environment.pop(name, None)
+    child_environment.update(explicit_env_overrides or {})
+    child_environment["PYTHONIOENCODING"] = "utf-8"
+    return child_environment
+
 
 def script_path(name):
     """回傳 scripts/ 目錄下某支腳本的絕對路徑，找不到就直接讓測試失敗並給出清楚訊息。"""
@@ -60,8 +82,7 @@ def run_script(name, args=None, cwd=None, input_text=None, env=None):
         （這正好用來驗證 adad_task.py approve/reject 的「非 tty 一律拒絕」邏輯）。
     """
     cmd = [sys.executable, script_path(name)] + (args or [])
-    env_vars = env.copy() if env else os.environ.copy()
-    env_vars["PYTHONIOENCODING"] = "utf-8"
+    env_vars = workflow_test_harness(os.environ, env)
     proc = subprocess.run(
         cmd,
         cwd=cwd,

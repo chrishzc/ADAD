@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 14
+- Version: 16
 - Status: planning
 
 ## Environment
@@ -157,7 +157,7 @@
 ##### Module: adad_core
 - Type: library
 - Observability: not_required
-- Description: #61 Verification 子程序隔離；移除外層 Git hook/worktree 的 repo-scoped 環境，避免巢狀測試誤用外層 index。
+- Description: #61 Verification 子程序隔離；#66 context 匯出不得把缺少參考文件的載入錯誤混入 coding payload。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
 - Preferred Pattern: none
 - Complexity: medium
@@ -166,23 +166,31 @@
   - 移除 GIT_DIR、GIT_WORK_TREE、GIT_INDEX_FILE、GIT_COMMON_DIR、GIT_OBJECT_DIRECTORY、GIT_ALTERNATE_OBJECT_DIRECTORIES、GIT_PREFIX 與 GIT_IMPLICIT_WORK_TREE。
   - 保留 PATH、認證與非 repo-routing 環境，並將清理後環境傳入 subprocess。
   - 測試模擬 linked worktree hook 的外層 index，驗證子程序依 cwd 使用內層 repo，且外層 index 不變。
-- Decisions: [隔離責任放在通用 Verification runner；只移除 repo-routing Git 變數；不得修改或清空外層 index；本 Task 不修改 pre-commit]
+  - read_context 只在 ADR／Pattern 成功載入時輸出 summary；缺檔不得寫入 target_node，改在 context_warnings 追加固定 entry。
+  - 每個 warning entry 固定為 {kind: missing_reference, reference_type: decision|pattern, reference_id: string, error: string}；每個載入失敗各一筆。
+- Decisions: [隔離責任放在通用 Verification runner；只移除 repo-routing Git 變數；缺少參考文件是規劃端 warning，不是 coding 規格；不得修改或清空外層 index；本 Task 不修改 pre-commit]
 - Invariants: []
 - Verification:
   - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_verify_implementation.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_read_context.py", "-q", "--basetemp", "{workspace}/pytest-context"], "cwd": "project", "expect_exit": 0}
 - Observability: not_required
 - Dependencies: []
 - Input:
   - verification_command: object
   - inherited_environment: object
+  - node_name: string
 - Output:
   - command_result: object
   - sanitized_environment: object
+  - context: object
+  - context_warnings: array
 - Retry Budget: 2
 - TODO:
   - [ ] #61：隔離 linked-worktree hook 的 Git repo 環境
+  - [ ] #66：參考文件缺失改為結構化 warning，不污染 Task context
 - Checkpoint:
   - [x] CP-1-061-CORE (validated：2026-07-15 medium Task 直接核發)
+  - [x] CP-1-066-CONTEXT (validated：2026-07-15 人工核准核發)
 
 ##### Module: task_snapshot_schema
 - Type: schema

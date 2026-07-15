@@ -67,6 +67,10 @@ New-Item -ItemType Junction -Path "$release\.venv" -Target "<ADAD_REPO>\.venv"
 
 linked worktree 的 commit hook 可能把 `GIT_INDEX_FILE`、`GIT_DIR`、`GIT_WORK_TREE` 等 repo-scoped `GIT_*` 傳給 Verification 子程序。Verification runner 必須清除這些變數，讓子程序依自己的 `cwd` 找 Git repo；不可直接繼承 release index。
 
+巢狀 pytest 建立臨時 Git repo 時，也不得預設繼承外層 job 的 `CI`、`GITHUB_ACTIONS`、`GITHUB_BASE_REF`、`GITHUB_HEAD_REF`、`GITHUB_EVENT_NAME`、`GITHUB_EVENT_PATH`、`GITHUB_REF`、`GITHUB_REF_NAME`、`GITHUB_SHA`。測試 harness 應保留一般環境，但預設移除上述 event context；只有測試明確傳入 override 時才能 opt-in。否則臨時 repo 可能誤走 CI diff，並在沒有 parent commit 時把 `HEAD~1` 當成有效 revision。
+
+最小重現與驗收：在外層設定 `CI=true`、空的 `GITHUB_BASE_REF`，於只有初始 commit 的臨時 repo 執行 pre-commit 測試；預設隔離必須成功，明確 opt-in 測試則必須看得到指定的 CI context。完成本機 pytest 後仍須確認同一 release commit 的 GitHub Actions 成功；本機通過不能取代 Actions 驗收。
+
 執行完整驗證與正常提交：
 
 ```powershell
@@ -129,7 +133,7 @@ Pop-Location
 2. 只修正已確認的單一原因，重跑原失敗指令及必要 gate。
 3. 第 2 次仍失敗即停止，保留 diff、index、worktree 與 Actions run ID，建立 Task／Checkpoint，不再試錯。
 
-常見檢查順序：Junction 與 Python 路徑 → release index 假檔 → repo-scoped `GIT_*` 洩漏 → `GITHUB_BASE_REF` 空值與 fetch depth → Actions 日誌。
+常見檢查順序：Junction 與 Python 路徑 → release index 假檔 → repo-scoped `GIT_*` 洩漏 → 巢狀測試繼承外層 CI event context → `GITHUB_BASE_REF` 空值與 fetch depth → Actions 日誌。
 
 ## 7. 清理
 
