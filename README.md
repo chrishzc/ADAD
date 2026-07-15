@@ -139,15 +139,12 @@ ADAD/                # ← repo 根目錄，pip install . 要在這裡執行
 │               ├── transit_state.py
 │               ├── verify_implementation.py # 實作校驗器 (驗證 Verification 條件如斷言)
 │               └── check_invariants.py # Invariants 校驗器 (驗證靜態 AST 導入約束)
-├── checkpoints/                   # Checkpoint 決策歷史存檔目錄 (CP-X-XXX.yaml)
-├── system_map.md                  # 專案架構唯一事實來源 (SSOT - Architecture Source)
-├── system_map.yaml                # 專案架構中間表示檔 (SSOT - Architecture IR)
 └── README.md                      # 本說明文件
 ```
 
-> 💡 `.agents/` 是這個 repo「自己開發自己」時用的 ADAD 專案結構（dogfooding）；
-> `adad_cli/resources/agents/` 則是**打包進 `adad` 套件、會被複製到其他專案**的版本。
-> 兩者內容一致，只是用途不同——一個是「本 repo 自舉」，一個是「發佈給別人用」。
+> 💡 `.agents/`、`adad_source/agents/` 與 `adad_cli/resources/agents/` 是發行套件的 Agent 資產來源；
+> `adad init` 會將所需版本複製到使用 ADAD 的目標專案。目標專案自己的
+> `system_map.md`／`system_map.yaml`／`checkpoints/` 不納入此發行分支。
 
 ---
 ## 🚀 快速上手
