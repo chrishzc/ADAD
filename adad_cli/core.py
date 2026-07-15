@@ -915,8 +915,12 @@ def _write_project_pre_commit_hook(project_root: str, hook_src: str) -> dict:
 
     hook_dst = os.path.join(git_dir, "hooks", "pre-commit")
     python_path = _project_venv_python(project_root)
+    # Git hooks are always interpreted by /bin/sh, including Git for Windows.
+    # Shell paths must therefore use forward slashes rather than cmd.exe paths.
+    shell_python_path = python_path.replace("\\", "/")
+    shell_hook_src = hook_src.replace("\\", "/")
     hook_content = f"""#!/bin/sh
-"{python_path}" "{hook_src}"
+"{shell_python_path}" "{shell_hook_src}"
 """
 
     old_content = None
@@ -1012,4 +1016,3 @@ def _ensure_project_virtual_environment(project_root: str) -> dict:
         "legacy_venv_detected": legacy_venv_detected,
         "path": os.path.normpath(dot_venv_path)
     }
-
