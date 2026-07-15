@@ -1,4 +1,4 @@
-version: 14
+version: 17
 modules:
   sync_adad_assets:
     type: tool
@@ -226,8 +226,8 @@ modules:
     - main
   adad_core:
     type: library
-    description: '#61 Verification 子程序隔離；移除外層 Git hook/worktree 的 repo-scoped 環境，避免巢狀測試誤用外層
-      index。'
+    description: '#61 Verification 環境隔離；#66 context warning；#69 提供 YAML sub_maps 合成讀取、owner
+      追蹤與分圖安全儲存。'
     source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
     domain: ADAD_Workflow
     subsystem: Core_Engine
@@ -236,9 +236,15 @@ modules:
     input:
       verification_command: object
       inherited_environment: object
+      node_name: string
     output:
       command_result: object
       sanitized_environment: object
+      context: object
+      context_warnings: array
+      composite_modules: object
+      module_owners: object
+      parsed_sub_map: string
     exceptions: []
     invariants: []
     preferred_pattern: none
@@ -254,13 +260,39 @@ modules:
         - '{workspace}/pytest'
         cwd: project
         expect_exit: 0
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_read_context.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-context'
+        cwd: project
+        expect_exit: 0
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_sub_maps.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-submaps'
+        cwd: project
+        expect_exit: 0
     decisions:
-    - 隔離責任放在通用 Verification runner；只移除 repo-routing Git 變數；不得修改或清空外層 index；本 Task
-      不修改 pre-commit
+    - 隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份
+      dump root；owner 不明時禁止猜測
     todo:
     - '[ ] #61：隔離 linked-worktree hook 的 Git repo 環境'
+    - '[ ] #66：參考文件缺失改為結構化 warning，不污染 Task context'
+    - '[ ] #69：YAML sub_maps 合成載入與 owner-aware save'
     checkpoint:
     - '[x] CP-1-061-CORE (validated：2026-07-15 medium Task 直接核發)'
+    - '[x] CP-1-066-CONTEXT (validated：2026-07-15 人工核准核發)'
+    - '[x] CP-1-069-SUBMAP-CORE (validated：2026-07-15 人工要求解決)'
     observability:
       mode: not_required
       signals: []
@@ -271,6 +303,21 @@ modules:
       與 GIT_IMPLICIT_WORK_TREE。
     - 保留 PATH、認證與非 repo-routing 環境，並將清理後環境傳入 subprocess。
     - 測試模擬 linked worktree hook 的外層 index，驗證子程序依 cwd 使用內層 repo，且外層 index 不變。
+    - read_context 只在 ADR／Pattern 成功載入時輸出 summary；缺檔不得寫入 target_node，改在 context_warnings
+      追加固定 entry。
+    - '每個 warning entry 固定為 {kind: missing_reference, reference_type: decision|pattern,
+      reference_id: string, error: string}；每個載入失敗各一筆。'
+    - 載入 root YAML 的 sub_maps mapping；每個值只能是 project root 內的相對 YAML 路徑，遞迴解析並阻斷 missing、cycle、path
+      traversal。
+    - 合併 root 與 child modules 給讀取端，模組名稱必須全域唯一；同時記錄每個 module 的 owner shard 與原始 shard
+      document。
+    - save 依 owner 把模組寫回原 shard；root metadata/sub_maps 只留在 root。存在 sub_maps 時，沒有 owner
+      的新模組一律 fail-fast。
+    - IR validity 同時比較 root Markdown、root YAML 與所有 child YAML 的 mtime；任何 child 變更都不得被忽略。
+    - parse_markdown 辨識模組欄位 `Sub Map`，去除前後空白後以 `sub_map` 輸出；空值立即拒絕，scope 是否存在交由 compile_map
+      驗證。
+    - 載入既有 YAML 時，若 module 宣告 sub_map，必須等於實際 shard owner（root 或對應 scope）；ghost scope
+      或 owner 不一致立即拒絕。未宣告 sub_map 的舊 IR 保持相容。
     idempotency:
       level: unknown
       side_effects: []
@@ -279,7 +326,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     state: validated
-    fan_in_snapshot: 12
+    fan_in_snapshot: 13
     known_symbols:
     - ADADCore.__init__
     - ADADCore._acquire_source_lock
@@ -461,8 +508,8 @@ modules:
     - normalize_markdown_source
   compile_map:
     type: tool
-    description: 將 system_map.md（含 include 分區地圖）編譯為機讀 IR system_map.yaml，並執行智慧狀態合併（結構未變沿用舊狀態、結構有變標記
-      dirty）與 Draft Debt Ledger 偵測。
+    description: '#70 將 Markdown 編譯結果依既有 owner 或明確 Sub Map 分流寫回 root/child YAML，禁止把所有節點膨脹進
+      root。'
     source: adad_source/agents/skills/adad-workflow/scripts/compile_map.py
     domain: ADAD_Workflow
     subsystem: Core_Engine
@@ -475,28 +522,50 @@ modules:
       result: object
     exceptions: []
     invariants: []
-    preferred_pattern: none
-    verification: []
-    decisions: []
+    preferred_pattern: explicit_contract
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_compile_sub_maps.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-compile-submaps'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - Markdown include 是來源拆檔；YAML sub_maps 是 IR ownership，兩者不可混為同一欄位；既有 owner 優先；新節點必須明示
+      root 或 scope
     todo:
     - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    - '[ ] #70：依 owner 分流編譯並防止 root map 膨脹'
     checkpoint:
     - '[ ] CP-1-006 (planned)'
+    - '[x] CP-1-070-SUBMAP-COMPILE (validated：2026-07-15 人工要求解決)'
     observability:
       mode: not_required
       signals: []
-    complexity: low
-    algorithm: []
+    complexity: medium
+    algorithm:
+    - 透過 adad_core 載入 root 與所有 sub_maps，取得舊模組、owner 與 shard registry。
+    - 'parse_markdown 支援模組欄位 `Sub Map: root|<scope>`；既有模組未宣告時沿用舊 owner。'
+    - 存在 sub_maps 時，全新模組若沒有明確 Sub Map、scope 不存在或跨 shard 重名，立即阻斷，不得猜測。
+    - 完成狀態合併後交由 owner-aware save 分別寫回各 shard，保留 root sub_maps 與每個 shard自有 metadata。
+    - 編譯前後輸出各 shard module_count；重複編譯必須保持 root/child count，不得把 child modules 寫入 root。
     idempotency:
       level: unknown
       side_effects: []
-    retry_budget: 0
+    retry_budget: 2
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: planned
-    fan_in_snapshot: 3
+    state: validated
+    fan_in_snapshot: 4
     known_symbols:
+    - _assign_module_owners
+    - _shard_module_counts
     - main
   generate_task:
     type: tool
@@ -794,9 +863,10 @@ modules:
     forbidden_context: []
     context_priority: {}
     state: validated
-    fan_in_snapshot: 2
+    fan_in_snapshot: 3
     known_symbols:
     - _bounded_verification_diagnostics
+    - _get_diff_target
     - build_source_to_module_map
     - check_atomic_scope
     - check_dangling_dependencies
@@ -1144,6 +1214,246 @@ modules:
     context_priority: {}
     state: deployed
     fan_in_snapshot: 0
+  workflow_test_harness:
+    type: test_harness
+    description: '#64 隔離測試子程序與外層 GitHub Actions event context，避免臨時 Git repo 誤走 CI
+      diff 路徑。'
+    source: tests/conftest.py
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - adad_pre_commit
+    input:
+      inherited_environment: object
+      explicit_env_overrides: object
+    output:
+      child_environment: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: hermetic_test_harness
+    verification:
+    - case:
+        input:
+          inherited_environment:
+            CI: 'true'
+            GITHUB_BASE_REF: ''
+            PATH: bin
+          explicit_env_overrides: {}
+        expect:
+          PATH: bin
+          PYTHONIOENCODING: utf-8
+    - case:
+        input:
+          inherited_environment:
+            CI: 'true'
+            PATH: bin
+          explicit_env_overrides:
+            CI: 'true'
+            GITHUB_BASE_REF: main
+        expect:
+          CI: 'true'
+          GITHUB_BASE_REF: main
+          PATH: bin
+          PYTHONIOENCODING: utf-8
+    decisions: []
+    todo:
+    - '[ ] #64：隔離外層 CI event context，保留明確 opt-in'
+    checkpoint:
+    - '[x] CP-1-064-HARNESS (validated：2026-07-15 人工核准)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 以目前程序環境為基礎建立 child environment，保留 PATH、PYTHONPATH 與一般執行環境。
+    - 預設移除外層 CI/GitHub event control variables，包含 CI、GITHUB_ACTIONS、GITHUB_BASE_REF、GITHUB_HEAD_REF、GITHUB_EVENT_NAME、GITHUB_EVENT_PATH、GITHUB_REF、GITHUB_REF_NAME、GITHUB_SHA。
+    - 最後套用呼叫者明確傳入的 env overrides，使個別測試可刻意 opt-in CI context。
+    - 固定 PYTHONIOENCODING=utf-8，再將環境交給 subprocess。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols:
+    - base_modules
+    - make_module
+    - project_dir
+    - read_yaml
+    - run_script
+    - script_path
+    - workflow_test_harness
+    - write_yaml
+  verification_absence_contract:
+    type: function
+    description: '#67 以明確欄位表達 Verification 預期鍵不存在，禁止再以 null 猜測刪除語意。'
+    source: adad_cli/workflow/verification_absence_contract.py::validate_verification_absence_contract
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      verification_case: object
+    output:
+      normalized_case: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [yaml, subprocess, os]'
+    preferred_pattern: pure_function
+    verification:
+    - case:
+        input:
+          verification_case:
+            expect:
+              CI: null
+            expect_absent_keys:
+            - GITHUB_BASE_REF
+        expect:
+          expect:
+            CI: null
+          expect_absent_keys:
+          - GITHUB_BASE_REF
+    - case:
+        input:
+          verification_case:
+            expect:
+              CI: null
+            expect_absent_keys:
+            - CI
+        expect_exception: ValueError
+    - case:
+        input:
+          verification_case:
+            expect_absent_keys:
+            - ''
+        expect_exception: ValueError
+    - case:
+        input:
+          verification_case:
+            expect_absent_keys:
+            - CI
+            - CI
+        expect_exception: ValueError
+    decisions: []
+    todo:
+    - '[ ] #67：建立鍵不存在的明確 Verification 契約'
+    checkpoint:
+    - '[x] CP-1-067-ABSENCE (validated：2026-07-15 人工核准核發)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 複製輸入 case；未宣告 expect_absent_keys 時維持既有 Verification 語意。
+    - expect_absent_keys 必須是由非空字串組成且不得重複的陣列。
+    - 若同一路徑同時出現在 expect 與 expect_absent_keys，立即拒絕，因 null 是值而不是不存在。
+    - 回傳正規化的新 case，不修改輸入、不執行 Verification。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+  reviewer_unicode_policy:
+    type: documentation
+    description: '#68 Reviewer 判定編碼異常前必須以 strict UTF-8 bytes、replacement character
+      與 JSON read-back 提供證據。'
+    source: adad_source/agents/AGENTS.md
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      review_artifact: file
+    output:
+      reviewer_unicode_decision: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: evidence_based_review
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] #68：補齊 Reviewer Unicode 證據與撤回規則'
+    checkpoint:
+    - '[x] CP-1-068-REVIEW (validated：2026-07-15 人工核准核發)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+  sub_map_schema:
+    type: schema
+    description: '#71 正式定義 root YAML 的 sub_maps mapping 與模組 Sub Map ownership 欄位。'
+    source: adad_source/templates/system_map.schema.json
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - adad_core
+    - compile_map
+    input:
+      root_ir: object
+    output:
+      validated_sub_map_contract: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: schema_contract
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_sub_map_schema.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-submap-schema'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 不以 additionalProperties 靜默接受 sub_maps；不要求 child shard 具備完整 root environment/domains；runtime
+      path safety 不能只靠 JSON Schema
+    todo:
+    - '[ ] #71：補齊 sub_maps 與 owner schema'
+    checkpoint:
+    - '[x] CP-1-071-SUBMAP-SCHEMA (validated：2026-07-15 人工要求解決)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - root sub_maps 必須是 scope 到非空相對 YAML 路徑的 object mapping，不接受 array。
+    - module.sub_map 必須是非空字串，值為 root 或 root sub_maps 已宣告的 scope；跨欄位 scope 驗證由 loader
+      執行。
+    - 保持沒有 sub_maps 的既有 flat IR 完全相容。
+    - schema 只處理結構；absolute、path traversal、cycle、missing 與 duplicate module 由 adad_core
+      fail-fast。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols: []
   environment_contract:
     type: schema
     description: 將 environment 宣告納入 Markdown parser、IR schema 與編譯 gate（#3）。
@@ -2039,8 +2349,8 @@ modules:
     fan_in_snapshot: 0
   release_sop:
     type: documentation
-    description: '#63 將 main release worktree、Git 環境隔離、index 污染復原、CI push base 與發布後
-      Actions 驗證整理為可重複執行的發佈契約。'
+    description: '#65 整理 CI/linked-worktree 發布契約；#72 新增 sub_maps root-count、upgrade
+      與外部專案驗收。'
     source: docs/RELEASE_SOP.md
     domain: ADAD_Roadmap
     subsystem: Product_Delivery
@@ -2058,11 +2368,15 @@ modules:
     preferred_pattern: documentation_as_contract
     verification: []
     decisions:
-    - release worktree 必須從 origin/main 建立；禁止 no-verify；失敗經驗必須形成前置檢查或復原步驟
+    - release worktree 必須從 origin/main 建立；sub_maps 發布必須驗證 root/child count 不變、FinanceImport
+      可查與 upgrade 後不膨脹；禁止 no-verify；Actions 成功後才更新本機
     todo:
-    - '[ ] #63：補齊 linked-worktree、CI push 與發布後驗證 SOP'
+    - '[ ] #65：補齊巢狀臨時 repo 的 CI event context 隔離 SOP'
+    - '[ ] #72：補齊 sub_maps 發布、安裝與外部專案 upgrade 驗收'
     checkpoint:
     - '[x] CP-1-063-SOP (validated：2026-07-15 人工核准納入發布經驗)'
+    - '[x] CP-1-065-SOP (validated：2026-07-15 人工核准納入巢狀 CI 經驗)'
+    - '[x] CP-1-072-SUBMAP-RELEASE (validated：2026-07-15 人工要求更新本機版本)'
     observability:
       mode: not_required
       signals: []

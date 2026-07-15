@@ -61,6 +61,16 @@
         }
       }
     },
+    "sub_maps": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "type": "string", "minLength": 1 },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "可選的 Sub Map 宣告，key 是 scope，value 是非空 YAML 相對路徑。路徑安全、檔案存在、循環與 ownership 衝突由 loader 驗證。"
+    },
     "modules": {
       "type": "object",
       "description": "所有 Module 節點，key 是全域唯一的模組名稱。",
@@ -134,6 +144,11 @@
         },
         "domain": { "type": ["string", "null"] },
         "subsystem": { "type": ["string", "null"] },
+        "sub_map": {
+          "type": "string",
+          "minLength": 1,
+          "description": "模組所屬的 Sub Map scope；省略代表 root。scope 是否存在由 loader 依 root sub_maps 宣告驗證。"
+        },
         "map_file": {
           "type": "string",
           "description": "這個 Module 節點實際寫在哪個實體 .md 檔案。"

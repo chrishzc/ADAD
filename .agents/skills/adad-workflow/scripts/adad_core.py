@@ -423,6 +423,14 @@ def parse_markdown(md_content):
                     data["modules"][current_module][current_section].append(sub_content)
             continue
             
+        # `Sub Map` 是單值 ownership 欄位，不是可開啟的巢狀清單。
+        # 空值若落入一般 list-header 分支會被靜默接受，造成 compile_map
+        # 後續只能猜測 owner，因此在這裡直接 fail-fast。
+        if re.match(r'^-\s*Sub\s+Map\s*:\s*$', line_strip, re.IGNORECASE):
+            raise ValueError(
+                f"編譯失敗：模組 '{current_module}' 的 Sub Map 不得為空。"
+            )
+
         lh_match = list_header_regex.match(line_strip)
         if lh_match:
             current_section = lh_match.group(1).strip().lower().replace(" ", "_")
@@ -443,6 +451,14 @@ def parse_markdown(md_content):
                 data["modules"][current_module]["description"] = val
             elif key == "source":
                 data["modules"][current_module]["source"] = val
+            elif key == "sub_map":
+                if not val:
+                    raise ValueError(
+                        f"編譯失敗：模組 '{current_module}' 的 Sub Map 不得為空。"
+                    )
+                # scope 存在性由 compile_map 對 root sub_maps registry 驗證；
+                # parser 只負責保真解析與空值門禁。
+                data["modules"][current_module]["sub_map"] = val
             elif key == "preferred_pattern":
                 data["modules"][current_module]["preferred_pattern"] = val
             elif key == "complexity":
@@ -637,6 +653,9 @@ class ADADCore:
             if project_root is not None
             else os.path.dirname(os.path.abspath(os.fspath(map_path)))
         )
+        self.module_owners = {}
+        self.shard_documents = {}
+        self.shard_paths = {}
         self.data = self._load_map()
         if check_validity:
             valid_res = self.check_ir_validity()
@@ -645,7 +664,7 @@ class ADADCore:
                 sys.exit(1)
 
     def check_ir_validity(self):
-        md_path = "system_map.md"
+        md_path = os.path.join(self.project_root, "system_map.md")
         yaml_path = self.map_path
         
         if os.path.exists(md_path):
@@ -664,32 +683,177 @@ class ADADCore:
                     "valid": False,
                     "error": f"架構源檔案 ({md_path} 或其包含的子檔案) 已更新，但 IR ({yaml_path}) 已過期。請重新執行編譯：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
+
+        if os.path.exists(yaml_path):
+            yaml_mtime = os.path.getmtime(yaml_path)
+            newer_children = [
+                path for owner, path in self.shard_paths.items()
+                if owner != "root" and os.path.getmtime(path) > yaml_mtime
+            ]
+            if newer_children:
+                changed = ", ".join(
+                    os.path.relpath(path, self.project_root) for path in newer_children
+                )
+                return {
+                    "valid": False,
+                    "error": f"子架構 IR ({changed}) 比 root IR ({yaml_path}) 新，請重新執行編譯。"
+                }
                 
         return {"valid": True}
 
 
     def _load_map(self):
-        if not os.path.exists(self.map_path):
+        root_path = os.path.realpath(os.path.abspath(os.fspath(self.map_path)))
+        if not os.path.exists(root_path):
+            self.shard_paths["root"] = root_path
+            self.shard_documents["root"] = {"version": 1, "modules": {}}
             return {"version": 1, "modules": {}}
-        with open(self.map_path, "r", encoding="utf-8") as f:
+
+        composite = None
+        loading = []
+        loaded_paths = {}
+
+        def load_yaml(path):
             try:
-                # ponytail-fix: 優先用 C 擴充套件版的 CSafeLoader（若環境有裝
-                # libyaml 綁定），純 Python 版 SafeLoader 在模組數一多會明顯變慢
-                # （實測 2000 模組規模下差距可達數倍）。沒有 libyaml 時優雅退回
-                # 純 Python 版，行為完全不變，只是速度快慢的差異。
-                try:
-                    from yaml import CSafeLoader as _Loader
-                except ImportError:
-                    _Loader = yaml.SafeLoader
-                content = yaml.load(f, Loader=_Loader)
-                return content if content else {"version": 1, "modules": {}}
-            except Exception as e:
-                print(f"[ADAD ERROR] 解析 {self.map_path} 失敗: {e}")
-                sys.exit(1)
+                from yaml import CSafeLoader as loader
+            except ImportError:
+                loader = yaml.SafeLoader
+            try:
+                with open(path, "r", encoding="utf-8") as stream:
+                    document = yaml.load(stream, Loader=loader)
+            except FileNotFoundError:
+                raise FileNotFoundError(
+                    f"找不到 sub_maps 檔案: {os.path.relpath(path, self.project_root)}"
+                )
+            except Exception as exc:
+                raise ValueError(f"解析 {path} 失敗: {exc}") from exc
+            if document is None:
+                document = {"modules": {}}
+            if not isinstance(document, dict):
+                raise ValueError(f"架構 IR 必須是 mapping: {path}")
+            if not isinstance(document.get("modules", {}), dict):
+                raise ValueError(f"modules 必須是 mapping: {path}")
+            sub_maps = document.get("sub_maps", {})
+            if not isinstance(sub_maps, dict):
+                raise ValueError(f"sub_maps 必須是 mapping: {path}")
+            return document
+
+        def resolve_child_path(raw_path):
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("sub_maps 路徑必須是非空相對字串")
+            candidate = raw_path.strip()
+            if os.path.isabs(candidate):
+                raise ValueError(f"sub_maps 禁止絕對路徑: {candidate}")
+            if os.path.splitext(candidate)[1].lower() not in {".yaml", ".yml"}:
+                raise ValueError(f"sub_maps 只允許 YAML 路徑: {candidate}")
+            resolved = os.path.realpath(os.path.join(self.project_root, candidate))
+            try:
+                within_root = os.path.commonpath([self.project_root, resolved]) == self.project_root
+            except ValueError:
+                within_root = False
+            if not within_root:
+                raise ValueError(f"sub_maps 路徑超出 project root: {candidate}")
+            return resolved
+
+        def visit(path, owner):
+            nonlocal composite
+            path = os.path.realpath(path)
+            if path in loading:
+                chain = " -> ".join(
+                    os.path.relpath(item, self.project_root) for item in loading + [path]
+                )
+                raise ValueError(f"偵測到 sub_maps cycle: {chain}")
+            if path in loaded_paths:
+                raise ValueError(
+                    f"sub_maps 重複引用同一 shard: {os.path.relpath(path, self.project_root)}"
+                )
+            if owner in self.shard_documents:
+                raise ValueError(f"sub_maps scope 重複: {owner}")
+
+            loading.append(path)
+            document = load_yaml(path)
+            loaded_paths[path] = owner
+            self.shard_paths[owner] = path
+            self.shard_documents[owner] = copy.deepcopy(document)
+
+            if composite is None:
+                composite = copy.deepcopy(document)
+                composite["modules"] = {}
+
+            for name, module in document.get("modules", {}).items():
+                if not isinstance(module, dict):
+                    raise ValueError(f"模組內容必須是 mapping: {name}")
+                declared_owner = module.get("sub_map")
+                if declared_owner is not None and declared_owner != owner:
+                    raise ValueError(
+                        f"模組 {name} 宣告的 sub_map '{declared_owner}' 與實際 shard owner "
+                        f"'{owner}' 不一致"
+                    )
+                if name in composite["modules"]:
+                    previous = self.module_owners[name]
+                    raise ValueError(
+                        f"模組名稱跨 shard 重複: {name} ({previous}, {owner})"
+                    )
+                composite["modules"][name] = copy.deepcopy(module)
+                self.module_owners[name] = owner
+
+            for scope, raw_child_path in document.get("sub_maps", {}).items():
+                if not isinstance(scope, str) or not scope.strip() or scope == "root":
+                    raise ValueError(f"sub_maps scope 不合法: {scope!r}")
+                visit(resolve_child_path(raw_child_path), scope.strip())
+            loading.pop()
+
+        visit(root_path, "root")
+        return composite
 
     def save(self):
-        with open(self.map_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(self.data, f, allow_unicode=True, sort_keys=False)
+        modules = self.data.get("modules", {})
+        if not isinstance(modules, dict):
+            raise ValueError("modules 必須是 mapping")
+
+        has_sub_maps = bool(self.shard_documents.get("root", {}).get("sub_maps"))
+        grouped = {owner: {} for owner in self.shard_documents}
+        for name, module in modules.items():
+            owner = self.module_owners.get(name)
+            if owner is None:
+                if has_sub_maps:
+                    raise ValueError(f"新模組缺少 shard owner: {name}")
+                owner = "root"
+                self.module_owners[name] = owner
+            if owner not in grouped:
+                raise ValueError(f"模組 {name} 的 shard owner 不存在: {owner}")
+            grouped[owner][name] = copy.deepcopy(module)
+
+        documents = {}
+        for owner, original in self.shard_documents.items():
+            if owner == "root":
+                document = copy.deepcopy(self.data)
+            else:
+                document = copy.deepcopy(original)
+            document["modules"] = grouped[owner]
+            documents[owner] = document
+
+        temporary_files = {}
+        try:
+            # children 先 replace，root 最後 replace；root mtime 因此代表整組 IR 已完成。
+            order = [owner for owner in documents if owner != "root"] + ["root"]
+            for owner in order:
+                path = self.shard_paths[owner]
+                directory = os.path.dirname(path) or "."
+                fd, temp_path = tempfile.mkstemp(prefix=".adad-map-", suffix=".yaml", dir=directory)
+                temporary_files[owner] = temp_path
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    yaml.safe_dump(documents[owner], stream, allow_unicode=True, sort_keys=False)
+            for owner in order:
+                os.replace(temporary_files.pop(owner), self.shard_paths[owner])
+        finally:
+            for temp_path in temporary_files.values():
+                try:
+                    os.unlink(temp_path)
+                except FileNotFoundError:
+                    pass
+
+        self.shard_documents = {owner: copy.deepcopy(doc) for owner, doc in documents.items()}
 
     def get_node(self, node_name):
         return self.data.get("modules", {}).get(node_name)
@@ -861,7 +1025,8 @@ class ADADCore:
                 "complexity": node.get("complexity", "low"),
                 "algorithm": node.get("algorithm", [])
             },
-            "dependency_interfaces": {}
+            "dependency_interfaces": {},
+            "context_warnings": []
         }
 
         # 智慧裁剪決策摘要並寫入 Context
@@ -869,7 +1034,12 @@ class ADADCore:
         for adr_id in node.get("decisions", []):
             adr_info = self._extract_adr_summary(adr_id)
             if "error" in adr_info:
-                decisions_summary.append(f"{adr_id}: 決策檔案載入錯誤 - {adr_info['error']}")
+                context["context_warnings"].append({
+                    "kind": "missing_reference",
+                    "reference_type": "decision",
+                    "reference_id": str(adr_id),
+                    "error": str(adr_info["error"]),
+                })
             else:
                 decisions_summary.append(f"{adr_info['title']} (狀態: {adr_info['status']}) - 決策: {adr_info['decision']}")
         
@@ -881,7 +1051,12 @@ class ADADCore:
         if pattern_name:
             pat_info = self._extract_pattern_summary(pattern_name)
             if "error" in pat_info:
-                context["target_node"]["preferred_pattern_summary"] = f"{pattern_name}: 模式檔案載入錯誤 - {pat_info['error']}"
+                context["context_warnings"].append({
+                    "kind": "missing_reference",
+                    "reference_type": "pattern",
+                    "reference_id": str(pattern_name),
+                    "error": str(pat_info["error"]),
+                })
             else:
                 context["target_node"]["preferred_pattern_summary"] = f"{pat_info['title']} (說明: {pat_info['description']}) - 規範: {pat_info['rules']}"
 

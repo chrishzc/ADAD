@@ -20,6 +20,12 @@
    .venv\Scripts\python.exe -m pytest -q --basetemp .pytest-tmp-release
    ```
 
+   若本版涉及 `sub_maps`，另執行專項測試；必須證明 root／child 分開保存、`FinanceImport` 可由 root context 查得，且連續保存不會把 child 模組倒回 root：
+
+   ```powershell
+   .venv\Scripts\python.exe -m pytest tests\test_sub_maps.py -q
+   ```
+
 4. 若 gate 只報 `release_changelog` 或 `documentation_alignment` 的 Task 快照過期，重新核發後再跑 gate：
 
    ```powershell
@@ -67,6 +73,10 @@ New-Item -ItemType Junction -Path "$release\.venv" -Target "<ADAD_REPO>\.venv"
 
 linked worktree 的 commit hook 可能把 `GIT_INDEX_FILE`、`GIT_DIR`、`GIT_WORK_TREE` 等 repo-scoped `GIT_*` 傳給 Verification 子程序。Verification runner 必須清除這些變數，讓子程序依自己的 `cwd` 找 Git repo；不可直接繼承 release index。
 
+巢狀 pytest 建立臨時 Git repo 時，也不得預設繼承外層 job 的 `CI`、`GITHUB_ACTIONS`、`GITHUB_BASE_REF`、`GITHUB_HEAD_REF`、`GITHUB_EVENT_NAME`、`GITHUB_EVENT_PATH`、`GITHUB_REF`、`GITHUB_REF_NAME`、`GITHUB_SHA`。測試 harness 應保留一般環境，但預設移除上述 event context；只有測試明確傳入 override 時才能 opt-in。否則臨時 repo 可能誤走 CI diff，並在沒有 parent commit 時把 `HEAD~1` 當成有效 revision。
+
+最小重現與驗收：在外層設定 `CI=true`、空的 `GITHUB_BASE_REF`，於只有初始 commit 的臨時 repo 執行 pre-commit 測試；預設隔離必須成功，明確 opt-in 測試則必須看得到指定的 CI context。完成本機 pytest 後仍須確認同一 release commit 的 GitHub Actions 成功；本機通過不能取代 Actions 驗收。
+
 執行完整驗證與正常提交：
 
 ```powershell
@@ -104,7 +114,7 @@ push workflow 的 `GITHUB_BASE_REF` 可能存在但為空字串；hook 必須以
     fetch-depth: 0
 ```
 
-## 5. 發布 main、驗收 Actions 並更新本機
+## 5. 發布 main 並驗收 Actions
 
 ```powershell
 git -C $release push origin HEAD:main
@@ -112,16 +122,51 @@ git branch -f main origin/main
 
 gh run list --branch main --commit <RELEASE_COMMIT> --limit 5
 gh run view <RUN_ID> --exit-status
+```
 
+`gh run view --exit-status` 成功後才能安裝本機套件及執行外部專案 upgrade；不得用尚未通過 Actions 的 build 覆蓋本機工具。Actions 失敗時保留 release worktree 與日誌，建立修正 Task，不得宣告完成。
+
+## 6. 安裝本機版本與外部專案 upgrade 驗收
+
+先安裝已通過 Actions 的 release commit：
+
+```powershell
 Push-Location $release
 <ADAD_REPO>\.venv\Scripts\python.exe -m pip install --upgrade .
 <ADAD_REPO>\.venv\Scripts\adad.exe --version
 Pop-Location
 ```
 
-`gh run view --exit-status` 成功後才能宣告發布完成。Actions 失敗時保留 release worktree 與日誌，建立修正 Task，不得宣告完成。最後確認：GitHub `main` 指向 release commit、`adad --version` 顯示 `<VERSION>`、完整 pytest 與 Actions 均通過。
+不得直接拿使用者正在開發的專案試升級。從含 `sub_maps` 的外部專案建立乾淨副本 `<UPGRADE_COPY>`，確認 `git status --short` 為空：
 
-## 6. 最小故障排查
+```powershell
+git clone --local <EXTERNAL_REPO> <UPGRADE_COPY>
+git -C <UPGRADE_COPY> status --short
+```
+
+再記錄升級前資料：
+
+- root `system_map.yaml` 的 `modules` 數量。
+- 每個 child YAML 的 `modules` 數量與 root 的 `sub_maps` mapping。
+- `FinanceImport` 只存在於預期 child，不存在於 root `modules`。
+
+在乾淨副本執行：
+
+```powershell
+Push-Location <UPGRADE_COPY>
+<ADAD_REPO>\.venv\Scripts\adad.exe upgrade
+<ADAD_REPO>\.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\read_context.py FinanceImport
+<ADAD_REPO>\.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\compile_map.py
+<ADAD_REPO>\.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\compile_map.py
+git status --short
+Pop-Location
+```
+
+兩次 compile 後逐項比對：root／各 child 的 module count 與升級前完全相同；root 的 `sub_maps` mapping 不變；`FinanceImport` context 成功且 owner／`map_file` 指向預期 child；root 不得吸收 child 模組。第二次 compile 不得產生額外 diff。任一項不符即視為發布失敗，不得在真實外部專案執行 upgrade。
+
+最後確認：GitHub `main` 指向 release commit、`adad --version` 顯示 `<VERSION>`、完整 pytest 與 Actions 均通過，外部專案乾淨副本的 upgrade／context／重複 compile 驗收全數通過。
+
+## 7. 最小故障排查
 
 每個故障最多進行 2 次「修正＋驗證」：
 
@@ -129,8 +174,8 @@ Pop-Location
 2. 只修正已確認的單一原因，重跑原失敗指令及必要 gate。
 3. 第 2 次仍失敗即停止，保留 diff、index、worktree 與 Actions run ID，建立 Task／Checkpoint，不再試錯。
 
-常見檢查順序：Junction 與 Python 路徑 → release index 假檔 → repo-scoped `GIT_*` 洩漏 → `GITHUB_BASE_REF` 空值與 fetch depth → Actions 日誌。
+常見檢查順序：Junction 與 Python 路徑 → release index 假檔 → repo-scoped `GIT_*` 洩漏 → 巢狀測試繼承外層 CI event context → `GITHUB_BASE_REF` 空值與 fetch depth → sub_maps root／child count 與 owner → Actions 日誌。
 
-## 7. 清理
+## 8. 清理
 
 `.venv` Junction 只存在於 `C:\tmp` 的 release worktree，不能對它使用 `Remove-Item -Recurse`。完成後可保留 worktree 供稽核；若要清理，先確認它仍是 Junction，再移除 link 本身，不得遞迴刪除 target 的實體 `.venv`。

@@ -1,7 +1,7 @@
 # ADAD Architecture Source
 
 ## Metadata
-- Version: 14
+- Version: 17
 - Status: planning
 
 ## Environment
@@ -157,7 +157,7 @@
 ##### Module: adad_core
 - Type: library
 - Observability: not_required
-- Description: #61 Verification 子程序隔離；移除外層 Git hook/worktree 的 repo-scoped 環境，避免巢狀測試誤用外層 index。
+- Description: #61 Verification 環境隔離；#66 context warning；#69 提供 YAML sub_maps 合成讀取、owner 追蹤與分圖安全儲存。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
 - Preferred Pattern: none
 - Complexity: medium
@@ -166,23 +166,43 @@
   - 移除 GIT_DIR、GIT_WORK_TREE、GIT_INDEX_FILE、GIT_COMMON_DIR、GIT_OBJECT_DIRECTORY、GIT_ALTERNATE_OBJECT_DIRECTORIES、GIT_PREFIX 與 GIT_IMPLICIT_WORK_TREE。
   - 保留 PATH、認證與非 repo-routing 環境，並將清理後環境傳入 subprocess。
   - 測試模擬 linked worktree hook 的外層 index，驗證子程序依 cwd 使用內層 repo，且外層 index 不變。
-- Decisions: [隔離責任放在通用 Verification runner；只移除 repo-routing Git 變數；不得修改或清空外層 index；本 Task 不修改 pre-commit]
+  - read_context 只在 ADR／Pattern 成功載入時輸出 summary；缺檔不得寫入 target_node，改在 context_warnings 追加固定 entry。
+  - 每個 warning entry 固定為 {kind: missing_reference, reference_type: decision|pattern, reference_id: string, error: string}；每個載入失敗各一筆。
+  - 載入 root YAML 的 sub_maps mapping；每個值只能是 project root 內的相對 YAML 路徑，遞迴解析並阻斷 missing、cycle、path traversal。
+  - 合併 root 與 child modules 給讀取端，模組名稱必須全域唯一；同時記錄每個 module 的 owner shard 與原始 shard document。
+  - save 依 owner 把模組寫回原 shard；root metadata/sub_maps 只留在 root。存在 sub_maps 時，沒有 owner 的新模組一律 fail-fast。
+  - IR validity 同時比較 root Markdown、root YAML 與所有 child YAML 的 mtime；任何 child 變更都不得被忽略。
+  - parse_markdown 辨識模組欄位 `Sub Map`，去除前後空白後以 `sub_map` 輸出；空值立即拒絕，scope 是否存在交由 compile_map 驗證。
+  - 載入既有 YAML 時，若 module 宣告 sub_map，必須等於實際 shard owner（root 或對應 scope）；ghost scope 或 owner 不一致立即拒絕。未宣告 sub_map 的舊 IR 保持相容。
+- Decisions: [隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份 dump root；owner 不明時禁止猜測]
 - Invariants: []
 - Verification:
   - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_verify_implementation.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_read_context.py", "-q", "--basetemp", "{workspace}/pytest-context"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_sub_maps.py", "-q", "--basetemp", "{workspace}/pytest-submaps"], "cwd": "project", "expect_exit": 0}
 - Observability: not_required
 - Dependencies: []
 - Input:
   - verification_command: object
   - inherited_environment: object
+  - node_name: string
 - Output:
   - command_result: object
   - sanitized_environment: object
+  - context: object
+  - context_warnings: array
+  - composite_modules: object
+  - module_owners: object
+  - parsed_sub_map: string
 - Retry Budget: 2
 - TODO:
   - [ ] #61：隔離 linked-worktree hook 的 Git repo 環境
+  - [ ] #66：參考文件缺失改為結構化 warning，不污染 Task context
+  - [ ] #69：YAML sub_maps 合成載入與 owner-aware save
 - Checkpoint:
   - [x] CP-1-061-CORE (validated：2026-07-15 medium Task 直接核發)
+  - [x] CP-1-066-CONTEXT (validated：2026-07-15 人工核准核發)
+  - [x] CP-1-069-SUBMAP-CORE (validated：2026-07-15 人工要求解決)
 
 ##### Module: task_snapshot_schema
 - Type: schema
@@ -247,12 +267,20 @@
 ##### Module: compile_map
 - Type: tool
 - Observability: not_required
-- Description: 將 system_map.md（含 include 分區地圖）編譯為機讀 IR system_map.yaml，並執行智慧狀態合併（結構未變沿用舊狀態、結構有變標記 dirty）與 Draft Debt Ledger 偵測。
+- Description: #70 將 Markdown 編譯結果依既有 owner 或明確 Sub Map 分流寫回 root/child YAML，禁止把所有節點膨脹進 root。
 - Source: adad_source/agents/skills/adad-workflow/scripts/compile_map.py
-- Preferred Pattern: none
-- Decisions: []
+- Preferred Pattern: explicit_contract
+- Complexity: medium
+- Algorithm:
+  - 透過 adad_core 載入 root 與所有 sub_maps，取得舊模組、owner 與 shard registry。
+  - parse_markdown 支援模組欄位 `Sub Map: root|<scope>`；既有模組未宣告時沿用舊 owner。
+  - 存在 sub_maps 時，全新模組若沒有明確 Sub Map、scope 不存在或跨 shard 重名，立即阻斷，不得猜測。
+  - 完成狀態合併後交由 owner-aware save 分別寫回各 shard，保留 root sub_maps 與每個 shard自有 metadata。
+  - 編譯前後輸出各 shard module_count；重複編譯必須保持 root/child count，不得把 child modules 寫入 root。
+- Decisions: [Markdown include 是來源拆檔；YAML sub_maps 是 IR ownership，兩者不可混為同一欄位；既有 owner 優先；新節點必須明示 root 或 scope]
 - Invariants: []
-- Verification: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_compile_sub_maps.py", "-q", "--basetemp", "{workspace}/pytest-compile-submaps"], "cwd": "project", "expect_exit": 0}
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
@@ -260,10 +288,13 @@
 - Output:
   - result: object
   - system_map.yaml: file（編譯副作用，非回傳值）
+- Retry Budget: 2
 - TODO:
   - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
+  - [ ] #70：依 owner 分流編譯並防止 root map 膨脹
 - Checkpoint:
   - [ ] CP-1-006 (planned)
+  - [x] CP-1-070-SUBMAP-COMPILE (validated：2026-07-15 人工要求解決)
 
 ##### Module: generate_task
 - Type: tool

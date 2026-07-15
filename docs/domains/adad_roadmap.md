@@ -43,6 +43,122 @@
   - [x] CP-1-020 (validated)
   - [x] CP-2-020 (deployed)
 
+##### Module: workflow_test_harness
+- Type: test_harness
+- Observability: not_required
+- Description: #64 隔離測試子程序與外層 GitHub Actions event context，避免臨時 Git repo 誤走 CI diff 路徑。
+- Source: tests/conftest.py
+- Preferred Pattern: hermetic_test_harness
+- Complexity: medium
+- Algorithm:
+  - 以目前程序環境為基礎建立 child environment，保留 PATH、PYTHONPATH 與一般執行環境。
+  - 預設移除外層 CI/GitHub event control variables，包含 CI、GITHUB_ACTIONS、GITHUB_BASE_REF、GITHUB_HEAD_REF、GITHUB_EVENT_NAME、GITHUB_EVENT_PATH、GITHUB_REF、GITHUB_REF_NAME、GITHUB_SHA。
+  - 最後套用呼叫者明確傳入的 env overrides，使個別測試可刻意 opt-in CI context。
+  - 固定 PYTHONIOENCODING=utf-8，再將環境交給 subprocess。
+- Decisions:
+  - 隔離只放在測試 harness，不改 production pre-commit 對 GitHub Actions 的判斷。
+  - `env` 採 overrides 語意，不再取代完整環境。
+  - 測試須覆蓋外層 CI 預設隔離與明確 opt-in 兩條路徑。
+- Invariants: []
+- Verification:
+  - case: {"input": {"inherited_environment": {"CI": "true", "GITHUB_BASE_REF": "", "PATH": "bin"}, "explicit_env_overrides": {}}, "expect": {"PATH": "bin", "PYTHONIOENCODING": "utf-8"}}
+  - case: {"input": {"inherited_environment": {"CI": "true", "PATH": "bin"}, "explicit_env_overrides": {"CI": "true", "GITHUB_BASE_REF": "main"}}, "expect": {"CI": "true", "GITHUB_BASE_REF": "main", "PATH": "bin", "PYTHONIOENCODING": "utf-8"}}
+- Dependencies: [adad_pre_commit]
+- Input:
+  - inherited_environment: object
+  - explicit_env_overrides: object
+- Output:
+  - child_environment: object
+- Retry Budget: 2
+- TODO:
+  - [ ] #64：隔離外層 CI event context，保留明確 opt-in
+- Checkpoint:
+  - [x] CP-1-064-HARNESS (validated：2026-07-15 人工核准)
+
+##### Module: verification_absence_contract
+- Type: function
+- Observability: not_required
+- Description: #67 以明確欄位表達 Verification 預期鍵不存在，禁止再以 null 猜測刪除語意。
+- Source: adad_cli/workflow/verification_absence_contract.py::validate_verification_absence_contract
+- Preferred Pattern: pure_function
+- Complexity: medium
+- Algorithm:
+  - 複製輸入 case；未宣告 expect_absent_keys 時維持既有 Verification 語意。
+  - expect_absent_keys 必須是由非空字串組成且不得重複的陣列。
+  - 若同一路徑同時出現在 expect 與 expect_absent_keys，立即拒絕，因 null 是值而不是不存在。
+  - 回傳正規化的新 case，不修改輸入、不執行 Verification。
+- Decisions:
+  - null 永遠代表存在且值為 null；鍵不存在只能由 expect_absent_keys 表達。
+  - 本原子 Task 只建立可測試契約函式，後續再接入 schema、Readiness 與 runner。
+- Invariants:
+  - deny_imports: [yaml, subprocess, os]
+- Verification:
+  - case: {"input": {"verification_case": {"expect": {"CI": null}, "expect_absent_keys": ["GITHUB_BASE_REF"]}}, "expect": {"expect": {"CI": null}, "expect_absent_keys": ["GITHUB_BASE_REF"]}}
+  - case: {"input": {"verification_case": {"expect": {"CI": null}, "expect_absent_keys": ["CI"]}}, "expect_exception": "ValueError"}
+  - case: {"input": {"verification_case": {"expect_absent_keys": [""]}}, "expect_exception": "ValueError"}
+  - case: {"input": {"verification_case": {"expect_absent_keys": ["CI", "CI"]}}, "expect_exception": "ValueError"}
+- Dependencies: []
+- Input:
+  - verification_case: object
+- Output:
+  - normalized_case: object
+- Retry Budget: 2
+- TODO:
+  - [ ] #67：建立鍵不存在的明確 Verification 契約
+- Checkpoint:
+  - [x] CP-1-067-ABSENCE (validated：2026-07-15 人工核准核發)
+
+##### Module: reviewer_unicode_policy
+- Type: documentation
+- Observability: not_required
+- Description: #68 Reviewer 判定編碼異常前必須以 strict UTF-8 bytes、replacement character 與 JSON read-back 提供證據。
+- Source: adad_source/agents/AGENTS.md
+- Preferred Pattern: evidence_based_review
+- Complexity: low
+- Decisions:
+  - 不得只依終端畫面或工具渲染判定 mojibake。
+  - 編碼退回必須附可重現命令、strict decode 結果與 fingerprint。
+  - 證據證實為顯示誤判時撤回該次退回，不計 return_count。
+- Invariants: []
+- Verification: []
+- Dependencies: []
+- Input:
+  - review_artifact: file
+- Output:
+  - reviewer_unicode_decision: object
+- Retry Budget: 2
+- TODO:
+  - [ ] #68：補齊 Reviewer Unicode 證據與撤回規則
+- Checkpoint:
+  - [x] CP-1-068-REVIEW (validated：2026-07-15 人工核准核發)
+
+##### Module: sub_map_schema
+- Type: schema
+- Observability: not_required
+- Description: #71 正式定義 root YAML 的 sub_maps mapping 與模組 Sub Map ownership 欄位。
+- Source: adad_source/templates/system_map.schema.json
+- Preferred Pattern: schema_contract
+- Complexity: medium
+- Algorithm:
+  - root sub_maps 必須是 scope 到非空相對 YAML 路徑的 object mapping，不接受 array。
+  - module.sub_map 必須是非空字串，值為 root 或 root sub_maps 已宣告的 scope；跨欄位 scope 驗證由 loader 執行。
+  - 保持沒有 sub_maps 的既有 flat IR 完全相容。
+  - schema 只處理結構；absolute、path traversal、cycle、missing 與 duplicate module 由 adad_core fail-fast。
+- Decisions: [不以 additionalProperties 靜默接受 sub_maps；不要求 child shard 具備完整 root environment/domains；runtime path safety 不能只靠 JSON Schema]
+- Invariants: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_sub_map_schema.py", "-q", "--basetemp", "{workspace}/pytest-submap-schema"], "cwd": "project", "expect_exit": 0}
+- Dependencies: [adad_core, compile_map]
+- Input:
+  - root_ir: object
+- Output:
+  - validated_sub_map_contract: object
+- Retry Budget: 2
+- TODO:
+  - [ ] #71：補齊 sub_maps 與 owner schema
+- Checkpoint:
+  - [x] CP-1-071-SUBMAP-SCHEMA (validated：2026-07-15 人工要求解決)
+
 #### Subsystem: Contract_Evolution
 - Description: Schema、Task 與執行契約缺口的可獨立施工節點。
 
@@ -489,11 +605,11 @@
 ##### Module: release_sop
 - Type: documentation
 - Observability: not_required
-- Description: #63 將 main release worktree、Git 環境隔離、index 污染復原、CI push base 與發布後 Actions 驗證整理為可重複執行的發佈契約。
+- Description: #65 整理 CI/linked-worktree 發布契約；#72 新增 sub_maps root-count、upgrade 與外部專案驗收。
 - Source: docs/RELEASE_SOP.md
 - Preferred Pattern: documentation_as_contract
 - Complexity: low
-- Decisions: [release worktree 必須從 origin/main 建立；禁止 no-verify；失敗經驗必須形成前置檢查或復原步驟]
+- Decisions: [release worktree 必須從 origin/main 建立；sub_maps 發布必須驗證 root/child count 不變、FinanceImport 可查與 upgrade 後不膨脹；禁止 no-verify；Actions 成功後才更新本機]
 - Invariants: []
 - Verification: []
 - Dependencies: [adad_pre_commit, adad_core, continuous_integration]
@@ -503,9 +619,12 @@
   - release_procedure: markdown
 - Retry Budget: 2
 - TODO:
-  - [ ] #63：補齊 linked-worktree、CI push 與發布後驗證 SOP
+  - [ ] #65：補齊巢狀臨時 repo 的 CI event context 隔離 SOP
+  - [ ] #72：補齊 sub_maps 發布、安裝與外部專案 upgrade 驗收
 - Checkpoint:
   - [x] CP-1-063-SOP (validated：2026-07-15 人工核准納入發布經驗)
+  - [x] CP-1-065-SOP (validated：2026-07-15 人工核准納入巢狀 CI 經驗)
+  - [x] CP-1-072-SUBMAP-RELEASE (validated：2026-07-15 人工要求更新本機版本)
 
 ##### Module: project_venv_python
 - Type: function

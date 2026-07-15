@@ -4,6 +4,23 @@
 
 ## Unreleased
 
+## 1.6.0 — 2026-07-15
+
+### Added
+
+- 新增 `sub_maps` schema 與遞迴 loader，支援全域重名、循環、路徑逃逸及 physical owner 一致性門禁。
+- 缺失 ADR／Pattern 改以固定格式 `context_warnings` 回報，不再污染 Task 目標內容。
+
+### Changed
+
+- 編譯器依 shard owner 分流寫回 root／child YAML，保留 shard metadata，避免 child 節點膨脹進 root。
+- Verification absence contract 明確區分欄位不存在與 `null`；Reviewer 與發布 SOP 補強 UTF-8、CI 子程序環境及退回診斷規範。
+- `sub_maps` 發布驗收須等待 GitHub Actions 成功後才安裝本機工具，並以外部專案乾淨副本驗證 upgrade、`FinanceImport`／root context、root／child counts 與重複 compile 不膨脹。
+
+### Fixed
+
+- owner-aware save 將模組寫回原 shard，未知 owner、ghost scope 或 owner mismatch 一律 fail-fast。
+
 ## 1.5.0 — 2026-07-14
 
 ### Added
