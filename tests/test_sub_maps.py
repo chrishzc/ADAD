@@ -92,7 +92,11 @@ def test_owner_aware_save_preserves_shards_and_rejects_unknown_owner(tmp_path):
     [
         ({"finance": "missing.yaml"}, "找不到 sub_maps 檔案"),
         ({"finance": "../outside.yaml"}, "超出 project root"),
+        ({"finance": "/outside.yaml"}, "禁止絕對路徑"),
         ({"finance": "C:/outside.yaml"}, "禁止絕對路徑"),
+        ({"finance": r"C:\outside.yaml"}, "禁止絕對路徑"),
+        ({"finance": r"\\server\share\finance.yaml"}, "禁止絕對路徑"),
+        ({"finance": "//server/share/finance.yaml"}, "禁止絕對路徑"),
     ],
 )
 def test_sub_maps_reject_missing_or_unsafe_paths(tmp_path, sub_maps, error):

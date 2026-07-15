@@ -4,6 +4,8 @@ ADAD Core Engine (ADAD 核心處理引擎)
 ponytail: 自動檢測並於需要時安裝 pyyaml，核心邏輯以標準 DAG 演算法與最簡特徵相似度實作。
 """
 import os
+import ntpath
+import posixpath
 import sys
 import json
 import ast
@@ -742,7 +744,9 @@ class ADADCore:
             if not isinstance(raw_path, str) or not raw_path.strip():
                 raise ValueError("sub_maps 路徑必須是非空相對字串")
             candidate = raw_path.strip()
-            if os.path.isabs(candidate):
+            # 同時套用 POSIX 與 Windows 路徑語意，避免在 Linux runner 上把
+            # C:/...、C:\\... 或 UNC 當成一般相對檔名，反之亦然。
+            if posixpath.isabs(candidate) or ntpath.isabs(candidate):
                 raise ValueError(f"sub_maps 禁止絕對路徑: {candidate}")
             if os.path.splitext(candidate)[1].lower() not in {".yaml", ".yml"}:
                 raise ValueError(f"sub_maps 只允許 YAML 路徑: {candidate}")
