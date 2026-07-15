@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-from conftest import run_script, write_yaml, REPO_ROOT
+from conftest import SYSTEM_MAP_SCHEMA_PATH, run_script, write_yaml
 
-SCHEMA_PATH = str(REPO_ROOT / "system_map.schema.json")
+SCHEMA_PATH = str(SYSTEM_MAP_SCHEMA_PATH)
 
 
 def test_validate_schema_passes_conformant_yaml(project_dir, base_modules):

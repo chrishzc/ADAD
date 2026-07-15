@@ -58,9 +58,45 @@ def test_get_staged_files_selects_expected_diff_target(
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
     assert module.get_staged_files() == ["sample.py"]
-    assert calls == [
+    expected_calls = []
+    if ci is not None and not base_ref:
+        expected_calls.append(["git", "rev-parse", "--verify", "HEAD~1"])
+    expected_calls.append(
         ["git", "diff", *expected_target, "--name-only", "--diff-filter=ACM"]
-    ]
+    )
+    assert calls == expected_calls
+
+
+def test_get_staged_files_uses_empty_tree_for_initial_ci_commit(monkeypatch):
+    module = _load_pre_commit_module()
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+
+    def fake_run(argv, **kwargs):
+        if argv[-1] == "HEAD~1":
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+        if argv[-1] == "HEAD":
+            return subprocess.CompletedProcess(argv, 0, stdout="HEAD\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="sample.py\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.get_staged_files() == ["sample.py"]
+
+
+def test_get_staged_files_uses_index_for_unborn_ci_repository(monkeypatch):
+    module = _load_pre_commit_module()
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+
+    def fake_run(argv, **kwargs):
+        if argv[:3] == ["git", "rev-parse", "--verify"]:
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="sample.py\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.get_staged_files() == ["sample.py"]
 
 
 def _git(args, cwd):

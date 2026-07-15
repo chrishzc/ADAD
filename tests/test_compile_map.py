@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import shutil
 
-from conftest import run_script, read_yaml, REPO_ROOT
+from conftest import SYSTEM_MAP_SCHEMA_PATH, run_script, read_yaml
 
 VALID_MD = """# ADAD Architecture Source
 
@@ -63,7 +63,7 @@ DUPLICATE_MODULE_MD = VALID_MD + """
 
 def _write_md(project_dir, content):
     (project_dir / "system_map.md").write_text(content, encoding="utf-8")
-    shutil.copy(REPO_ROOT / "system_map.schema.json", project_dir / "system_map.schema.json")
+    shutil.copy(SYSTEM_MAP_SCHEMA_PATH, project_dir / "system_map.schema.json")
 
 
 def test_compile_map_produces_valid_yaml(project_dir):

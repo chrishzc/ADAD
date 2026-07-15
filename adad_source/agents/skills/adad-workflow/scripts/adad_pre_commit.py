@@ -29,15 +29,38 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 
+_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def _revision_exists(revision):
+    """Return whether ``revision`` resolves in the current Git repository."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", revision],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def _get_diff_target():
     """Return the Git diff target for local commits and GitHub CI runs."""
     if not os.environ.get("CI"):
         return ["--cached"]
 
-    base_ref = os.environ.get("GITHUB_BASE_REF") or "HEAD~1"
-    if not base_ref.startswith("HEAD") and not base_ref.startswith("origin/"):
-        base_ref = f"origin/{base_ref}"
-    return [base_ref, "HEAD"]
+    base_ref = os.environ.get("GITHUB_BASE_REF")
+    if base_ref:
+        if not base_ref.startswith("HEAD") and not base_ref.startswith("origin/"):
+            base_ref = f"origin/{base_ref}"
+        return [base_ref, "HEAD"]
+
+    if _revision_exists("HEAD~1"):
+        return ["HEAD~1", "HEAD"]
+    if _revision_exists("HEAD"):
+        # A repository with its first commit has no HEAD~1. Diff against Git's
+        # canonical empty tree so the commit's complete file set is checked.
+        return [_EMPTY_TREE_SHA, "HEAD"]
+    # Fresh test repositories can have staged files before their first commit.
+    return ["--cached"]
 
 
 def get_staged_files(diff_filter="ACM"):

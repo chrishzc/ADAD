@@ -39,6 +39,9 @@ SCRIPTS_DIR = (
     / "adad-workflow"
     / "scripts"
 )
+SYSTEM_MAP_SCHEMA_PATH = (
+    REPO_ROOT / "adad_cli" / "resources" / "templates" / "system_map.schema.json"
+)
 
 
 def script_path(name):
@@ -118,6 +121,7 @@ def make_module(**overrides):
         "dependencies": [],
         "input": {"x": "int"},
         "output": {"y": "int"},
+        "exceptions": [],
         "invariants": [],
         "preferred_pattern": "none",
         "verification": [],

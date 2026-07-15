@@ -3,7 +3,7 @@ import shutil
 
 import yaml
 
-from conftest import REPO_ROOT, make_module, run_script
+from conftest import SYSTEM_MAP_SCHEMA_PATH, make_module, run_script
 
 
 def _module(name, sub_map=None):
@@ -53,7 +53,7 @@ def _write_yaml(path, data):
 
 def _setup(project_dir, markdown, root_modules=None, child_modules=None):
     (project_dir / "system_map.md").write_text(markdown, encoding="utf-8")
-    shutil.copy(REPO_ROOT / "system_map.schema.json", project_dir / "system_map.schema.json")
+    shutil.copy(SYSTEM_MAP_SCHEMA_PATH, project_dir / "system_map.schema.json")
     root = {
         "version": 2,
         "domains": {},
