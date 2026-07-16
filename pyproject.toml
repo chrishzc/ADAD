@@ -30,7 +30,7 @@ dependencies = [
 [project.optional-dependencies]
 schema = ["jsonschema>=4.0"]
 # 見 tests/README.md：`pip install -e .[dev]` 後執行 `pytest` 即可跑完整套件。
-dev = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "setuptools>=61", "wheel"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -55,3 +55,11 @@ version = { attr = "adad_cli.__version__" }
 # 不再依賴使用者執行指令當下的工作目錄。
 [tool.setuptools.package-data]
 adad_cli = ["resources/**/*"]
+
+# package-data 的遞迴萬用規則會看見工作樹中被 Git ignore 的執行期快取；
+# 必須在建置邊界再次排除，避免 wheel／sdist 將快取帶進 adad upgrade。
+[tool.setuptools.exclude-package-data]
+adad_cli = [
+    "resources/**/__pycache__/*",
+    "resources/**/*.pyc",
+]

@@ -1204,26 +1204,39 @@ modules:
     fan_in_snapshot: 0
   automated_test_suite:
     type: test_suite
-    description: '已建立 pytest 黑箱測試與 dev extra，涵蓋既有 workflow 工具（規格總覽 #5）。'
+    description: '維護 pytest 與套件建置測試依賴，並在 setuptools 邊界排除 Python 編譯快取（規格總覽 #5、#76-A）。'
     source: pyproject.toml
     domain: ADAD_Roadmap
     subsystem: Completed_Baseline
     map_file: docs\domains\adad_roadmap.md
     dependencies: []
-    input: {}
+    input:
+      allowed_files: '[pyproject.toml]'
     output:
       test_result: report
     exceptions: []
     invariants: []
     preferred_pattern: black_box_test
-    verification: []
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - -q
+        - tests/test_sync_assets.py
+        cwd: project
+        expect_exit: 0
     decisions:
-    - 測試依賴透過 .venv 的 dev extra 安裝
+    - 測試與 build backend 依賴透過 .venv 的 dev extra 安裝；resources/**/* 必須以 exclude-package-data
+      排除任意層級 __pycache__ 與 *.pyc
     todo:
     - '[x] 規格總覽 #5：pytest 測試套件已建立'
+    - '[ ] #76-A：設定 packaging 開發依賴及 wheel/sdist package-data 快取排除'
     checkpoint:
     - '[x] CP-1-020 (validated)'
     - '[x] CP-2-020 (deployed)'
+    - '[x] CP-1-076-SPLIT-PACKAGING (validated：2026-07-16 人工核准拆分)'
     observability:
       mode: not_required
       signals: []
@@ -1236,8 +1249,8 @@ modules:
     required_context: []
     forbidden_context: []
     context_priority: {}
-    state: deployed
-    fan_in_snapshot: 0
+    state: validated
+    fan_in_snapshot: 1
   workflow_test_harness:
     type: test_harness
     description: '#64 隔離測試子程序與外層 GitHub Actions event context，避免臨時 Git repo 誤走 CI

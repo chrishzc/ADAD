@@ -27,21 +27,25 @@
 ##### Module: automated_test_suite
 - Type: test_suite
 - Observability: not_required
-- Description: 已建立 pytest 黑箱測試與 dev extra，涵蓋既有 workflow 工具（規格總覽 #5）。
+- Description: 維護 pytest 與套件建置測試依賴，並在 setuptools 邊界排除 Python 編譯快取（規格總覽 #5、#76-A）。
 - Source: pyproject.toml
 - Preferred Pattern: black_box_test
-- Decisions: [測試依賴透過 .venv 的 dev extra 安裝]
+- Decisions: [測試與 build backend 依賴透過 .venv 的 dev extra 安裝；resources/**/* 必須以 exclude-package-data 排除任意層級 __pycache__ 與 *.pyc]
 - Invariants: []
-- Verification: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_sync_assets.py"], "cwd": "project", "expect_exit": 0}
 - Dependencies: []
-- Input: {}
+- Input:
+  - allowed_files: [pyproject.toml]
 - Output:
   - test_result: report
 - TODO:
   - [x] 規格總覽 #5：pytest 測試套件已建立
+  - [ ] #76-A：設定 packaging 開發依賴及 wheel/sdist package-data 快取排除
 - Checkpoint:
   - [x] CP-1-020 (validated)
   - [x] CP-2-020 (deployed)
+  - [x] CP-1-076-SPLIT-PACKAGING (validated：2026-07-16 人工核准拆分)
 
 ##### Module: workflow_test_harness
 - Type: test_harness
