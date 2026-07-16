@@ -546,6 +546,27 @@
 #### Subsystem: Product_Delivery
 - Description: 文件、發佈、CI 與專案環境的一致性交付。
 
+##### Module: package_version
+- Type: metadata
+- Observability: not_required
+- Description: 維護 ADAD CLI 的唯一套件版本來源，供 setuptools、CLI 與 upgrade 流程共同讀取。
+- Source: adad_cli/__init__.py
+- Preferred Pattern: single_source_of_truth
+- Complexity: low
+- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次修復發布為 1.6.1]
+- Invariants: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.1'"], "cwd": "project", "expect_exit": 0}
+- Dependencies: []
+- Input:
+  - release_version: string
+- Output:
+  - package_version: string
+- TODO:
+  - [ ] #75：將函式級 Source gate 與 Windows pytest 暫存修復發布為 1.6.1
+- Checkpoint:
+  - [x] CP-1-075-PATCH-RELEASE (validated：2026-07-16 人工要求更新 1.6.1 並安裝本機版本)
+
 ##### Module: documentation_alignment
 - Type: documentation
 - Observability: not_required

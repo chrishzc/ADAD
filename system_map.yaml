@@ -2261,6 +2261,50 @@ modules:
     context_priority: {}
     state: planned
     fan_in_snapshot: 0
+  package_version:
+    type: metadata
+    description: 維護 ADAD CLI 的唯一套件版本來源，供 setuptools、CLI 與 upgrade 流程共同讀取。
+    source: adad_cli/__init__.py
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      release_version: string
+    output:
+      package_version: string
+    exceptions: []
+    invariants: []
+    preferred_pattern: single_source_of_truth
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -c
+        - import adad_cli; assert adad_cli.__version__ == '1.6.1'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次修復發布為 1.6.1
+    todo:
+    - '[ ] #75：將函式級 Source gate 與 Windows pytest 暫存修復發布為 1.6.1'
+    checkpoint:
+    - '[x] CP-1-075-PATCH-RELEASE (validated：2026-07-16 人工要求更新 1.6.1 並安裝本機版本)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols: []
   documentation_alignment:
     type: documentation
     description: 對齊 README 的 CLI 工具表與 Phase/Checkpoint 文件，使其反映 Task 快照工作流（#1-2）。
