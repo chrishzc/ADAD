@@ -157,7 +157,7 @@
 ##### Module: adad_core
 - Type: library
 - Observability: not_required
-- Description: #61 Verification 環境隔離；#66 context warning；#69 提供 YAML sub_maps 合成讀取、owner 追蹤與分圖安全儲存。
+- Description: #61 Verification 環境隔離；#66 context warning；#69 提供 YAML sub_maps 合成讀取、owner 追蹤與分圖安全儲存；#74 修正函式級 Source gate 與 Windows pytest 暫存目錄。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
 - Preferred Pattern: none
 - Complexity: medium
@@ -174,18 +174,24 @@
   - IR validity 同時比較 root Markdown、root YAML 與所有 child YAML 的 mtime；任何 child 變更都不得被忽略。
   - parse_markdown 辨識模組欄位 `Sub Map`，去除前後空白後以 `sub_map` 輸出；空值立即拒絕，scope 是否存在交由 compile_map 驗證。
   - 載入既有 YAML 時，若 module 宣告 sub_map，必須等於實際 shard owner（root 或對應 scope）；ghost scope 或 owner 不一致立即拒絕。未宣告 sub_map 的舊 IR 保持相容。
-- Decisions: [隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份 dump root；owner 不明時禁止猜測]
+  - check_invariants、verify_implementation 與 implementation hash 對 Source 進行檔案操作前，必須先將 `file.py::function` 拆成實體檔案路徑；明確傳入的 file_path 優先，但仍套用相同正規化。
+  - task_submit 必須將同一個已解析實體檔案路徑傳給 invariant、verification 與 implementation hash，禁止任一階段重新退回含 `::function` 的 Source。
+  - Verification command 若為 pytest 且未提供 `--basetemp` 或 `--basetemp=...`，自動注入位於 `{workspace}` 下且依步驟隔離的 basetemp；既有明確設定不得覆寫。
+- Decisions: [隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份 dump root；owner 不明時禁止猜測；所有 gate 共用同一個實體 Source 路徑；pytest 暫存隔離由 Verification runner 提供且尊重明確 basetemp]
 - Invariants: []
 - Verification:
   - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_verify_implementation.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
   - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_read_context.py", "-q", "--basetemp", "{workspace}/pytest-context"], "cwd": "project", "expect_exit": 0}
   - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_sub_maps.py", "-q", "--basetemp", "{workspace}/pytest-submaps"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_check_invariants.py", "tests/test_adad_task.py", "-q", "--basetemp", "{workspace}/pytest-source-gates"], "cwd": "project", "expect_exit": 0}
 - Observability: not_required
 - Dependencies: []
 - Input:
   - verification_command: object
   - inherited_environment: object
   - node_name: string
+  - node_source: string
+  - file_path: string|null
 - Output:
   - command_result: object
   - sanitized_environment: object
@@ -194,11 +200,15 @@
   - composite_modules: object
   - module_owners: object
   - parsed_sub_map: string
+  - resolved_file_path: string
 - Retry Budget: 2
 - TODO:
   - [ ] #61：隔離 linked-worktree hook 的 Git repo 環境
   - [ ] #66：參考文件缺失改為結構化 warning，不污染 Task context
   - [ ] #69：YAML sub_maps 合成載入與 owner-aware save
+  - [ ] #74：函式級 Source gate 使用實體檔案路徑，pytest command 預設使用 workspace basetemp
+- Checkpoint:
+  - [x] CP-1-074-FUNCTION-SOURCE-WINDOWS-PYTEST (validated：2026-07-16 人工核准先核發任務)
 - Checkpoint:
   - [x] CP-1-061-CORE (validated：2026-07-15 medium Task 直接核發)
   - [x] CP-1-066-CONTEXT (validated：2026-07-15 人工核准核發)

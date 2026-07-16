@@ -1546,13 +1546,26 @@ class ADADCore:
             json.dump(task_data, f, ensure_ascii=False, indent=2)
             f.write("\n")
 
+    @staticmethod
+    def _normalize_source_file_path(source):
+        """Return the physical file portion of a Source or explicit file path."""
+        if not isinstance(source, str):
+            return ""
+        return source.split("::", 1)[0].strip().replace("\\", "/")
+
     def _source_path_for_node(self, node_name):
         node = self.get_node(node_name) or {}
-        return node.get("source", "").split("::", 1)[0].strip().replace("\\", "/")
+        return self._normalize_source_file_path(node.get("source", ""))
+
+    def _resolved_file_path(self, node_name, file_path=None):
+        source = file_path if file_path is not None else (
+            (self.get_node(node_name) or {}).get("source") or f"{node_name}.py"
+        )
+        return self._normalize_source_file_path(source)
 
     def _implementation_hash(self, node_name, file_path=None):
         """Return the SHA-256 of the implementation bytes for one Task."""
-        source_path = file_path or self._source_path_for_node(node_name)
+        source_path = self._resolved_file_path(node_name, file_path)
         if not source_path:
             return None
         if not os.path.isabs(source_path):
@@ -1737,15 +1750,16 @@ class ADADCore:
                          f"請重新執行 generate_task 取得最新快照後再重做。"
             }
 
-        inv_res = self.check_invariants(node_name, file_path)
+        resolved_file_path = self._resolved_file_path(node_name, file_path)
+        inv_res = self.check_invariants(node_name, resolved_file_path)
         if not inv_res.get("success"):
             return {"success": False, "error": f"Invariants 檢查未通過，不能提交: {inv_res.get('error')}"}
 
-        ver_res = self.verify_implementation(node_name, file_path)
+        ver_res = self.verify_implementation(node_name, resolved_file_path)
         if not ver_res.get("success"):
             return {"success": False, "error": f"Verification 檢查未通過，不能提交: {ver_res.get('error')}"}
 
-        implementation_hash = self._implementation_hash(node_name, file_path)
+        implementation_hash = self._implementation_hash(node_name, resolved_file_path)
         if implementation_hash is None:
             return {
                 "success": False,
@@ -2123,7 +2137,7 @@ class ADADCore:
         if not invariants:
             return {"success": True, "message": "此節點未定義 invariants，無須檢查。"}
 
-        file_path = file_path or node.get("source") or f"{node_name}.py"
+        file_path = self._resolved_file_path(node_name, file_path)
         if not os.path.exists(file_path):
             return {"success": False, "error": f"找不到實作檔案: {file_path}"}
 
@@ -2411,6 +2425,20 @@ class ADADCore:
         return expanded
 
     @staticmethod
+    def _is_pytest_command(argv):
+        for index, arg in enumerate(argv):
+            executable = os.path.basename(arg).lower()
+            if executable in ("pytest", "pytest.exe"):
+                return True
+            if arg == "-m" and index + 1 < len(argv) and argv[index + 1] == "pytest":
+                return True
+        return False
+
+    @staticmethod
+    def _has_pytest_basetemp(argv):
+        return any(arg == "--basetemp" or arg.startswith("--basetemp=") for arg in argv)
+
+    @staticmethod
     def _resolve_project_python(project_root):
         """優先使用專案 .venv 的跨平台 Python，找不到時沿用目前直譯器。"""
         relative_path = (
@@ -2471,6 +2499,8 @@ class ADADCore:
             if cwd_name not in ("workspace", "project"):
                 raise ValueError("command.cwd 必須是 'workspace' 或 'project'。")
             argv = self._expand_verification_argv(command.get("argv"), placeholders)
+            if self._is_pytest_command(argv) and not self._has_pytest_basetemp(argv):
+                argv.extend(["--basetemp", os.path.join(workspace, f"pytest-{step_index}")])
             execution_cwd = workspace if cwd_name == "workspace" else placeholders["project"]
             result["argv"] = argv
             result["cwd"] = execution_cwd
@@ -2538,8 +2568,10 @@ class ADADCore:
 
         project_root = self.project_root
         source_path = os.path.realpath(os.path.abspath(real_file_path))
+        workspace_root = os.path.join(project_root, ".agents", "workspaces")
         try:
-            with tempfile.TemporaryDirectory(prefix="adad_verify_") as workspace:
+            os.makedirs(workspace_root, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="adad_verify_", dir=workspace_root) as workspace:
                 for fixture in integration.get("fixtures", []):
                     if not isinstance(fixture, dict):
                         raise ValueError("fixture 必須是 object。")
@@ -2597,10 +2629,7 @@ class ADADCore:
         if not verification:
             return {"success": True, "message": "此節點未定義 verification 驗證條件，無須檢查。"}
 
-        file_path = file_path or node.get("source") or f"{node_name}.py"
-        # Source 可能是 "file.py::func" 這種帶函式標註的完整字串；檔案存在性
-        # 檢查與動態載入只需要路徑部分。
-        real_file_path = file_path.split("::", 1)[0] if file_path else file_path
+        real_file_path = self._resolved_file_path(node_name, file_path)
 
         if not os.path.exists(real_file_path):
             return {"success": False, "error": f"找不到實作檔案: {real_file_path}"}

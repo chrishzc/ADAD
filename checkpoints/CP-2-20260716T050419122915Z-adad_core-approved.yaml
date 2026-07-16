@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260716T050419122915Z-adad_core
+  phase: 2
+  timestamp: '2026-07-16T05:04:19.122915+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: adad_core
+    task_id: adad_core@v17@1aaa8e
+    system_map_version: 17
+    source_hash: 1aaa8e8e9a2602c51bfe9cec13e578e58be5aeafa7175a2974b2a559171ac904
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

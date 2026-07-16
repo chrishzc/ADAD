@@ -36,6 +36,22 @@ def test_submit_succeeds_when_checks_pass(project_dir, base_modules):
     assert saved["implementation_hash"] == data["implementation_hash"]
 
 
+def test_submit_uses_physical_file_for_function_level_source(project_dir, base_modules):
+    src = project_dir / "sample_tool.py"
+    src.write_text("def sample_tool(x):\n    return x\n", encoding="utf-8")
+    base_modules["modules"]["sample_tool"]["state"] = "planned"
+    base_modules["modules"]["sample_tool"]["source"] = "sample_tool.py::sample_tool"
+    base_modules["modules"]["sample_tool"]["invariants"] = ["deny_calls: [eval]"]
+    write_yaml(project_dir, base_modules)
+
+    _generate(project_dir)
+    code, data, out, err = run_script("adad_task.py", ["submit", "sample_tool"], cwd=project_dir)
+
+    assert code == 0, err
+    assert data["success"] is True
+    assert data["implementation_hash"] == ADADCore._file_hash(src)
+
+
 def test_submit_blocked_when_invariants_fail(project_dir, base_modules):
     src = project_dir / "sample_tool.py"
     src.write_text("import os\ndef sample_tool(x):\n    return os.getpid()\n", encoding="utf-8")
