@@ -605,11 +605,11 @@
 ##### Module: release_sop
 - Type: documentation
 - Observability: not_required
-- Description: #65 整理 CI/linked-worktree 發布契約；#72 新增 sub_maps root-count、upgrade 與外部專案驗收。
+- Description: #65 整理 CI/linked-worktree 發布契約；#72 新增 sub_maps root-count、upgrade 與外部專案驗收；#73 改為完整 development snapshot，避免只發布最後 commit 而遺漏累積修正。
 - Source: docs/RELEASE_SOP.md
 - Preferred Pattern: documentation_as_contract
 - Complexity: low
-- Decisions: [release worktree 必須從 origin/main 建立；sub_maps 發布必須驗證 root/child count 不變、FinanceImport 可查與 upgrade 後不膨脹；禁止 no-verify；Actions 成功後才更新本機]
+- Decisions: [release worktree 必須從 origin/main 建立；發布內容必須等於指定 development commit 的完整 tracked snapshot，禁止只取最後 commit 的 diff；sub_maps 發布必須驗證 root/child count 不變、FinanceImport 可查與 upgrade 後不膨脹；禁止 no-verify；Actions 成功後才更新本機]
 - Invariants: []
 - Verification: []
 - Dependencies: [adad_pre_commit, adad_core, continuous_integration]
@@ -621,10 +621,12 @@
 - TODO:
   - [ ] #65：補齊巢狀臨時 repo 的 CI event context 隔離 SOP
   - [ ] #72：補齊 sub_maps 發布、安裝與外部專案 upgrade 驗收
+  - [ ] #73：以完整 development snapshot 發布並驗證漏帶檔案為零
 - Checkpoint:
   - [x] CP-1-063-SOP (validated：2026-07-15 人工核准納入發布經驗)
   - [x] CP-1-065-SOP (validated：2026-07-15 人工核准納入巢狀 CI 經驗)
   - [x] CP-1-072-SUBMAP-RELEASE (validated：2026-07-15 人工要求更新本機版本)
+  - [x] CP-1-073-FULL-SNAPSHOT (validated：2026-07-16 人工要求修正發布 SOP)
 
 ##### Module: project_venv_python
 - Type: function

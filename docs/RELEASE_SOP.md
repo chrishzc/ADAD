@@ -44,31 +44,56 @@
 
 ## 2. 建立乾淨 release worktree
 
-以 `<VERSION>` 取代實際版本，例如 `1.4.2`；以 `<DEV_COMMIT>` 取代剛推送的 development commit。
+以 `<VERSION>` 取代實際版本，例如 `1.6.0`；以 `<DEV_COMMIT>` 取代剛推送的 development commit。先解析 commit、更新 `origin/main`，再判斷 main 是否為 development snapshot 的祖先：
 
 ```powershell
 $release = "C:\tmp\ADAD-main-release-<VERSION>"
-git worktree add -b "codex/main-release-<VERSION>" $release origin/main
+$devCommit = (git rev-parse --verify "<DEV_COMMIT>^{commit}").Trim()
+if ($LASTEXITCODE -ne 0) { throw "DEV_COMMIT 無法解析" }
 
-$files = git diff-tree --no-commit-id --name-only -r <DEV_COMMIT>
-git -C $release checkout <DEV_COMMIT> -- $files
+git fetch origin main
+git merge-base --is-ancestor origin/main $devCommit
+$ancestorExit = $LASTEXITCODE
+if ($ancestorExit -ne 0 -and $ancestorExit -ne 1) {
+    throw "無法判斷 origin/main 與 DEV_COMMIT 的 ancestry"
+}
+
+if ($ancestorExit -eq 0) {
+    # main 是祖先：直接以完整 development snapshot 建立 release branch。
+    git worktree add -b "codex/main-release-<VERSION>" $release $devCommit
+    $snapshotNeedsCommit = $false
+} else {
+    # main/development 已分歧：從乾淨 main 建立完整 tracked-tree snapshot。
+    git worktree add -b "codex/main-release-<VERSION>" $release origin/main
+    if (git -C $release status --porcelain) { throw "release worktree 不乾淨" }
+    git -C $release read-tree --reset -u $devCommit
+    $snapshotNeedsCommit = $true
+}
+
+git -C $release diff --cached --quiet $devCommit --
+if ($LASTEXITCODE -ne 0) { throw "release index 不等於 DEV_COMMIT tracked tree" }
 ```
 
-這一步是「直接覆蓋發布檔案」，不是 merge。先檢查範圍：
+目前 `main` 與 `development` 已分歧，因此只有 ancestry 檢查成功時才能直接 fast-forward；分歧時禁止 force push，必須在已確認乾淨的 main worktree 以 `read-tree` 建立 snapshot，之後產生一個以 main 為 parent、tree 完全等於 `$devCommit` 的 release commit。
+
+這是完整 tracked-tree snapshot，不是 merge，也不是只取最後一個 commit。它涵蓋 development 累積的新增、修改與刪除，避免漏掉 `tests/conftest.py` 等較早 commit。驗證必須針對完整 cumulative diff 與 snapshot tree，不得使用 `git diff-tree -r <DEV_COMMIT>` 推導發布清單。
+
+先檢查範圍：
 
 ```powershell
 git -C $release status --short
 git -C $release diff --cached --check
 ```
 
-若 `--check` 有 whitespace 錯誤，先在 development 修正並重建 release worktree；不要在 release 分支單獨修出與 development 不一致的版本。
+若 `--check` 有 whitespace 錯誤，先在 development 修正並重建 release worktree；不要在 release 分支單獨修出與 development 不一致的版本。第 3 節的 `git commit` 只在 `$snapshotNeedsCommit` 為 `$true` 時執行；若為 `$false`，驗證後直接將 `$devCommit` fast-forward 推送至 main，此時 main tree 必須等於 development snapshot。
 
 ## 3. 在 release worktree 驗證與提交
 
 release worktree 預設沒有 `.venv`，但 Git hook 會使用相對 `.venv\Scripts\python.exe`。建立只供驗證使用的 Junction，指向已驗證的 development 環境：
 
 ```powershell
-New-Item -ItemType Junction -Path "$release\.venv" -Target "<ADAD_REPO>\.venv"
+$adadRepo = 'C:\path\to\ADAD'
+New-Item -ItemType Junction -Path "$release\.venv" -Target "$adadRepo\.venv"
 ```
 
 linked worktree 的 commit hook 可能把 `GIT_INDEX_FILE`、`GIT_DIR`、`GIT_WORK_TREE` 等 repo-scoped `GIT_*` 傳給 Verification 子程序。Verification runner 必須清除這些變數，讓子程序依自己的 `cwd` 找 Git repo；不可直接繼承 release index。
@@ -80,10 +105,13 @@ linked worktree 的 commit hook 可能把 `GIT_INDEX_FILE`、`GIT_DIR`、`GIT_WO
 執行完整驗證與正常提交：
 
 ```powershell
+$adadRepo = 'C:\path\to\ADAD'
 Push-Location $release
-<ADAD_REPO>\.venv\Scripts\python.exe -m pytest -q --basetemp .pytest-tmp-release
-<ADAD_REPO>\.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\adad_pre_commit.py
-git commit -m "Release ADAD <VERSION>"
+& "$adadRepo\.venv\Scripts\python.exe" -m pytest -q --basetemp .pytest-tmp-release
+& "$adadRepo\.venv\Scripts\python.exe" .agents\skills\adad-workflow\scripts\adad_pre_commit.py
+if ($snapshotNeedsCommit) {
+    git commit -m "Release ADAD <VERSION>"
+}
 Pop-Location
 ```
 
@@ -93,12 +121,13 @@ Pop-Location
 git -C $release diff --cached --name-only
 ```
 
-若發現污染，只移除已確認的假路徑，再從已驗證 commit 重建正式檔案：
+若發現污染，只移除已確認的假路徑，再從完整 development snapshot 重建 index 與 worktree：
 
 ```powershell
 git -C $release rm --cached --ignore-unmatch -- sample_tool.py second_tool.py
-$files = git diff-tree --no-commit-id --name-only -r <DEV_COMMIT>
-git -C $release checkout <DEV_COMMIT> -- $files
+git -C $release read-tree --reset -u $devCommit
+git -C $release diff --cached --quiet $devCommit --
+if ($LASTEXITCODE -ne 0) { throw "污染恢復後 index 不等於 DEV_COMMIT tracked tree" }
 git -C $release diff --cached --check
 ```
 
@@ -120,8 +149,12 @@ push workflow 的 `GITHUB_BASE_REF` 可能存在但為空字串；hook 必須以
 git -C $release push origin HEAD:main
 git branch -f main origin/main
 
-gh run list --branch main --commit <RELEASE_COMMIT> --limit 5
-gh run view <RUN_ID> --exit-status
+$releaseCommit = (git -C $release rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0) { throw "無法解析 release commit" }
+
+$runId = gh run list --branch main --commit $releaseCommit --limit 1 --json databaseId --jq '.[0].databaseId'
+if ($LASTEXITCODE -ne 0 -or -not $runId) { throw "找不到 release commit 對應的 Actions run" }
+gh run view $runId --exit-status
 ```
 
 `gh run view --exit-status` 成功後才能安裝本機套件及執行外部專案 upgrade；不得用尚未通過 Actions 的 build 覆蓋本機工具。Actions 失敗時保留 release worktree 與日誌，建立修正 Task，不得宣告完成。
@@ -131,17 +164,20 @@ gh run view <RUN_ID> --exit-status
 先安裝已通過 Actions 的 release commit：
 
 ```powershell
+$adadRepo = 'C:\path\to\ADAD'
 Push-Location $release
-<ADAD_REPO>\.venv\Scripts\python.exe -m pip install --upgrade .
-<ADAD_REPO>\.venv\Scripts\adad.exe --version
+& "$adadRepo\.venv\Scripts\python.exe" -m pip install --upgrade .
+& "$adadRepo\.venv\Scripts\adad.exe" --version
 Pop-Location
 ```
 
 不得直接拿使用者正在開發的專案試升級。從含 `sub_maps` 的外部專案建立乾淨副本 `<UPGRADE_COPY>`，確認 `git status --short` 為空：
 
 ```powershell
-git clone --local <EXTERNAL_REPO> <UPGRADE_COPY>
-git -C <UPGRADE_COPY> status --short
+$externalRepo = 'C:\path\to\external-project'
+$upgradeCopy = 'C:\tmp\external-project-upgrade-copy'
+git clone --local $externalRepo $upgradeCopy
+git -C $upgradeCopy status --short
 ```
 
 再記錄升級前資料：
@@ -153,11 +189,13 @@ git -C <UPGRADE_COPY> status --short
 在乾淨副本執行：
 
 ```powershell
-Push-Location <UPGRADE_COPY>
-<ADAD_REPO>\.venv\Scripts\adad.exe upgrade
-<ADAD_REPO>\.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\read_context.py FinanceImport
-<ADAD_REPO>\.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\compile_map.py
-<ADAD_REPO>\.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\compile_map.py
+$adadRepo = 'C:\path\to\ADAD'
+$upgradeCopy = 'C:\tmp\external-project-upgrade-copy'
+Push-Location $upgradeCopy
+& "$adadRepo\.venv\Scripts\adad.exe" upgrade
+& "$adadRepo\.venv\Scripts\python.exe" .agents\skills\adad-workflow\scripts\read_context.py FinanceImport
+& "$adadRepo\.venv\Scripts\python.exe" .agents\skills\adad-workflow\scripts\compile_map.py
+& "$adadRepo\.venv\Scripts\python.exe" .agents\skills\adad-workflow\scripts\compile_map.py
 git status --short
 Pop-Location
 ```

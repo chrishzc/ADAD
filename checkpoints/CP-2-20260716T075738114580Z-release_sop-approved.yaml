@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260716T075738114580Z-release_sop
+  phase: 2
+  timestamp: '2026-07-16T07:57:38.114580+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: release_sop
+    task_id: release_sop@v17@d2ffb3
+    system_map_version: 17
+    source_hash: d2ffb393868a31c99e9de043d8e178cc9f079bb1eed024747b83407cb249192c
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''
