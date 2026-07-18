@@ -47,14 +47,14 @@ def main():
     # ponytail: Rule of Two 改版後改看 Description 加權相似度，
     # 沒有 description 欄位時只剩規則 1（介面完全一致）在運作，不會報錯。
     proposed_description = data.get("description", "")
-    
+
     if not name:
         print(json.dumps({"error": "JSON 必須包含 'name' 欄位。"}, ensure_ascii=False))
         sys.exit(1)
-        
+
     core = ADADCore()
     result = core.evaluate_normalization(name, proposed_input, proposed_output, proposed_description)
-    
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 if __name__ == "__main__":

@@ -183,7 +183,7 @@ def _ensure_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) ->
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(settings_path))) or "."
     python_path = _project_venv_python(project_root)
     script_path = os.path.normpath(os.path.join(project_root, ".agents", "skills", "adad-workflow", "scripts", "adad_pretooluse_gate.py"))
-    
+
     if os.name == "nt":
         platform_family = "windows"
     elif os.name == "posix":
@@ -1016,4 +1016,3 @@ def _ensure_project_virtual_environment(project_root: str) -> dict:
         "legacy_venv_detected": legacy_venv_detected,
         "path": os.path.normpath(dot_venv_path)
     }
-

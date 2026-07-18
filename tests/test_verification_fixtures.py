@@ -15,7 +15,7 @@ def test_resolve_verification_fixture_inputs_no_fixtures():
 def test_resolve_verification_fixture_inputs_invalid_case_structure():
     with pytest.raises(ValueError, match="case must be a dict"):
         resolve_verification_fixture_inputs([], ".")
-        
+
     with pytest.raises(ValueError, match="case\\['input'\\] must be a dict"):
         resolve_verification_fixture_inputs({"input": []}, ".")
 
@@ -97,7 +97,7 @@ def test_resolve_verification_fixture_inputs_path_traversal(tmp_path):
     project_root.mkdir()
     outside_file = tmp_path / "outside.json"
     outside_file.write_text('{"a": 1}')
-    
+
     case = {
         "input": {},
         "fixtures": [
@@ -130,7 +130,7 @@ def test_resolve_verification_fixture_inputs_success(tmp_path):
     project_root.mkdir()
     fixture_file = project_root / "fixture.json"
     fixture_file.write_text('{"a": 42}', encoding="utf-8")
-    
+
     case = {
         "input": {"x": 1},
         "fixtures": [
@@ -141,16 +141,16 @@ def test_resolve_verification_fixture_inputs_success(tmp_path):
         ],
         "expect": 42
     }
-    
+
     # Keep copy of original case to verify it does not change
     import copy
     original_case = copy.deepcopy(case)
-    
+
     res = resolve_verification_fixture_inputs(case, str(project_root))
-    
+
     # Verify original object is unmodified after successful injection
     assert case == original_case
-    
+
     assert res["input"] == {"x": 1, "payload": {"a": 42}}
     assert res["expect"] == 42
     assert res["fixtures"] == case["fixtures"]
@@ -158,7 +158,7 @@ def test_resolve_verification_fixture_inputs_success(tmp_path):
 def test_resolve_verification_fixture_inputs_non_existent_file(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
-    
+
     case = {
         "input": {},
         "fixtures": [
@@ -176,7 +176,7 @@ def test_resolve_verification_fixture_inputs_duplicate_input_keys(tmp_path):
     project_root.mkdir()
     fixture_file = project_root / "fixture.json"
     fixture_file.write_text('{"a": 42}', encoding="utf-8")
-    
+
     case = {
         "input": {},
         "fixtures": [
@@ -198,7 +198,7 @@ def test_resolve_verification_fixture_inputs_invalid_json(tmp_path):
     project_root.mkdir()
     fixture_file = project_root / "invalid.json"
     fixture_file.write_text('{invalid json', encoding="utf-8")
-    
+
     case = {
         "input": {},
         "fixtures": [

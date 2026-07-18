@@ -17,15 +17,15 @@ def main():
         line = line.strip()
         if not line:
             continue
-            
+
         try:
             req = json.loads(line)
         except Exception:
             continue
-            
+
         req_id = req.get("id")
         method = req.get("method")
-        
+
         if method == "initialize":
             resp = {
                 "jsonrpc": "2.0",
@@ -37,11 +37,11 @@ def main():
                 }
             }
             print(json.dumps(resp), flush=True)
-            
+
         elif method == "notifications/initialized":
             # Just ignore
             pass
-            
+
         elif method == "tools/list":
             # 讀取 schema
             schema_path = os.path.join(os.path.dirname(__file__), "blocked_report.schema.json")
@@ -57,7 +57,7 @@ def main():
                     },
                     "required": ["node_name", "reason"]
                 }
-                
+
             resp = {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -70,21 +70,21 @@ def main():
                 }
             }
             print(json.dumps(resp), flush=True)
-            
+
         elif method == "tools/call":
             params = req.get("params", {})
             name = params.get("name")
             args = params.get("arguments", {})
-            
+
             if name == "report_blocked":
                 node_name = args.get("node_name", "")
                 reason = args.get("reason", "")
-                
+
                 # 動態載入 adad_core 執行 task_block
                 script_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "agents", "skills", "adad-workflow", "scripts"))
                 if script_dir not in sys.path:
                     sys.path.insert(0, script_dir)
-                    
+
                 try:
                     from adad_core import ADADCore
                     core = ADADCore()
@@ -98,7 +98,7 @@ def main():
                 except Exception as e:
                     text = f"Internal Error: {traceback.format_exc()}"
                     is_error = True
-                    
+
                 resp = {
                     "jsonrpc": "2.0",
                     "id": req_id,

@@ -18,7 +18,7 @@ def write_utf8_text_atomic(file_path: str, text: str) -> str:
     """
     dirname, basename = os.path.split(os.path.abspath(file_path))
     os.makedirs(dirname, exist_ok=True)
-    
+
     fd, tmp_path = tempfile.mkstemp(dir=dirname, prefix=f".{basename}.tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
