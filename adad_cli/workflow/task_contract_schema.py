@@ -91,6 +91,9 @@ def validate_verification_conditions(verification_cases: list) -> list:
         if not has_expect and not has_expect_exception:
             raise ValueError(f"verification_cases item at index {i} must specify either 'expect' or 'expect_exception' (Postconditions)")
 
+        if has_expect and has_expect_exception:
+            raise ValueError(f"verification_cases item at index {i} cannot specify both 'expect' and 'expect_exception'")
+
         if has_expect_exception:
             if not isinstance(case["expect_exception"], str):
                 raise ValueError(f"expect_exception in verification_cases item at index {i} must be a string")

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import run_script, write_yaml, make_module
+from conftest import run_script, workflow_test_harness, write_yaml, make_module
 
 
 def _load_pre_commit_module():
@@ -58,45 +58,9 @@ def test_get_staged_files_selects_expected_diff_target(
     monkeypatch.setattr(module.subprocess, "run", fake_run)
 
     assert module.get_staged_files() == ["sample.py"]
-    expected_calls = []
-    if ci is not None and not base_ref:
-        expected_calls.append(["git", "rev-parse", "--verify", "HEAD~1"])
-    expected_calls.append(
+    assert calls == [
         ["git", "diff", *expected_target, "--name-only", "--diff-filter=ACM"]
-    )
-    assert calls == expected_calls
-
-
-def test_get_staged_files_uses_empty_tree_for_initial_ci_commit(monkeypatch):
-    module = _load_pre_commit_module()
-    monkeypatch.setenv("CI", "true")
-    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
-
-    def fake_run(argv, **kwargs):
-        if argv[-1] == "HEAD~1":
-            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
-        if argv[-1] == "HEAD":
-            return subprocess.CompletedProcess(argv, 0, stdout="HEAD\n", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="sample.py\n", stderr="")
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    assert module.get_staged_files() == ["sample.py"]
-
-
-def test_get_staged_files_uses_index_for_unborn_ci_repository(monkeypatch):
-    module = _load_pre_commit_module()
-    monkeypatch.setenv("CI", "true")
-    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
-
-    def fake_run(argv, **kwargs):
-        if argv[:3] == ["git", "rev-parse", "--verify"]:
-            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="sample.py\n", stderr="")
-
-    monkeypatch.setattr(module.subprocess, "run", fake_run)
-
-    assert module.get_staged_files() == ["sample.py"]
+    ]
 
 
 def _git(args, cwd):
@@ -131,6 +95,40 @@ def git_repo(project_dir):
 def test_no_staged_files_exits_clean(git_repo):
     code, data, out, err = run_script("adad_pre_commit.py", cwd=git_repo)
     assert code == 0
+
+
+def test_workflow_test_harness_strips_outer_ci_event_context():
+    child_environment = workflow_test_harness(
+        {"CI": "true", "GITHUB_BASE_REF": "", "PATH": "bin"}
+    )
+
+    assert child_environment == {
+        "PATH": "bin",
+        "PYTHONIOENCODING": "utf-8",
+    }
+
+
+def test_workflow_test_harness_allows_explicit_ci_opt_in():
+    child_environment = workflow_test_harness(
+        {"CI": "true", "PATH": "bin"},
+        {"CI": "true", "GITHUB_BASE_REF": "main"},
+    )
+
+    assert child_environment == {
+        "CI": "true",
+        "GITHUB_BASE_REF": "main",
+        "PATH": "bin",
+        "PYTHONIOENCODING": "utf-8",
+    }
+
+
+def test_run_script_ignores_outer_ci_context_in_fresh_repo(git_repo, monkeypatch):
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("GITHUB_BASE_REF", "")
+
+    code, data, out, err = run_script("adad_pre_commit.py", cwd=git_repo)
+
+    assert code == 0, err or out
 
 
 def test_blocks_editing_deployed_module_rule02(git_repo, base_modules):

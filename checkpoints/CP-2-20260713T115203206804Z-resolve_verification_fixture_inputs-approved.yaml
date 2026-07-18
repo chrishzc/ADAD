@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T115203206804Z-resolve_verification_fixture_inputs
+  phase: 2
+  timestamp: '2026-07-13T11:52:03.206804+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: resolve_verification_fixture_inputs
+    task_id: resolve_verification_fixture_inputs@v5@77e420
+    system_map_version: 5
+    source_hash: 77e42007955282a56ef06d276c5ec55e2aba5d702ece241debf251c91df3db8f
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260715T133057651517Z-adad_core
+  phase: 2
+  timestamp: '2026-07-15T13:30:57.651517+00:00'
+  triggered_by: human
+  status: rejected
+  target:
+    node_name: adad_core
+    task_id: adad_core@v17@586fcd
+    system_map_version: 17
+    source_hash: 586fcd7a29ffd1325c33f9df4803427439a07735a7062b169c4b64ad2b059d94
+  decision:
+    action: rejected
+    reviewer: chris
+    comment: 補上 parse_markdown 的 Sub Map 至 sub_map 解析與驗證

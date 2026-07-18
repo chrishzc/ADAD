@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260716T133829218827Z-upgrade_project_virtual_environment
+  phase: 2
+  timestamp: '2026-07-16T13:38:29.218827+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: upgrade_project_virtual_environment
+    task_id: upgrade_project_virtual_environment@v17@72f9d5
+    system_map_version: 17
+    source_hash: 72f9d5613298cf1dd5a27191ceaa5f48830cf099ed3684798ae0aea50d7bf592
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

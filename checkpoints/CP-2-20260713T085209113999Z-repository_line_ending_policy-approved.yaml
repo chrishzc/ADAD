@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T085209113999Z-repository_line_ending_policy
+  phase: 2
+  timestamp: '2026-07-13T08:52:09.113999+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: repository_line_ending_policy
+    task_id: repository_line_ending_policy@v4@bd5e6c
+    system_map_version: 4
+    source_hash: bd5e6c2f944f1b0214910d4dbb1d0bab159f1cce27181335aedf76b21e25a436
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

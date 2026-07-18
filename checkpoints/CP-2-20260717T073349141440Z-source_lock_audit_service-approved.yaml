@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260717T073349141440Z-source_lock_audit_service
+  phase: 2
+  timestamp: '2026-07-17T07:33:49.141440+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: source_lock_audit_service
+    task_id: source_lock_audit_service@v17@ddb8cb
+    system_map_version: 17
+    source_hash: ddb8cb49b5dac5acc554a401d08348bf7468eb75ccd66da09dbd5d7be75bb252
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T112000403489Z-ensure_claude_pretooluse_hook
+  phase: 2
+  timestamp: '2026-07-13T11:20:00.403489+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: ensure_claude_pretooluse_hook
+    task_id: ensure_claude_pretooluse_hook@v5@9fb43a
+    system_map_version: 5
+    source_hash: 9fb43ae9a361f33d8f4dae9cb3440fad2fe5ec0b76b8d1b7693aa98d7c6dab09
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

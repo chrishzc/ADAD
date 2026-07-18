@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2DD4BF">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.6.0-38BDF8">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.6.2-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
@@ -17,12 +17,12 @@
 
 ADAD 的核心理念是：**將「系統設計（架構）」與「程式碼實作（邏輯）」徹底解耦**。由人類把持高價值的架構與驗收 Checkpoint，並指派 Agent 在最小 Context 的約束下進行高精度的原子程式碼生成，以防範 AI 開發中的架構失控與 Context 膨脹問題。
 
-## ✨ 1.4.0 更新重點
+## ✨ 1.6.2 更新重點
 
-- **CLI／migration 驗證**：Verification 新增 `command` 與 `integration_case`，不再要求 CLI 腳本提供可 import 的同名函式。
-- **隔離執行**：fixture 複製到暫存工作區，以 argv、`shell=False`、timeout 與預期 exit code 執行多步驗證。
-- **migration 安全驗收**：可組合 check、apply、資料快照 checker 與第二次 apply，確認資料保持及 idempotent。
-- **測試覆蓋**：完整 pytest 140 項通過。
+- **Task／Source Lock 強化**：Task 快照與 Source Lock 的稽核、分類、釋放與失敗復原皆採 fail-closed；不確定的檔案狀態不會被自動清除。
+- **資產同步與升級隔離**：資產同步可指定目標根目錄供測試使用；打包與 `adad upgrade` 均排除 Python 編譯快取，避免將測試產物帶入使用者專案。
+- **pytest 穩定性**：pytest 使用受控 `--basetemp` 並停用 cacheprovider，避免在專案根目錄留下快取；`generate_task` 另有 project-root 隔離回歸測試，防止暫存檔寫入錯誤目錄而超時。
+- **回歸覆蓋**：已完成代辦 #32、#40、#41、#44、#49、#51 補上可重複執行的 pytest，並以完整測試套件驗證。
 
 完整變更請見 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -139,12 +139,15 @@ ADAD/                # ← repo 根目錄，pip install . 要在這裡執行
 │               ├── transit_state.py
 │               ├── verify_implementation.py # 實作校驗器 (驗證 Verification 條件如斷言)
 │               └── check_invariants.py # Invariants 校驗器 (驗證靜態 AST 導入約束)
+├── checkpoints/                   # Checkpoint 決策歷史存檔目錄 (CP-X-XXX.yaml)
+├── system_map.md                  # 專案架構唯一事實來源 (SSOT - Architecture Source)
+├── system_map.yaml                # 專案架構中間表示檔 (SSOT - Architecture IR)
 └── README.md                      # 本說明文件
 ```
 
-> 💡 `.agents/`、`adad_source/agents/` 與 `adad_cli/resources/agents/` 是發行套件的 Agent 資產來源；
-> `adad init` 會將所需版本複製到使用 ADAD 的目標專案。目標專案自己的
-> `system_map.md`／`system_map.yaml`／`checkpoints/` 不納入此發行分支。
+> 💡 `.agents/` 是這個 repo「自己開發自己」時用的 ADAD 專案結構（dogfooding）；
+> `adad_cli/resources/agents/` 則是**打包進 `adad` 套件、會被複製到其他專案**的版本。
+> 兩者內容一致，只是用途不同——一個是「本 repo 自舉」，一個是「發佈給別人用」。
 
 ---
 ## 🚀 快速上手

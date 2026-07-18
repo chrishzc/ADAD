@@ -137,6 +137,46 @@ def test_verify_implementation_command_can_opt_into_project_cwd(project_dir, bas
     assert data["command_results"][0]["cwd"] == str(project_dir)
 
 
+def test_pytest_command_uses_project_local_basetemp_when_omitted(project_dir, base_modules):
+    src = project_dir / "tool.py"
+    src.write_text("def sample_tool(x):\n    return x\n", encoding="utf-8")
+    (project_dir / "test_probe.py").write_text(
+        "def test_probe():\n    assert True\n", encoding="utf-8"
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "tool.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{project_python}", "-m", "pytest", "test_probe.py", "-q"], "cwd": "project"}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
+
+    assert code == 0, err
+    argv = data["command_results"][0]["argv"]
+    index = argv.index("--basetemp")
+    assert argv[index + 1].startswith(str(project_dir / ".agents" / "workspaces"))
+
+
+def test_pytest_command_preserves_explicit_basetemp(project_dir, base_modules):
+    src = project_dir / "tool.py"
+    src.write_text("def sample_tool(x):\n    return x\n", encoding="utf-8")
+    (project_dir / "test_probe.py").write_text(
+        "def test_probe():\n    assert True\n", encoding="utf-8"
+    )
+    base_modules["modules"]["sample_tool"]["source"] = "tool.py"
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": ["{project_python}", "-m", "pytest", "test_probe.py", "-q", "--basetemp", "custom-pytest"], "cwd": "project"}}
+    ]
+    write_yaml(project_dir, base_modules)
+
+    code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
+
+    assert code == 0, err
+    argv = data["command_results"][0]["argv"]
+    assert argv.count("--basetemp") == 1
+    assert argv[argv.index("--basetemp") + 1] == "custom-pytest"
+
+
 def test_verification_command_ignores_outer_git_index_and_preserves_other_env(
     project_dir, base_modules, tmp_path, monkeypatch
 ):

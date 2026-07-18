@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260715T023716533129Z-workflow_test_harness
+  phase: 2
+  timestamp: '2026-07-15T02:37:16.533129+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: workflow_test_harness
+    task_id: workflow_test_harness@v15@862094
+    system_map_version: 15
+    source_hash: 86209420b4b7f99b0541fdc3366ab622e5befa3bbc7e16cd9d964b402be07bab
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

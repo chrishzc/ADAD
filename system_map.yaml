@@ -1,0 +1,3907 @@
+version: 18
+modules:
+  sync_adad_assets:
+    type: tool
+    description: 以 adad_source 作為唯一可編輯來源，同步產生本 repo 的 .agents 與套件 resources 資產；Python
+      快取不是受管理資產，必須排除於同步、比較與複製之外。
+    source: adad_cli/sync_assets.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      source_file: adad_cli/sync_assets.py
+      test_file: tests/test_sync_assets.py
+      target_root: Path (optional; default repository root)
+      allowed_symbols: '[_tree_files, _compare_tree, _copy_tree, managed_assets, sync_assets]'
+      allowed_files: '[adad_cli/sync_assets.py, tests/test_sync_assets.py]'
+      forbidden_files: '[adad_source, adad_cli/resources, .agents/AGENTS.md, README.md]'
+    output:
+      result: object（同步或檢查結果；不一致時列出相對路徑）
+    exceptions: []
+    invariants:
+    - 'deny_imports: [yaml]'
+    preferred_pattern: pure_function
+    verification:
+    - must_have_assertions
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - -q
+        - tests/test_sync_assets.py
+        - --basetemp
+        - '{workspace}/pytest'
+        cwd: project
+        expect_exit: 0
+    decisions: []
+    todo:
+    - '[x] 規格總覽 #50：排除並清理 Python 快取，避免同步一致性假失敗'
+    - '[ ] #76-B1：同步、比較與複製時排除 Python 編譯快取'
+    checkpoint:
+    - '[x] CP-1-018 (validated)'
+    - '[x] CP-3-002 (validated：生成資產快取排除)'
+    - '[x] CP-1-076-B1-SYNC-CACHE (validated：2026-07-16 人工核准)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - 收集與比較檔案樹時，排除路徑任一層為 __pycache__ 的檔案及副檔名為 .pyc 的檔案。
+    - --write 前先從受管理輸出樹移除上述快取，再只複製 canonical 的非快取檔案。
+    - --check 只比較受管理檔案，Python 執行期產生的快取不得造成不一致。
+    - 擴充測試，驗證 canonical 與輸出任一側出現 .pyc 時，資產檢查仍只評估受管理檔案且 --write 可清理輸出快取。
+    - pytest 的寫入驗證必須提供 tmp_path target_root；正式 repo 僅以 --check 驗證，避免權限與跨專案副作用。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 2
+    known_symbols:
+    - _compare_file
+    - _compare_tree
+    - _copy_file
+    - _copy_tree
+    - _tree_files
+    - main
+    - managed_assets
+    - sync_assets
+  read_context:
+    type: tool
+    description: 讀取單一節點最小上下文的輔助工具
+    source: adad_source/agents/skills/adad-workflow/scripts/read_context.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      node_name: string
+    output:
+      context: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊與其他 UI 工具串接的 context 回傳欄位'
+    checkpoint:
+    - '[x] CP-1-001 (validated)'
+    - '[x] CP-2-001 (deployed)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 1
+    known_symbols:
+    - main
+  check_normalization:
+    type: tool
+    description: 執行 Rule of Two 邊界檢查；架構提案只能透過 UTF-8 JSON 檔案或 stdin 傳入，禁止 positional
+      JSON，避免 Windows PowerShell 與其他 shell quoting 破壞內容。
+    source: adad_source/agents/skills/adad-workflow/scripts/check_normalization.py::main
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      target_file: adad_source/agents/skills/adad-workflow/scripts/check_normalization.py
+      allowed_symbols: '[main]'
+      forbidden_files: '[system_map.md, adad_cli/core.py, adad_cli/sync_assets.py,
+        adad_cli/resources, .agents, README.md]'
+      proposal_file: path（CLI 旗標為 --file；strict UTF-8 JSON 檔案，可選，與 stdin 二擇一）
+      stdin: string（未提供 --file 時使用）
+    output:
+      result: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [pymysql]'
+    preferred_pattern: pure_function
+    verification:
+    - must_have_assertions
+    decisions: []
+    todo:
+    - '[ ] 支持更加複雜的模糊關鍵字權重分析比對'
+    checkpoint:
+    - '[x] CP-1-002 (validated)'
+    - '[x] CP-2-002 (deployed)'
+    - '[x] CP-3-001 (validated：改善 Windows quoting 輸入邊界)'
+    - '[x] CP-3-040 (approved：停用 positional JSON，改以 --file 或 stdin 作為唯一正式輸入)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 使用 argparse 定義 `--file <path>`；任何 positional 參數都視為已停用的危險輸入方式，輸出結構化錯誤並 exit 1。
+    - 若提供 `--file`，以 strict UTF-8 讀取完整內容；否則從 stdin 讀取。stdin 為互動終端或內容空白時輸出結構化用法錯誤。
+    - 將取得的文字交給 json.loads；解析失敗、檔案讀取失敗或根節點不是 object 時，都輸出單一 JSON error object 並 exit
+      1，不輸出 traceback。
+    - 保留 name 必填與既有 ADADCore.evaluate_normalization 呼叫，不改 Rule of Two 判斷邏輯及成功輸出格式。
+    - canonical SKILL 指令範例不得再出現 positional JSON，只能示範 `--file`；stdin 適用於能安全傳遞原始位元流的平台。
+    - 僅修改 canonical source 與同一節點的 canonical 操作指示；生成副本由 sync_adad_assets 更新，不直接手改。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  analyze_cascade:
+    type: tool
+    description: 執行髒點級聯依賴分析的 DAG 走查工具
+    source: adad_source/agents/skills/adad-workflow/scripts/analyze_cascade.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      changed_node_name: string
+    output:
+      dirty_nodes: array
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 優化多重循環依賴的死循環防範機制'
+    checkpoint:
+    - '[x] CP-1-003 (validated)'
+    - '[x] CP-2-003 (deployed)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  transit_state:
+    type: tool
+    description: 推進或變更模組生命週期狀態的狀態機工具
+    source: adad_source/agents/skills/adad-workflow/scripts/transit_state.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      node_name: string
+      next_state: string
+    output:
+      result: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 結合 Git Hook 自動觸發狀態轉移'
+    checkpoint:
+    - '[x] CP-1-004 (validated)'
+    - '[x] CP-2-004 (deployed)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  adad_core:
+    type: library
+    description: '#61 Verification 環境隔離；#66 context warning；#69 提供 YAML sub_maps 合成讀取、owner
+      追蹤與分圖安全儲存；#74 修正函式級 Source gate 與 Windows pytest 暫存目錄；#77 Verification runner
+      對 pytest command 停用 cacheprovider，避免在 project cwd 建立或修改 `.pytest_cache`；#78
+      修正 Source Lock 的 task_block 一致性，並提供唯讀 audit 與明確 opt-in、fail-closed 的 prune/reconcile；#80-A4
+      恢復已核准的 Source Lock compatibility facade，僅委派已抽離 repository 與唯讀 audit service。'
+    source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - source_lock_repository
+    - source_lock_audit_service
+    input:
+      verification_command: object
+      inherited_environment: object
+      node_name: string
+      node_source: string
+      file_path: string|null
+      source_lock_mode: audit|prune|reconcile
+      task_snapshots: .agents/tasks/*.task.json
+      source_lock_files: .agents/tasks/.source_locks/*.lock.json
+      project_root: path
+      allowed_symbols: '[ADADCore._task_path, ADADCore._save_task, ADADCore.generate_task,
+        ADADCore._write_checkpoint_audit]'
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/adad_core.py,
+        tests/test_generate_task.py, tests/test_task_contract_schema.py]'
+    output:
+      command_result: object
+      sanitized_environment: object
+      context: object
+      context_warnings: array
+      composite_modules: object
+      module_owners: object
+      parsed_sub_map: string
+      resolved_file_path: string
+      task_block_result: object
+      source_lock_report: object
+      approval_failure: object（success=false、error、transaction_recovery）
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_generate_task.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-generate-task-json-workspace'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份
+      dump root；owner 不明時禁止猜測；所有 gate 共用同一個實體 Source 路徑；pytest 暫存隔離由 Verification
+      runner 提供且尊重明確 basetemp；cacheprovider 與 basetemp 是互補隔離，不讀寫 pytest config 或環境設定；canonical
+      adad_source 是唯一可編輯來源；Source Lock lifecycle 同屬既有整檔 owner adad_core，不建立同檔重複 owner；_commit_checkpoint_decision
+      是 approve lock release 的必要交易邊界；task_approve 必須納入 allowed symbols 才能公開結構化 recovery；typed
+      structured exception 是維持成功介面的最小變更；primary failure 與 rollback failure 分欄保存；recovery
+      schema 固定且可直接 JSON serialize；quarantine rename 取代 check-then-remove；全域 enumeration/read
+      uncertainty 阻斷所有 mutation；blocked/approved Task 保留 source_lock 作審計 metadata，釋放只代表
+      canonical physical lock 消失；mismatch 與 invalid 永遠 fail-closed；audit 不接 compile、resume、pre-commit；Task
+      JSON 不納入清理；#80-A4 facade 只委派已核准 service，不重建或改寫 Source Lock 政策
+    todo:
+    - '[ ] #61：隔離 linked-worktree hook 的 Git repo 環境'
+    - '[ ] #66：參考文件缺失改為結構化 warning，不污染 Task context'
+    - '[ ] #69：YAML sub_maps 合成載入與 owner-aware save'
+    - '[ ] #74：函式級 Source gate 使用實體檔案路徑，pytest command 預設使用 workspace basetemp'
+    - '[ ] #77：pytest Verification 停用 cacheprovider，避免 project cwd 產生 `.pytest_cache`'
+    - '[ ] #78：Source Lock task_block 一致性、唯讀 audit 與 opt-in prune/reconcile'
+    - '[ ] #78-R1：approve release 交易回滾、權限不確定性與 quarantine TOCTOU 修正'
+    - '[ ] #78-R2：approval transaction recovery 固定結構化輸出與剩餘 fail-closed 驗收'
+    - '[ ] #78-R2-OVERRIDE：全 candidate 唯讀 preflight；任一 uncertainty 阻斷整批 mutation'
+    - '[ ] #80-CP3：decode／JSON audit uncertainty 全域阻擋 mutation，建立 A2 新 direct-parity
+      baseline'
+    - '[ ] #80-A4：恢復 Source Lock repository／audit compatibility facade，不重寫政策'
+    - '[ ] #80-A4-CP3：_release_source_lock 委派 repository 並保留 structured receipt'
+    - '[ ] #77-R1：修復 pytest cacheprovider 注入與 verification runner timeout'
+    - '[ ] #77-R1-CP3：將 verification workspace 移出 .agents/workspaces，隔離 pytest basetemp
+      cleanup'
+    - '[ ] #77-R2：區分 project command 與 disposable integration workspace 的 lifecycle'
+    - '[ ] #77-R2-CP3：timeout 時終止 verification command 的完整 process group，避免子行程持有 pipe
+      造成 runner 無界等待'
+    - '[ ] #80：Task snapshot 生成前驗證 JSON 可解析，保護既有有效 Task'
+    - '[ ] #80-R1：補齊 serialize／parse failure 的既有 Task preservation 回歸證據'
+    checkpoint:
+    - '[x] CP-1-074-FUNCTION-SOURCE-WINDOWS-PYTEST (validated：2026-07-16 人工核准先核發任務)'
+    - '[x] CP-1-061-CORE (validated：2026-07-15 medium Task 直接核發)'
+    - '[x] CP-1-066-CONTEXT (validated：2026-07-15 人工核准核發)'
+    - '[x] CP-1-069-SUBMAP-CORE (validated：2026-07-15 人工要求解決)'
+    - '[x] CP-1-077-PYTEST-CACHEPROVIDER (validated：2026-07-16 人工核准)'
+    - '[x] CP-1-078-CORE-SOURCE-LOCK-RECONCILIATION (validated：2026-07-16 人工核准)'
+    - '[x] CP-1-078-CORE-SOURCE-LOCK-RECONCILIATION-R1 (validated：2026-07-16 人工核准；Reviewer
+      return_count 1/3)'
+    - '[x] CP-1-078-CORE-SOURCE-LOCK-RECONCILIATION-R2 (validated：2026-07-16 人工核准；Reviewer
+      return_count 2/3)'
+    - '[x] CP-HUMAN-078-R2-OVERRIDE (authorized：2026-07-16；Reviewer return_count 3/3
+      後人工指示修改)'
+    - '[x] CP-3-080-A2-DECODE-JSON-GLOBAL-FAIL-CLOSED (validated：2026-07-17 人工核准；strict-read／decode／JSON
+      parse 失敗全域 fail-closed)'
+    - '[x] CP-1-080-A4-CORE-COMPATIBILITY-FACADE (validated：2026-07-17 人工核准；僅委派 repository／audit
+      service，不重寫 lock 政策、不接 CLI)'
+    - '[x] CP-3-080-A4-CORE-COMPATIBILITY-RELEASE-DELEGATION (validated：2026-07-17
+      人工核准；_release_source_lock 僅委派 repository.release 並原樣回傳 receipt)'
+    - '[x] CP-1-077-R1-VERIFICATION-CACHEPROVIDER-RECONCILIATION (validated：2026-07-17
+      人工核准；僅修正 pytest argv 注入與回歸測試)'
+    - '[x] CP-3-077-R1-VERIFICATION-WORKSPACE-CLEANUP-BOUNDARY (validated：2026-07-17
+      人工核准；workspace 與 .agents task／lock artifact 邊界分離)'
+    - '[x] CP-1-077-R2-VERIFICATION-WORKSPACE-LIFECYCLE (validated：2026-07-17 人工核准；單一
+      project command 不建立 disposable workspace，integration 保留可稽核 lifecycle)'
+    - '[x] CP-3-077-R2-VERIFICATION-PROCESS-GROUP-TERMINATION (validated：2026-07-18
+      人工核准；timeout 終止完整 command tree 並有界收集診斷輸出)'
+    - '[x] CP-1-080-ADAD-CORE-TASK-SNAPSHOT-JSON-ATOMICITY (validated：2026-07-18 人工核准；暫停
+      adad_core@v17@ed2fbd，僅核發 snapshot JSON 原子性修復)'
+    - '[ ] CP-1-080-ADAD-CORE-TASK-SNAPSHOT-JSON-ATOMICITY-R1 (planned：補 JSON serialization／parse
+      failure direct regression)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 執行 Verification command 前複製目前環境。
+    - 移除 GIT_DIR、GIT_WORK_TREE、GIT_INDEX_FILE、GIT_COMMON_DIR、GIT_OBJECT_DIRECTORY、GIT_ALTERNATE_OBJECT_DIRECTORIES、GIT_PREFIX
+      與 GIT_IMPLICIT_WORK_TREE。
+    - 保留 PATH、認證與非 repo-routing 環境，並將清理後環境傳入 subprocess。
+    - 測試模擬 linked worktree hook 的外層 index，驗證子程序依 cwd 使用內層 repo，且外層 index 不變。
+    - read_context 只在 ADR／Pattern 成功載入時輸出 summary；缺檔不得寫入 target_node，改在 context_warnings
+      追加固定 entry。
+    - '每個 warning entry 固定為 {kind: missing_reference, reference_type: decision|pattern,
+      reference_id: string, error: string}；每個載入失敗各一筆。'
+    - 載入 root YAML 的 sub_maps mapping；每個值只能是 project root 內的相對 YAML 路徑，遞迴解析並阻斷 missing、cycle、path
+      traversal。
+    - 合併 root 與 child modules 給讀取端，模組名稱必須全域唯一；同時記錄每個 module 的 owner shard 與原始 shard
+      document。
+    - save 依 owner 把模組寫回原 shard；root metadata/sub_maps 只留在 root。存在 sub_maps 時，沒有 owner
+      的新模組一律 fail-fast。
+    - IR validity 同時比較 root Markdown、root YAML 與所有 child YAML 的 mtime；任何 child 變更都不得被忽略。
+    - parse_markdown 辨識模組欄位 `Sub Map`，去除前後空白後以 `sub_map` 輸出；空值立即拒絕，scope 是否存在交由 compile_map
+      驗證。
+    - 載入既有 YAML 時，若 module 宣告 sub_map，必須等於實際 shard owner（root 或對應 scope）；ghost scope
+      或 owner 不一致立即拒絕。未宣告 sub_map 的舊 IR 保持相容。
+    - check_invariants、verify_implementation 與 implementation hash 對 Source 進行檔案操作前，必須先將
+      `file.py::function` 拆成實體檔案路徑；明確傳入的 file_path 優先，但仍套用相同正規化。
+    - task_submit 必須將同一個已解析實體檔案路徑傳給 invariant、verification 與 implementation hash，禁止任一階段重新退回含
+      `::function` 的 Source。
+    - Verification command 若為 pytest 且未提供 `--basetemp` 或 `--basetemp=...`，自動注入位於 `{workspace}`
+      下且依步驟隔離的 basetemp；既有明確設定不得覆寫。
+    - 展開 argv 後，以 pytest command 判斷與 token-aware helper 辨識顯式 `-p no:cacheprovider`、`-p=no:cacheprovider`
+      或 compact 等價形式。
+    - pytest command 缺少停用設定時，只注入一組 `-p no:cacheprovider`；既有設定不得重複，非 pytest command
+      的 argv 完全不變。
+    - command result 的 argv 必須保存實際執行參數；測試同時驗證 project root 不產生或修改 `.pytest_cache`。
+    - '#77-R1 使用 token-aware helper 辨識分離、等號與 compact 的 cacheprovider-disabled 形式；僅在
+      pytest command 缺少等價 token 時，於執行前注入單一 `-p`、`no:cacheprovider`，且回報實際 argv。'
+    - '#77-R1-CP3 integration verification 的 disposable workspace 必須建立於 project root，不得位於
+      `.agents/workspaces`；使 pytest 的明確或注入 `--basetemp` 與 Task／Source Lock artifact
+      workspace 分離，並保留 TemporaryDirectory 成功後自動清理。'
+    - '#77-R2 對沒有 fixtures 的單一 command，若 cwd=project，直接以 project root 作 `{workspace}`
+      placeholder，不建立 TemporaryDirectory；pytest 的明確或注入 basetemp 因此是 project-root child，不與
+      disposable workspace cleanup 競爭。'
+    - '#77-R2 只有 integration_case 或 cwd=workspace 的 command 建立 disposable workspace；command
+      timeout 或 cleanup 不確定時保留該次 workspace 並回傳 structured preserved evidence，禁止在 error
+      path 卡住或猜測遞迴刪除。'
+    - task_block 保留 Task Schema v2 必填的 source_lock metadata；先保存 blocked 與 history，再以
+      exact source_path/node_name/task_id 釋放實體鎖。釋放失敗時 blocked 狀態、metadata 與 physical
+      lock 均保留並 fail-closed 回報。
+    - _release_source_lock 回傳 structured released、already_absent、identity_mismatch、invalid
+      或 error；PermissionError/OSError 不得當作 missing，canonical lock 不得直接 remove。
+    - _commit_checkpoint_decision 將 approve 的 lock release 納入同一交易：保存原 Task/map，寫入
+      tentative state、audit 與 history後，重新驗 exact lock identity，再以同目錄 unique quarantine
+      rename 作 commit point。
+    - approve 的 quarantine rename、identity revalidation 或 permission 失敗時，回滾 Task/map
+      並清除本次未提交 checkpoint；rollback cleanup 失敗必須回傳 compound recovery evidence，不得宣稱
+      approved。
+    - quarantine rename 成功後 approval 才成立；後續 quarantine delete 失敗只回傳 warning/action
+      evidence並保留 quarantine，不回滾已提交 approval，且 canonical path 不得仍持有舊鎖。
+    - approval 交易失敗使用 CheckpointTransactionError 保存固定 transaction_recovery object；human-readable
+      error 不得嵌入或字串化 recovery JSON。
+    - transaction_recovery 固定包含 phase、primary_failure、Task/system_map/checkpoint_audit/source_lock
+      rollback 狀態、safe_to_retry 與 manual_action_required；未發生項目以 not_needed、not_created
+      或 null 明確表示。
+    - _commit_checkpoint_decision 對 primary failure 與各項 rollback cleanup 分別記錄，rollback
+      錯誤不得遮蔽根因；restore conflict 不得覆寫不同 identity 的 canonical lock。
+    - task_approve 必須優先捕捉 CheckpointTransactionError，將 transaction_recovery dict 原樣放入失敗結果；一般
+      RuntimeError 維持既有 success/error 相容。
+    - audit 使用可區分 FileNotFound 與 PermissionError/OSError 的 scandir、lstat、open；禁止以
+      exists 將不確定性當不存在。
+    - task/lock directory 列舉失敗或迭代中斷時建立 synthetic invalid record，設定 healthy=false 與
+      mutation_blocked=true；全域掃描不完整時 prune/reconcile 全部禁止。
+    - 個別 lock/task 的 stat、regular-file 檢查若有權限或 I/O 不確定，一律分類 invalid；strict UTF-8 read、decode
+      或 JSON parse 失敗同時保留 invalid record 的 identity、digest 與 evidence，並標記 uncertain=true，使整份
+      audit healthy=false、mutation_blocked=true；只有父目錄完整列舉且 Task 明確 FileNotFound 才可分類
+      orphan。
+    - exact Task 與 lock metadata 且 status 為 assigned、in_progress、submitted 時分類 active；駁回待修正會回
+      assigned，必須保留鎖。
+    - exact Task 與 lock metadata 且 status 為 approved、blocked 時分類 stale；有效 lock 且對應
+      Task 確定不存在時分類 orphan。
+    - lock/Task 損壞、權限錯誤、required fields 缺失、檔名 digest 不符、task_id/source_path/node_name
+      mismatch 或 active Task 缺鎖均分類 invalid，不得自動刪除。
+    - audit record 保存 canonical path、payload digest、lstat identity（跨平台至少含 st_dev/st_ino
+      與 size/mtime_ns）、分類證據與 mutation eligibility。
+    - prune 只處理 audit 判定可回收的 stale/orphan；每筆 mutation 前重新 scandir/lstat/read/parse/reload
+      Task、重新分類並比對原 identity/digest。
+    - prune/reconcile 在任何 mutation 前，必須先對完整 candidate list 執行唯讀 revalidation preflight；任一
+      candidate 回報 uncertain 或 mutation_blocked 時立即整批失敗，mutations 必須為空。
+    - 只有全部 candidates 均完成無 uncertainty 的 preflight 後才可進入 mutation phase；deterministic
+      drift 可標記 skipped，但不得將 I/O／權限不確定降級為單筆 skipped 後繼續其他候選。
+    - mutation phase 若再次發生全域 scan uncertainty，必須恢復當前 quarantine 並停止尚未執行的所有後續 candidates，回傳
+      structured partial recovery evidence。
+    - prune 以 same-directory unique quarantine rename 固定 artifact identity；rename
+      後再次核對 quarantine identity/digest 並重新檢查 active claim。identity 改變或 active claim
+      出現時嘗試安全 restore；restore 衝突則保留 quarantine並 fail-closed，絕不刪除。
+    - 只有 quarantine identity 仍一致且舊鎖仍可安全移除時才刪 quarantine；delete 權限失敗保留 quarantine與證據，重跑不得誤刪同
+      canonical path 的新鎖。
+    - reconcile 只以 exclusive create 修復 exact valid active Task 的 missing lock；不得覆寫衝突、不得修改
+      Task JSON，且重複執行必須 idempotent。
+    - reconcile 在 exclusive create 後的 write/flush 失敗，只能在確認 partial file 是本次建立且 identity
+      未變時清除；cleanup 失敗必須回傳 manual-action evidence。
+    - '#80-A4 僅恢復 `_source_lock_path`、`_read_source_lock`、`_source_lock_identity`
+      與 `audit_source_locks` 的既有介面；這些方法必須委派 SourceLockRepository／SourceLockAuditService，保持既有輸入、輸出與
+      fail-closed evidence，不在 facade 重寫 lock 政策。'
+    - '#80-A4-CP3 將 `_release_source_lock` 委派 SourceLockRepository.release，原樣回傳既有
+      structured receipt；不得在 core 重建 quarantine、exact identity 或 cleanup 政策。'
+    - A4 不實作 prune、reconcile、quarantine lifecycle、Task lifecycle 或 CLI；尚未有對應 service
+      的介面維持後續單一節點處理，禁止以暫時邏輯補猜。
+    - '#77-R2-CP3 verification command 必須在可終止的獨立 process group/session 中啟動；timeout
+      時先終止整個 command tree，再以有界方式收集既有 stdout/stderr，回傳既有 timeout structured result（returncode=null）。'
+    - process-group termination 僅適用 timeout 路徑；正常完成時 argv、cwd、環境、輸出解碼與 exit 判定保持不變，終止或收集不確定時仍
+      fail-closed，不得無界等待。
+    - '#80 Task snapshot JSON atomicity：`ADADCore.generate_task` 是 snapshot 實際 owner；成功回傳前必須以標準
+      JSON parser 驗證候選內容。候選無法 parse 時不得覆寫既有有效 Task，且不得回傳 success=true。'
+    - '#80-R1 regression evidence 必須分別直接模擬 JSON serialization TypeError、JSON parse
+      failure 與 atomic replace failure；每條失敗路徑都驗證既有 Task bytes 未變且不遺留暫存檔。'
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 14
+    known_symbols:
+    - ADADCore.__init__
+    - ADADCore._acquire_source_lock
+    - ADADCore._advance_module_to_validated
+    - ADADCore._bigrams
+    - ADADCore._classify_source_lock
+    - ADADCore._commit_checkpoint_decision
+    - ADADCore._decode_verification_output
+    - ADADCore._expand_verification_argv
+    - ADADCore._extract_adr_summary
+    - ADADCore._extract_pattern_summary
+    - ADADCore._file_hash
+    - ADADCore._has_pytest_basetemp
+    - ADADCore._has_pytest_cacheprovider_disabled
+    - ADADCore._implementation_hash
+    - ADADCore._is_pytest_command
+    - ADADCore._load_function_from_file
+    - ADADCore._load_map
+    - ADADCore._node_source_hash
+    - ADADCore._normalize_source_file_path
+    - ADADCore._quarantine_source_lock
+    - ADADCore._read_source_lock
+    - ADADCore._release_source_lock
+    - ADADCore._resolve_project_python
+    - ADADCore._resolve_verification_cwd
+    - ADADCore._resolve_verify_target_func
+    - ADADCore._resolved_file_path
+    - ADADCore._revalidate_source_lock_candidate
+    - ADADCore._rollback_metadata
+    - ADADCore._run_integration_verification
+    - ADADCore._run_verification_command
+    - ADADCore._safe_verification_path
+    - ADADCore._save_task
+    - ADADCore._scan_source_lock_state
+    - ADADCore._source_lock_identity
+    - ADADCore._source_lock_path
+    - ADADCore._source_path_for_node
+    - ADADCore._task_path
+    - ADADCore._verification_subprocess_environment
+    - ADADCore._write_checkpoint_audit
+    - ADADCore.analyze_dirty_cascade
+    - ADADCore.audit_source_locks
+    - ADADCore.check_domain_boundary
+    - ADADCore.check_draft_debt
+    - ADADCore.check_invariants
+    - ADADCore.check_ir_validity
+    - ADADCore.check_source_binding
+    - ADADCore.check_task_gate
+    - ADADCore.check_task_readiness
+    - ADADCore.evaluate_normalization
+    - ADADCore.generate_task
+    - ADADCore.get_fan_in_map
+    - ADADCore.get_node
+    - ADADCore.load_task
+    - ADADCore.read_context
+    - ADADCore.reconcile_source_locks
+    - ADADCore.save
+    - ADADCore.task_approve
+    - ADADCore.task_block
+    - ADADCore.task_is_expired
+    - ADADCore.task_reject
+    - ADADCore.task_submit
+    - ADADCore.transit_state
+    - ADADCore.validate_task_snapshot
+    - ADADCore.verify_implementation
+    - CheckpointTransactionError.__init__
+    - build_file_to_registered_functions
+    - check_precommit_hook_status
+    - find_misplaced_modules
+    - find_orphan_maps
+    - get_all_included_files
+    - get_max_mtime
+    - get_top_level_function_names
+    - parse_markdown
+    - resolve_includes
+    - run_self_test
+  source_lock_repository:
+    type: service
+    description: '#80-A1 將已驗證的 Source Lock artifact 路徑、strict identity、讀取、exclusive
+      create、force-reissue replace、exact release 與 quarantine／cleanup 原樣抽離為獨立 repository；本節點不判讀
+      Task 狀態或 lock 分類。'
+    source: adad_source/agents/skills/adad-workflow/scripts/source_lock_repository.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      project_root: path
+      lock_dir: relative path
+      source_path_for_node: callable
+      allowed_symbols: '[SourceLockRepository, lock_path, read, identity, quarantine,
+        restore_quarantine, release, acquire]'
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/source_lock_repository.py,
+        tests/test_source_lock_repository.py]'
+    output:
+      lock_path: relative path
+      lock_payload: object|null
+      artifact_identity: object
+      mutation_result: object
+      restore_result: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: repository
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_source_lock_repository.py
+        - tests/test_adad_task.py
+        - tests/test_generate_task.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-source-lock-repository-workspace'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - '採 composition 與 dependency injection，不使用 mixin或繼承；A1 新 repository 與 core 暫時並存但以
+      direct parity tests 阻止政策漂移；production ADADCore 本 Task 不修改；不建立空骨架，直接以既有 #78 characterization
+      baseline驗證完整 repository行為；exact parity不包含已證實違反#78 fail-closed與ownership保護的舊行為；本R1只補正兩個fingerprints，不得順便改寫其他policy；CP-3
+      將既有 internal non-overwrite restore 原樣提升為 restore_quarantine 公開邊界，讓 A3 不得直接 filesystem
+      mutation'
+    todo:
+    - '[ ] #80-A1：原樣抽離 Source Lock artifact repository'
+    - '[ ] #80-A1-R1：修正 read I/O uncertainty 與 force-reissue ownership race'
+    - '[ ] #80-A1-R2：以 descriptor-derived identity 保護 exclusive-create partial cleanup'
+    - '[ ] #80-A1-R2-OVERRIDE：quarantine作terminal cleanup，消除validate-to-remove最後競態'
+    - '[ ] #80-A1-CP3：identity invalid evidence 補齊 raw_hex，供 A2 audit direct parity'
+    - '[ ] #80-A1-CP3：公開 exact quarantine restore，供 A3 以 repository 邊界安全復原'
+    checkpoint:
+    - '[x] CP-1-080-A1-SOURCE-LOCK-REPOSITORY (validated：2026-07-16 人工核准)'
+    - '[x] CP-1-080-A1-SOURCE-LOCK-REPOSITORY-R1 (validated：2026-07-17 人工核准；Verifier
+      return_count 1/3)'
+    - '[x] CP-1-080-A1-SOURCE-LOCK-REPOSITORY-R2 (validated：2026-07-17 人工核准；Verifier
+      return_count 2/3)'
+    - '[x] CP-HUMAN-080-A1-R2-CLEANUP-RACE-OVERRIDE (authorized：2026-07-17；return_count
+      3/3 後人工指示修改)'
+    - '[x] CP-3-080-A1-IDENTITY-RAW-HEX-PARITY (validated：2026-07-17 人工核准；invalid
+      decode／JSON evidence 回傳 raw_hex)'
+    - '[x] CP-3-080-A1-QUARANTINE-EXACT-RESTORE (validated：2026-07-17 人工核准；公開既有 non-overwrite
+      exact restore)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 以 project_root、lock_dir 與 source_path_for_node callback 建構 repository，不 import
+      adad_core，避免循環相依。
+    - lock_path 沿用現有 source_path digest 與 `.lock.json` 命名，輸入正規化與輸出相對路徑不得改變。
+    - read 禁止先以 exists 判斷；僅 FileNotFoundError 回傳 missing，PermissionError／其他 OSError
+      必須回傳含 invalid、uncertain 與 error evidence 的非空結果並 fail-closed。
+    - identity 使用 lstat 與 payload digest，保存跨平台的 dev、ino、size、mtime_ns；非 regular file、權限與
+      I/O 不確定性維持 fail-closed。
+    - strict UTF-8 decode 或 JSON parse 失敗時，identity 必須保留 invalid artifact 的 path、identity、payload_digest、error、uncertain
+      與 raw_hex evidence，使 audit service 可與已核准 core 的 record evidence direct parity；不得重讀或變更
+      artifact。
+    - acquire 首次建立使用 exclusive create；同 node force-reissue 先取得 exact payload digest
+      與 filesystem identity，再寫入並 fsync same-directory temp。
+    - force-reissue 必須以 identity-checked quarantine 固定舊 artifact；quarantine 前 identity
+      漂移立即失敗，禁止無條件 os.replace。
+    - quarantine 後以 exclusive create 建立新 canonical lock；若競爭者先建立，不得覆寫，須嘗試安全還原舊鎖，restore
+      conflict則保留 quarantine與 structured evidence。
+    - partial write cleanup只能移除本次建立且 identity仍相同的檔案；任何 identity、permission、restore或cleanup
+      uncertainty一律 fail-closed。
+    - exclusive create 成功後必須在任何 write 前立即 fstat(fd)，保存至少 st_dev、st_ino 與 regular-file
+      判定，作為唯一可信的 owned_fd_identity；不得以後續 path identity 取代。
+    - descriptor 必須保持開啟至 write、flush、fsync 與 final fstat 完成；initial fstat 失敗時只關閉 descriptor，禁止刪除、rename或
+      quarantine canonical path。
+    - write／flush／fsync 失敗後，先比較 canonical path identity 與 owned_fd_identity；missing只記
+      already_absent，不確定或 identity mismatch一律零 mutation並回 manual-action evidence。
+    - 只有 canonical dev／ino仍等於 owned_fd_identity 時，才可進入 identity-checked quarantine；quarantine
+      rename成功即為本次cleanup交易終點，operation內禁止再以path-based remove刪除quarantine。
+    - release、force-reissue舊鎖cleanup與partial-create cleanup均保留quarantine作deferred
+      evidence；structured cleanup固定回報quarantine_retained、canonical_cleared、artifact_deleted=false、delete_attempted=false與quarantine_path。
+    - retained quarantine不得被一般canonical `*.lock.json`掃描誤認，且不得阻擋同Source後續acquire；永久清理須另立具平台能力或全域互斥契約的maintenance
+      Task。
+    - create成功路徑在宣稱 acquired前，必須 strict-read canonical並驗證 dev／ino、payload digest與parsed
+      payload均等於本次資料；若被替換則失敗且不得碰觸 replacement。
+    - release 只處理 exact source_path、node_name、task_id identity；missing、mismatch、invalid
+      與 permission failure 使用既有 structured action/error 語意。
+    - quarantine 只允許 same-directory unique rename；cleanup 前再次核對 identity，禁止刪除不同 identity
+      或新建立的 canonical lock。
+    - restore_quarantine 只接受 quarantine 成功 receipt；重新驗證 receipt 的 canonical／quarantine
+      路徑皆位於 lock_dir、quarantine artifact 的 lstat identity 與 payload digest 仍精確相符，且
+      canonical 明確 missing。只有全部成立時才以 non-overwrite link 還原 exact artifact；quarantine
+      永久保留。
+    - restore_quarantine 遇 canonical occupied、任何 strict-read／identity／path／permission
+      uncertainty 或 link 失敗時零後續 mutation，回傳 structured evidence 與 manual-action 狀態；不得呼叫
+      acquire、remove、unlink、replace 或 rename。
+    - '除已證實違反 #78 安全契約的 exists fail-open 與 check-then-replace 競態外，其餘路徑、payload、錯誤、權限、競態與
+      idempotency 政策保持 parity。'
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 4
+    known_symbols:
+    - SourceLockRepository.__init__
+    - SourceLockRepository._terminal_cleanup_quarantine
+    - SourceLockRepository.acquire
+    - SourceLockRepository.identity
+    - SourceLockRepository.lock_path
+    - SourceLockRepository.quarantine
+    - SourceLockRepository.read
+    - SourceLockRepository.release
+    - SourceLockRepository.restore_quarantine
+  source_lock_audit_service:
+    type: service
+    description: '#80-A2 將已核准的 Source Lock directory scan、Task／lock 關聯、active／stale／orphan／invalid
+      分類與唯讀 audit report 原樣抽離；本節點不執行 prune、reconcile 或任何 filesystem mutation，也不接線
+      production ADADCore facade。'
+    source: adad_source/agents/skills/adad-workflow/scripts/source_lock_audit_service.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - source_lock_repository
+    input:
+      project_root: path
+      task_dir: relative path
+      repository: SourceLockRepository
+      source_owners_for_path: callable
+      validate_task_snapshot: callable
+      allowed_symbols: '[SourceLockAuditService, scan_state, classify, audit]'
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/source_lock_audit_service.py,
+        tests/test_source_lock_audit_service.py]'
+    output:
+      scan_state: object
+      classification_entry: object
+      audit_report: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: service
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_source_lock_audit_service.py
+        - tests/test_source_lock_repository.py
+        - tests/test_adad_task.py
+        - tests/test_generate_task.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-source-lock-audit-service-workspace'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 'A2 只抽離唯讀 scan、classify、audit；repository 提供 artifact identity與strict read；Task
+      validation與source owner解析採dependency injection避免循環相依；production adad_core與CLI在A6前維持既有實作；prune與reconcile分屬後續A3/A4；任何I/O
+      uncertainty均全域fail-closed；audit report 不新增 scan_evidence，record evidence 是保留診斷證據的唯一輸出位置，以維持
+      #78 approved core direct parity'
+    todo:
+    - '[ ] #80-A2：原樣抽離 Source Lock 唯讀 audit service'
+    checkpoint:
+    - '[x] CP-1-080-A2-SOURCE-LOCK-AUDIT-SERVICE (validated：2026-07-17 人工核准)'
+    - '[x] CP-3-080-A2-AUDIT-SCAN-EVIDENCE-PARITY (validated：2026-07-17 人工核准；report
+      移除 scan_evidence，保留 record evidence)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 以 project_root、task_dir、已核准 SourceLockRepository、source_owners_for_path callback
+      與 validate_task_snapshot callback 建構 service，不 import adad_core。
+    - scan_state 只以可區分 FileNotFoundError 與 PermissionError／其他 OSError 的 scandir、lstat
+      與 strict read 掃描 `*.task.json` 及 canonical `*.lock.json`；retained quarantine
+      suffix 不得被視為 canonical lock。
+    - 任一目錄列舉失敗、迭代中斷、stat／read／decode／JSON 不確定性均保留 structured evidence，設定 healthy=false、mutation_blocked=true，不得以
+      exists 或空集合把不確定性當作不存在。
+    - classify 將 exact Task／lock metadata 且 Task status 為 assigned、in_progress、submitted
+      分類 active；approved、blocked 分類 stale。
+    - 只有 Task 目錄完整列舉且對應 Task 確定不存在時，有效 lock 才能分類 orphan；Task／lock 損壞、required fields
+      缺失、檔名 digest、owner、source_path、node_name、task_id mismatch 或 active Task 缺鎖均分類
+      invalid。
+    - audit 固定輸出 categories、counts、healthy 與 mutation_blocked，維持 CP-3 已核准 adad_core
+      baseline `b126a03c47ebeffac00e51a9b004b7d828ba57b1fd63516c8dfe16e8a5b6be79`
+      的 direct parity；每筆 record 保存 canonical path、payload digest、lstat identity、分類理由、record
+      evidence 與 mutation_eligible，但本 service 永不執行 mutation。
+    - 輸出與 CP-3 已核准 adad_core Source Lock audit policy 維持 direct parity，strict-read、decode
+      與 JSON parse error 必須是全域 uncertainty；本節點不得呼叫 repository.acquire、release、quarantine，也不得呼叫
+      remove、unlink、rename、replace 或 link。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 3
+    known_symbols:
+    - SourceLockAuditService.__init__
+    - SourceLockAuditService._artifact_evidence
+    - SourceLockAuditService._is_uncertain_artifact
+    - SourceLockAuditService._relpath
+    - SourceLockAuditService._source_lock_path
+    - SourceLockAuditService.audit
+    - SourceLockAuditService.classify
+    - SourceLockAuditService.scan_state
+    - audit
+    - classify
+    - scan_state
+  source_lock_pruner:
+    type: service
+    description: '#80-A3 將已核准 Source Lock prune 的候選判定、重新驗證、quarantine 與事後 audit 抽離為獨立
+      service；只清理 stale／orphan lock，不接線 ADADCore facade、CLI 或 reconcile。'
+    source: adad_source/agents/skills/adad-workflow/scripts/source_lock_pruner.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - source_lock_repository
+    - source_lock_audit_service
+    input:
+      project_root: path
+      audit_service: SourceLockAuditService
+      repository: SourceLockRepository
+      allowed_symbols: '[SourceLockPruner, revalidate_candidate, prune]'
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/source_lock_pruner.py,
+        tests/test_source_lock_pruner.py]'
+    output:
+      prune_receipt: object
+      post_audit_report: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [adad_core]'
+    - 'deny_calls: [os.remove, os.unlink, shutil.rmtree]'
+    preferred_pattern: service
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_source_lock_pruner.py
+        - tests/test_source_lock_audit_service.py
+        - tests/test_source_lock_repository.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-source-lock-pruner-workspace'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - A3 依賴 A1 repository 與 A2 audit 的已核准行為；為避免重現 A1 cleanup race，quarantine 是終態保留物而非可自動刪除的暫存檔；採整批
+      preflight 防止 time-of-check/time-of-use 部分清理
+    todo:
+    - '[ ] #80-A3：抽離 stale／orphan Source Lock prune service'
+    checkpoint:
+    - '[x] CP-1-080-A3-SOURCE-LOCK-PRUNER (validated：2026-07-17 人工核准；quarantine 必須保留)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 以已核准 SourceLockAuditService 與 SourceLockRepository 建構；先 audit，任何 mutation_blocked
+      或 healthy=false 時零 mutation。
+    - 只從 audit 的 stale／orphan records 建立候選；在任何 mutation 前，逐筆重新掃描、重新分類、比對 canonical
+      path、payload digest、lstat identity 與 Task identity。
+    - 任一候選重新驗證不確定、漂移、變為 active／invalid，或 preflight 未全部通過時，整批零 mutation。
+    - 只對通過 preflight 的 exact canonical lock 呼叫 repository.quarantine；quarantine 為終態保留證據，不得
+      remove、unlink 或刪除 quarantine。
+    - quarantine 後執行 fresh audit；僅在 canonical lock 缺失、沒有衝突且 audit 可確定時，依既有安全 restore
+      規則處理；遇 uncertainty 或衝突即停止後續 recovery 並保留 quarantine。
+    - 回傳 receipt、每筆 mutation evidence 與事後 audit；重複執行必須 idempotent，且本節點不得實作 reconcile、修改
+      Task lifecycle 或接線 core／CLI。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols:
+    - SourceLockPruner.__init__
+    - SourceLockPruner.prune
+    - SourceLockPruner.revalidate_candidate
+    - _receipt
+    - prune
+  project_runtime_state_policy:
+    type: service
+    description: '#82 封存不屬於目前 SSOT 的本機 Task snapshot 與 Source Lock 藝術品；此節點只處理明確指定的測試／遺留候選，保留可驗證證據，不重發、不刪除、不接線
+      production core、CLI 或一般 Task lifecycle。'
+    source: adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py::TaskSnapshotArchiveRepository,ProjectRuntimeStatePolicy,archive_non_ssot_task_artifacts
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - source_lock_repository
+    - source_lock_audit_service
+    input:
+      project_root: path
+      audit_service: SourceLockAuditService
+      repository: SourceLockRepository
+      candidate_node_names: array
+      allowed_symbols: '[TaskSnapshotArchiveRepository, ProjectRuntimeStatePolicy,
+        archive_non_ssot_task_artifacts]'
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py,
+        tests/test_project_runtime_state_policy.py]'
+      forbidden_files: '[adad_core.py, adad_task.py, source_lock_repository.py, source_lock_audit_service.py,
+        system_map.yaml, system_map.md]'
+    output:
+      archive_receipt: object
+      mutation_evidence: array
+      post_audit_report: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [adad_core]'
+    - 'deny_calls: [os.remove, shutil.rmtree, os.replace]'
+    preferred_pattern: fail_closed_maintenance_service
+    verification:
+    - must_have_assertions
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_project_runtime_state_policy.py
+        - tests/test_source_lock_audit_service.py
+        - tests/test_source_lock_repository.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-runtime-state-policy'
+        - -p
+        - no:cacheprovider
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 非 SSOT 的測試遺留 Task 不得重發；Task snapshot archive 是獨立於 Source Lock repository 的 runtime-state
+      邊界；lock 仍只能透過已核准 repository quarantine；archive 是保留證據，不是 cleanup；全批 preflight
+      與 fresh audit 防止將測試遺留誤判為 active production claim；不為單一測試 artifact 建立全域 sweep
+      或自動清理機制
+    todo:
+    - '[ ] #82：封存非 SSOT Task snapshot／Source Lock 測試遺留，保留 evidence'
+    checkpoint:
+    - '[x] CP-1-082-RUNTIME-STATE-ARCHIVE (validated：2026-07-18 人工要求新增並核發)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: high
+    algorithm:
+    - 只接受非空、無重複、無 traversal 的 candidate_node_names；候選 Task snapshot、canonical lock
+      與 archive 目標均必須 canonicalize 後位於 project 的 task_dir／lock_dir 內，symlink、junction、非
+      regular file、permission 或 I/O uncertainty 一律零 mutation。
+    - 先取得 fresh SourceLockAuditService report；healthy=false 或 mutation_blocked=true
+      時整批零 mutation。每個候選都必須可重讀，且其 node_name 與 source_path 在目前 SSOT 均不存在 owner；仍有 SSOT
+      owner、active claim、有效可重發 Task 或不確定分類一律拒絕封存。
+    - 每筆候選在 mutation 前重掃、重新分類並比對 Task snapshot 與 canonical lock 的 payload digest、lstat
+      identity、node_name、source_path 與 task_id。Task／lock mismatch 可作為各自 foreign artifact
+      封存的證據，但不得把不相符項目當作同一 artifact pair。
+    - 所有候選 preflight 通過後才開始處理。canonical lock 只能經 SourceLockRepository.quarantine 封存；Task
+      snapshot 只能經 TaskSnapshotArchiveRepository 的 non-overwrite、identity-checked
+      archive 邊界封存。兩者都必須保留 exact bytes、來源 identity、payload digest、archive path 與 mutation
+      evidence。
+    - 任一 archive、identity drift、restore、permission 或 post-mutation audit 失敗時，停止後續候選；能安全恢復時依原始
+      receipt 恢復，否則保留已封存證據並回 manual_action_required。不得覆寫現有 canonical lock、Task snapshot
+      或 archive。
+    - archive 後必須執行 fresh audit。重複執行對已封存或不存在的明確候選必須 idempotent；本節點不刪除 archive、不得重發
+      Task、不得變更 system map、不得修改其他 Task lifecycle 狀態。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 0
+  task_snapshot_schema:
+    type: schema
+    description: 定義 Task Schema v3 的快照保真契約，與 v2 相容並防止 Decisions、施工約束及執行契約在核發時靜默遺失；本
+      Task 僅修改 schema，不切換 generator。
+    source: adad_source/templates/task_schema.json
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - validate_schema
+    input:
+      task_snapshot: object
+      schema_version: integer（2 或 3）
+    output:
+      validation_result: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: schema_contract
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_generate_task.py
+        - tests/test_validate_schema.py
+        - -q
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - v2 與 v3 並存；summary 不得取代原始欄位；canonical template 是唯一可編輯來源；生成副本只能由 sync_assets
+      更新
+    todo:
+    - '[ ] #54-A：完成 v3 schema；後續獨立 Task 再切換 generator'
+    checkpoint:
+    - '[x] CP-1-054-A (validated：2026-07-14 人工核准核發)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - 保留既有 Task Schema v2 驗證能力。
+    - 新增 v3 分支並要求原始 decisions 與 preferred_pattern，不得只保存 summary。
+    - v3 同時保存施工約束、執行契約、context 契約與 Task 語意欄位。
+    - 缺少 v3 必填欄位時必須拒絕；空陣列仍視為明確值。
+    - 本 Task 不修改 read_context、generate_task 或既有 v2 核發行為。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols: []
+  normalize_markdown_source:
+    type: function
+    description: '#57 第一原子步驟；正規化 Markdown Source 欄位值，只移除完整包覆整個值的一對單反引號，供後續 Task 接入
+      parse_markdown。'
+    source: adad_source/agents/skills/adad-workflow/scripts/source_normalization.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      value: string
+    output:
+      normalized_source: string
+    exceptions: []
+    invariants:
+    - 'deny_imports: [subprocess]'
+    preferred_pattern: pure_function
+    verification:
+    - case:
+        input:
+          value: '`file.py`'
+        expect: file.py
+    - case:
+        input:
+          value: file.py
+        expect: file.py
+    - case:
+        input:
+          value: '`file.py::function`'
+        expect: file.py::function
+    - case:
+        input:
+          value: file.py::function
+        expect: file.py::function
+    decisions:
+    - 先建立獨立 helper 避免與 adad_core 的 Source Lock 衝突；完成度不包含接線；新檔唯一節點採整檔 Source 以相容現有
+      Invariants Gate
+    todo:
+    - '[ ] #57-A：建立 helper；後續 Task 再接入 parse_markdown'
+    checkpoint:
+    - '[x] CP-1-057-A (validated：2026-07-14 人工核准核發)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - 值由一對單反引號完整包覆時只移除最外層該一對。
+    - 無反引號時保持原值。
+    - 未成對或多重反引號保持原值，本 Task 不推測其語意。
+    - 本 Task 不修改 parse_markdown、Source binding 或 verification 行為。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols:
+    - normalize_markdown_source
+  compile_map:
+    type: tool
+    description: '#70 將 Markdown 編譯結果依既有 owner 或明確 Sub Map 分流寫回 root/child YAML，禁止把所有節點膨脹進
+      root。'
+    source: adad_source/agents/skills/adad-workflow/scripts/compile_map.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      cwd_system_map_md: file（無 CLI 參數，讀取當前目錄的 system_map.md）
+    output:
+      result: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: explicit_contract
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_compile_sub_maps.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-compile-submaps-workspace'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - Markdown include 是來源拆檔；YAML sub_maps 是 IR ownership，兩者不可混為同一欄位；既有 owner 優先；新節點必須明示
+      root 或 scope
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    - '[ ] #70：依 owner 分流編譯並防止 root map 膨脹'
+    checkpoint:
+    - '[ ] CP-1-006 (planned)'
+    - '[x] CP-1-070-SUBMAP-COMPILE (validated：2026-07-15 人工要求解決)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 透過 adad_core 載入 root 與所有 sub_maps，取得舊模組、owner 與 shard registry。
+    - 'parse_markdown 支援模組欄位 `Sub Map: root|<scope>`；既有模組未宣告時沿用舊 owner。'
+    - 存在 sub_maps 時，全新模組若沒有明確 Sub Map、scope 不存在或跨 shard 重名，立即阻斷，不得猜測。
+    - 完成狀態合併後交由 owner-aware save 分別寫回各 shard，保留 root sub_maps 與每個 shard自有 metadata。
+    - 編譯前後輸出各 shard module_count；重複編譯必須保持 root/child count，不得把 child modules 寫入 root。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 4
+    known_symbols:
+    - _assign_module_owners
+    - _shard_module_counts
+    - main
+  generate_task:
+    type: tool
+    description: 從 system_map.yaml 匯出一份含 source_hash 的 Task 快照給 coding 端讀取；Task 與
+      Module 分離，可偵測架構是否在執行期間被更動過。
+    source: adad_source/agents/skills/adad-workflow/scripts/generate_task.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      node_name: string
+      allowed_symbols: '[main]'
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/generate_task.py,
+        tests/test_generate_task.py]'
+    output:
+      result: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    - '[ ] #80-TEST-GENERATE-TASK：修復 v3 snapshot fixture 收集語法，不變更 generator 或 schema
+      行為'
+    checkpoint:
+    - '[ ] CP-1-007 (planned)'
+    - '[x] CP-1-080-TEST-GENERATE-TASK-COLLECTION-REPAIR (validated：2026-07-17 人工核准)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - '#80 collection repair 只修復 `tests/test_generate_task.py` 的 v3 fixture 字串語法，使既有
+      schema acceptance、snapshot generation 與 malformed snapshot regression 可被收集；不得改變
+      generate_task runtime 行為或 Task Schema 契約。'
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 5
+    known_symbols:
+    - main
+  resolve_target_file:
+    type: tool
+    description: Phase 1 新增模組前，查表回答「這個 Domain/Subsystem 目前該寫進哪個實體子地圖檔案」，取代 Agent 憑印象追蹤
+      include 鏈猜落點。
+    source: adad_source/agents/skills/adad-workflow/scripts/resolve_target_file.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      domain: string
+      subsystem: string（選填）
+    output:
+      target_file: string
+      domain_exists: boolean
+      subsystem_exists: boolean
+      hint: string
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-008 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  resume_analysis:
+    type: tool
+    description: 比對 system_map.md 與 system_map.yaml，產出模組完成度進度報告（completed / dirty
+      / planned 分類統計），供人類快速掌握目前施工進度。
+    source: adad_source/agents/skills/adad-workflow/scripts/resume_analysis.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      cwd_system_map_md: file（無 CLI 參數，讀取當前目錄檔案）
+    output:
+      report: text（stdout 輸出）
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-009 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  validate_schema:
+    type: tool
+    description: 獨立於 parse_markdown/compile_map.py 之外的第二層防線，用標準 JSON Schema（system_map.schema.json）驗證
+      system_map.yaml 的結構正確性；未安裝 jsonschema 套件時退回純標準庫的最小驗證器。
+    source: adad_source/agents/skills/adad-workflow/scripts/validate_schema.py
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      cwd_system_map_yaml: file（預設驗證 system_map.yaml 對照 system_map.schema.json）
+    output:
+      result: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-010 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 8
+    known_symbols:
+    - _MinimalError.__init__
+    - _MinimalValidator.__init__
+    - _MinimalValidator._resolve
+    - _MinimalValidator._type_ok
+    - _MinimalValidator._validate
+    - _MinimalValidator.iter_errors
+    - main
+    - validate_schema_conformance
+  read_utf8_text_strict:
+    type: function
+    description: 以嚴格 UTF-8 解碼讀取架構、規格與 Task 文字，拒絕非法位元與 BOM，避免 errors=ignore 靜默遺失 SSOT
+      內容。
+    source: adad_source/agents/skills/adad-workflow/scripts/text_io.py::read_utf8_text_strict
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      file_path: string
+    output:
+      text: string
+    exceptions: []
+    invariants: []
+    preferred_pattern: boundary_adapter
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 將架構與規格讀取統一為 strict UTF-8，移除 errors=ignore'
+    checkpoint:
+    - '[ ] CP-1-039 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  write_utf8_text_atomic:
+    type: function
+    description: 以無 BOM UTF-8、LF 換行與同目錄暫存檔原子取代方式寫入架構、規格及 Task 文字，避免 Windows、macOS、Linux
+      換行差異或中斷寫入造成部分檔案與後續解析失敗。
+    source: adad_source/agents/skills/adad-workflow/scripts/text_io.py::write_utf8_text_atomic
+    domain: ADAD_Workflow
+    subsystem: Core_Engine
+    map_file: system_map.md
+    dependencies: []
+    input:
+      file_path: string
+      text: string
+    output:
+      written_path: string
+    exceptions: []
+    invariants:
+    - 'deny_imports: [subprocess]'
+    - 'deny_calls: [os.chdir]'
+    preferred_pattern: atomic_file_writer
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 統一架構、規格與 Task 的跨平台 UTF-8 原子寫入邊界'
+    checkpoint:
+    - '[ ] CP-1-041 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  pytest_regression_lifecycle:
+    type: service
+    description: '#81 建立 pytest 回歸資產生命週期：`regression_backlog` 是永久保留的最小回歸集；暫時測試只在顯式
+      temporary 標記、受限路徑與成功 session 後清理。'
+    source: tests/conftest.py::pytest_configure,pytest_collection_modifyitems,pytest_runtest_makereport,pytest_sessionfinish,temporary_artifact_root,_is_own_temporary_root,_is_regression_backlog_marker,_is_temporary_marker,_is_temporary_path_allowed,_item_path,_path_safe_for_temporary,_temporary_lifecycle_state,_temporary_root_identity,_temporary_test_purpose
+    domain: ADAD_Workflow
+    subsystem: Test_Quality
+    map_file: system_map.md
+    dependencies: []
+    input:
+      pytest_config: object
+      collected_items: array
+      exitstatus: integer
+      allowed_symbols: '[pytest_configure, pytest_collection_modifyitems, pytest_runtest_makereport,
+        pytest_sessionfinish, temporary_artifact_root]'
+      allowed_files: '[tests/conftest.py, tests/test_pytest_regression_lifecycle.py,
+        docs/specifications/AGENT_REGR_BACKLOG_NOTE.md, docs/specifications/05_task_backlog.md]'
+    output:
+      lifecycle_report: object
+    exceptions: []
+    invariants:
+    - 'deny_calls: [shutil.rmtree, os.remove, os.unlink]'
+    preferred_pattern: pytest_plugin
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_pytest_regression_lifecycle.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-regression-lifecycle-workspace'
+        - -p
+        - no:cacheprovider
+        cwd: project
+        expect_exit: 0
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - -m
+        - regression_backlog
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-regression-backlog-workspace'
+        - -p
+        - no:cacheprovider
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 重複可用的回歸測試以 regression_backlog 永久保留；暫時資產採 opt-in、exact collected list、successful-session-only；fixture
+      明確區分 trusted local collision 的 None 加 preserve 與外部邊界或不確定性的 setup UsageError；任何
+      cleanup 先全量驗證再開始 mutation
+    todo:
+    - '[ ] #81：建立 regression_backlog 與 temporary pytest 資產生命週期'
+    checkpoint:
+    - '[x] CP-1-081-PYTEST-REGRESSION-LIFECYCLE (validated：2026-07-17 人工核准)'
+    - '[x] CP-3-081-TEMPORARY-ARTIFACT-FIXTURE (validated：2026-07-17 人工核准；新增唯一 artifact
+      fixture 邊界)'
+    - '[x] CP-3-081-SKIP-OUTCOME-HOOK (validated：2026-07-17 人工核准；outcome hook 僅決定
+      preserve)'
+    - '[x] CP-3-081-UNSAFE-ARTIFACT-ROOT-FAIL-CLOSED (validated：2026-07-17 人工核准；unsafe
+      fixture 明確拒絕且 unlink 前重驗證)'
+    - '[x] CP-3-081-DETERMINISTIC-TEMPORARY-ARTIFACT-FAILURE-MATRIX (validated：2026-07-17
+      人工核准；固定 fixture outcome、pytest exit、state、mutation 與 cleanup matrix)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 在 pytest_configure 動態註冊 `temporary` marker；既有 pyproject 的 `regression_backlog`
+      是既有 owner，禁止修改 pyproject。
+    - regression_backlog 永久保留；同一測試若同時標記 regression_backlog 與 temporary，collection
+      必須失敗，且不刪除任何檔案。
+    - temporary 只接受 `tests/_temporary/**/*.py` 內具有非空 module-level `TEMPORARY_TEST_PURPOSE`
+      的已收集檔案；絕對路徑、traversal、symlink/junction、tests 外檔案、缺目的宣告或 collection I/O 失敗一律為
+      collection `pytest.UsageError`（exit 4），並且零檔案 mutation。
+    - pytest_runtest_makereport 只記錄已收集 temporary item 的 skip 或失敗 outcome，並將 session
+      標為 preserve；它不得建立、刪除或修改任何檔案。
+    - 僅記住本 session 已收集且通過上述驗證的 exact temporary 檔案；cleanup 前必須先對全數檔案完成受限路徑、非 symlink/junction、一般
+      `.py`、lstat/identity 可讀的 batch preflight，全部通過後才能開始任一 Path.unlink。任一 preflight
+      失敗（含消失、I/O 不確定或型態替換）一律 preserve 且零 source unlink；pytest 保留既有 exit。
+    - lifecycle state 固定記錄 `temporary_files`、`preserve`、`run_root`、`run_root_identity`、`run_root_created`、`run_root_verified`
+      與 `fixture_status`；僅 `fixture_status=ready` 可保存可寫入的 verified run_root 與 identity。
+    - '`temporary_artifact_root` fixture 是唯一可建立暫時 artifact 的入口；它以 session UUID 建立
+      `.pytest-temporary/<run-id>`。已驗證 regular、non-link、in-boundary parent 內的 exact
+      pre-existing root 是 trusted local collision：回傳 None、preserve、`fixture_status=collision`、零
+      mutation，pytest 保留測試自身 exit。run-id 不合法、parent/link/junction/boundary/I/O 不安全、mkdir
+      非 collision I/O、或 post-mkdir root/link/type/identity/boundary 不安全時，設定拒絕 status
+      後 raise fixture setup `pytest.UsageError`（exit 1），不得回傳任何可寫入或未驗證路徑，且零 cleanup。'
+    - sessionfinish 只可在 exitstatus=0、未 preserve、batch source preflight 完整通過、及 `fixture_status=ready`
+      時，對本次建立且已驗證的 own run root 呼叫空目錄 Path.rmdir；nonempty root、identity 不符、rmdir error
+      或任何不確定時保留 root 與內容，不得遞迴刪除。禁止掃描或刪除既有 `.pytest-*`、build、.venv、__pycache__ 或使用者路徑。
+    - 禁止 shutil.rmtree、os.remove、os.unlink 與遞迴 sweep；本節點不判斷既有測試是否有用、不清理工作樹遺留檔案，也不修改
+      CI runner。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  adad_pre_commit:
+    type: tool
+    description: '#62 CI diff base 解析；GitHub push 的空 GITHUB_BASE_REF 必須回退 HEAD~1，PR
+      則使用 origin/<base>。'
+    source: adad_source/agents/skills/adad-workflow/scripts/adad_pre_commit.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      ci_environment: object
+      github_base_ref: string|null
+    output:
+      diff_target: array
+      staged_files: array
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_adad_pre_commit.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 空字串不得視為合法 ref；workflow 已使用 fetch-depth 0，允許 HEAD~1；本 Task 不修改 Verification 或
+      Commit Gate
+    todo:
+    - '[ ] #62：修正 GitHub push 空 GITHUB_BASE_REF 產生 origin/'
+    checkpoint:
+    - '[x] CP-1-062-HOOK (validated：2026-07-15 人工核准 CI 修正)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 非 CI 環境維持 git diff --cached。
+    - CI 中以 GITHUB_BASE_REF 的非空值作為 PR base；空值或缺值回退 HEAD~1。
+    - 只有非 HEAD、非 origin/ 開頭的 base 才補 origin/ 前綴。
+    - 測試覆蓋 GitHub push 空值、CI 缺值、PR base 與非 CI 四條路徑。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 3
+    known_symbols:
+    - _bounded_verification_diagnostics
+    - _get_diff_target
+    - build_source_to_module_map
+    - check_atomic_scope
+    - check_dangling_dependencies
+    - check_domain_boundary_staged
+    - check_invariants_staged
+    - check_module_placement
+    - check_staleness
+    - check_state_gate
+    - check_task_gate_staged
+    - check_unregistered_functions
+    - check_verification_staged
+    - get_staged_bytes
+    - get_staged_content
+    - get_staged_files
+    - main
+    - write_temp_file
+  adad_pretooluse_gate:
+    type: tool
+    description: 掛在 Claude Code 的 PreToolUse hook 上，在 Edit/Write/MultiEdit 工具呼叫「執行前」攔截：目標檔案對應的
+      Task 快照狀態不允許編輯時直接 exit 2 擋下，避免 agent 白花 token 寫出會被丟棄的程式碼；無法判斷的情況一律放行，不取代 pre-commit/CI
+      的完整檢查。
+    source: adad_source/agents/skills/adad-workflow/scripts/adad_pretooluse_gate.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      stdin: object（Claude Code hook payload，含 tool_input.file_path）
+    output:
+      exit_code: string（0=放行；2=阻擋，原因寫在 stderr）
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-012 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - _build_src_map
+    - _find_project_root
+    - _is_stale
+    - _load_modules
+    - main
+  adad_task:
+    type: tool
+    description: 'Task 快照生命週期操作，並提供 #78 Source Lock audit／prune／reconcile 的完整 CLI
+      入口；CLI 僅負責精確參數解析、委派已核准 core API、原樣輸出結構化結果及映射 exit code，不複製或弱化 lock 政策。'
+    source: adad_source/agents/skills/adad-workflow/scripts/adad_task.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      command: string（submit｜approve｜reject｜isolate｜locks）
+      locks_args: '[]|[--prune]|[--reconcile]'
+      allowed_symbols: '[_require_human_tty, cmd_approve, cmd_locks, main]'
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/adad_task.py,
+        tests/test_adad_task.py]'
+    output:
+      result: object（core structured result 原樣輸出）
+      exit_code: integer
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_adad_task.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-task-lock-cli-workspace'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - CLI 是完整功能入口而非另一份政策實作；audit、prune、reconcile 的安全判定唯一來自已核准 adad_core API；mutation
+      必須由明確 opt-in flag 觸發；不新增 TTY gate、confirmation prompt、force、audit alias、positional
+      alias或短旗標
+    todo:
+    - '[ ] #78：提供 Source Lock audit／prune／reconcile 端到端 CLI'
+    - '[ ] #80-TEST-ADAD-TASK：修復 approve TTY regression 的測試收集語法，不變更 CLI 行為'
+    checkpoint:
+    - '[ ] CP-1-013 (planned)'
+    - '[x] CP-1-078-TASK-LOCK-CLI (validated：2026-07-16 人工指示完成 #78 CLI；low Task 自動推進)'
+    - '[x] CP-1-080-TEST-ADAD-TASK-COLLECTION-REPAIR (validated：2026-07-17 人工核准)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - '`locks` 僅接受空參數，呼叫 `ADADCore.audit_source_locks()`，預設唯讀。'
+    - '`locks --prune` 僅接受單一精確旗標，呼叫 `ADADCore.reconcile_source_locks("prune")`。'
+    - '`locks --reconcile` 僅接受單一精確旗標，呼叫 `ADADCore.reconcile_source_locks("reconcile")`。'
+    - unknown、positional、重複、多餘或互斥參數一律在呼叫 core 前回 JSON usage error 與 exit 1。
+    - 合法呼叫的 core result 必須完整原樣 JSON 輸出；nested categories、mutation_blocked、preflight、mutations、partial_recovery
+      與 error 不得刪除、改寫或字串化。
+    - exit code 僅依 `res.get("success") is True` 映射為 0，否則為 1；CLI 不重新解釋 core 的 healthy
+      或分類政策。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 4
+    known_symbols:
+    - _require_human_tty
+    - cmd_approve
+    - cmd_isolate
+    - cmd_locks
+    - cmd_reject
+    - cmd_submit
+    - main
+  check_source_binding:
+    type: tool
+    description: 檢查 Module 的 Source 綁定是否存在重複、整檔與逐函式混用、或同一函式多重歸屬等歧義；歧義會使後續 Gate 無法可靠反查模組，因此編譯與
+      commit 前皆須阻斷。
+    source: adad_source/agents/skills/adad-workflow/scripts/check_source_binding.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      cwd_system_map_yaml: file（無 CLI 參數，掃描整份 system_map.yaml）
+      allowed_symbols: '[main]'
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/check_source_binding.py,
+        tests/test_check_source_binding.py]'
+    output:
+      passed: boolean
+      violations: array
+      unbound: array
+    exceptions: []
+    invariants: []
+    preferred_pattern: pure_function
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] #80-TEST-SOURCE-BINDING：修復 duplicate-source fixture 收集語法，不變更 checker 行為'
+    checkpoint:
+    - '[ ] CP-1-017 (planned)'
+    - '[x] CP-1-080-TEST-SOURCE-BINDING-COLLECTION-REPAIR (validated：2026-07-17 人工核准)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - '#80 collection repair 只修復 `tests/test_check_source_binding.py` 的 duplicate-source
+      fixture 字串語法，使既有 source-binding regression 可被收集；不得改變 checker runtime 行為或 violation
+      contract。'
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols:
+    - main
+  check_domain_boundary:
+    type: tool
+    description: 檢查模組是否只依賴同一 Domain 內的模組，除非該 Domain 已用 Allowed Dependencies 明確宣告允許跨
+      Domain 依賴。
+    source: adad_source/agents/skills/adad-workflow/scripts/check_domain_boundary.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      cwd_system_map_yaml: file（無 CLI 參數，掃描整份 system_map.yaml）
+    output:
+      passed: boolean
+      violations: array
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-014 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 1
+    known_symbols:
+    - main
+  check_invariants:
+    type: tool
+    description: 校驗指定節點的實作是否違反其宣告的 Invariants（例如 deny_imports）。
+    source: adad_source/agents/skills/adad-workflow/scripts/check_invariants.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      node_name: string
+      file_path: string（選填）
+    output:
+      success: boolean
+      result: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-015 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 1
+    known_symbols:
+    - main
+  verify_implementation:
+    type: tool
+    description: 校驗指定節點的實作是否符合多型 Verification 契約；case 驗證可 import 函式，command 驗證單一 CLI，integration_case
+      在隔離暫存工作區依序執行 fixture 與多步命令。
+    source: adad_source/agents/skills/adad-workflow/scripts/verify_implementation.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies:
+    - adad_core
+    input:
+      node_name: string
+      file_path: string（選填）
+    output:
+      success: boolean
+      result: object（包含 case_results、command_results 與 integration_results）
+    exceptions: []
+    invariants: []
+    preferred_pattern: none
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）'
+    checkpoint:
+    - '[ ] CP-1-016 (planned)'
+    - '[x] CP-3-004 (validated：command／integration_case 多型驗證)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: high
+    algorithm:
+    - 保留 must_have_assertions 與 case 的既有行為及回傳格式。
+    - 將 command 正規化為單一步驟 integration_case。
+    - 建立暫存工作區並將 fixture 複製到指定相對路徑；所有來源與目的路徑必須限制於專案根目錄或暫存工作區。
+    - 逐步以 shell=False 執行 argv，套用 {python}、{source}、{project}、{workspace} placeholder、timeout
+      與預期 exit code。
+    - 任一步驟失敗即停止該 integration_case，截斷回報 stdout/stderr，並在 finally 清理暫存工作區。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 3
+    known_symbols:
+    - main
+  architecture_inventory:
+    type: documentation
+    description: '已完成既有 workflow 腳本的架構登記與 Domain/Subsystem 分層（規格總覽 #4）。'
+    source: system_map.md
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input: {}
+    output:
+      inventory: system_map.yaml
+    exceptions: []
+    invariants: []
+    preferred_pattern: ssot_document
+    verification: []
+    decisions:
+    - 以 system_map.md 與 system_map.yaml 作為架構盤點證據
+    todo:
+    - '[x] 規格總覽 #4：既有 workflow 腳本已登記'
+    checkpoint:
+    - '[x] CP-1-019 (validated)'
+    - '[x] CP-2-019 (deployed)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 0
+  automated_test_suite:
+    type: test_suite
+    description: '維護 pytest 與套件建置測試依賴，並在 setuptools 邊界排除 Python 編譯快取（規格總覽 #5、#76-A）。'
+    source: pyproject.toml
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      test_file: tests/test_package_assets.py
+      allowed_files: '[pyproject.toml, tests/test_package_assets.py]'
+    output:
+      test_result: report
+    exceptions: []
+    invariants: []
+    preferred_pattern: black_box_test
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - -q
+        - tests/test_package_assets.py
+        - --basetemp
+        - '{workspace}/pytest'
+        cwd: project
+        expect_exit: 0
+        timeout: 120
+    decisions:
+    - 測試與 build backend 依賴透過 .venv 的 dev extra 安裝；resources/**/* 必須以 exclude-package-data
+      排除任意層級 __pycache__ 與 *.pyc
+    todo:
+    - '[x] 規格總覽 #5：pytest 測試套件已建立'
+    - '[ ] #76-B2：以獨立 packaging regression 驗證 wheel/sdist 不含 Python 編譯快取'
+    checkpoint:
+    - '[x] CP-1-020 (validated)'
+    - '[x] CP-2-020 (deployed)'
+    - '[x] CP-1-076-SPLIT-PACKAGING (validated：2026-07-16 人工核准拆分)'
+    - '[x] CP-1-076-B2-PACKAGE-TEST (validated：2026-07-16 人工核准)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  workflow_test_harness:
+    type: test_harness
+    description: '#64 隔離測試子程序與外層 GitHub Actions event context，避免臨時 Git repo 誤走 CI
+      diff 路徑。'
+    source: tests/conftest.py::workflow_test_harness,script_path,run_script,project_dir,write_yaml,read_yaml,make_module,base_modules
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - adad_pre_commit
+    input:
+      inherited_environment: object
+      explicit_env_overrides: object
+    output:
+      child_environment: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: hermetic_test_harness
+    verification:
+    - case:
+        input:
+          inherited_environment:
+            CI: 'true'
+            GITHUB_BASE_REF: ''
+            PATH: bin
+          explicit_env_overrides: {}
+        expect:
+          PATH: bin
+          PYTHONIOENCODING: utf-8
+    - case:
+        input:
+          inherited_environment:
+            CI: 'true'
+            PATH: bin
+          explicit_env_overrides:
+            CI: 'true'
+            GITHUB_BASE_REF: main
+        expect:
+          CI: 'true'
+          GITHUB_BASE_REF: main
+          PATH: bin
+          PYTHONIOENCODING: utf-8
+    decisions: []
+    todo:
+    - '[ ] #64：隔離外層 CI event context，保留明確 opt-in'
+    checkpoint:
+    - '[x] CP-1-064-HARNESS (validated：2026-07-15 人工核准)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 以目前程序環境為基礎建立 child environment，保留 PATH、PYTHONPATH 與一般執行環境。
+    - 預設移除外層 CI/GitHub event control variables，包含 CI、GITHUB_ACTIONS、GITHUB_BASE_REF、GITHUB_HEAD_REF、GITHUB_EVENT_NAME、GITHUB_EVENT_PATH、GITHUB_REF、GITHUB_REF_NAME、GITHUB_SHA。
+    - 最後套用呼叫者明確傳入的 env overrides，使個別測試可刻意 opt-in CI context。
+    - 固定 PYTHONIOENCODING=utf-8，再將環境交給 subprocess。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  verification_absence_contract:
+    type: function
+    description: '#67 以明確欄位表達 Verification 預期鍵不存在，禁止再以 null 猜測刪除語意。'
+    source: adad_cli/workflow/verification_absence_contract.py::validate_verification_absence_contract
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      verification_case: object
+    output:
+      normalized_case: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [yaml, subprocess, os]'
+    preferred_pattern: pure_function
+    verification:
+    - case:
+        input:
+          verification_case:
+            expect:
+              CI: null
+            expect_absent_keys:
+            - GITHUB_BASE_REF
+        expect:
+          expect:
+            CI: null
+          expect_absent_keys:
+          - GITHUB_BASE_REF
+    - case:
+        input:
+          verification_case:
+            expect:
+              CI: null
+            expect_absent_keys:
+            - CI
+        expect_exception: ValueError
+    - case:
+        input:
+          verification_case:
+            expect_absent_keys:
+            - ''
+        expect_exception: ValueError
+    - case:
+        input:
+          verification_case:
+            expect_absent_keys:
+            - CI
+            - CI
+        expect_exception: ValueError
+    decisions: []
+    todo:
+    - '[ ] #67：建立鍵不存在的明確 Verification 契約'
+    checkpoint:
+    - '[x] CP-1-067-ABSENCE (validated：2026-07-15 人工核准核發)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 複製輸入 case；未宣告 expect_absent_keys 時維持既有 Verification 語意。
+    - expect_absent_keys 必須是由非空字串組成且不得重複的陣列。
+    - 若同一路徑同時出現在 expect 與 expect_absent_keys，立即拒絕，因 null 是值而不是不存在。
+    - 回傳正規化的新 case，不修改輸入、不執行 Verification。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  reviewer_unicode_policy:
+    type: documentation
+    description: '#68 Reviewer 判定編碼異常前必須以 strict UTF-8 bytes、replacement character
+      與 JSON read-back 提供證據。'
+    source: adad_source/agents/AGENTS.md
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      review_artifact: file
+    output:
+      reviewer_unicode_decision: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: evidence_based_review
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] #68：補齊 Reviewer Unicode 證據與撤回規則'
+    checkpoint:
+    - '[x] CP-1-068-REVIEW (validated：2026-07-15 人工核准核發)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  sub_map_schema:
+    type: schema
+    description: '#71 正式定義 root YAML 的 sub_maps mapping 與模組 Sub Map ownership 欄位。'
+    source: adad_source/templates/system_map.schema.json
+    domain: ADAD_Roadmap
+    subsystem: Completed_Baseline
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - adad_core
+    - compile_map
+    input:
+      root_ir: object
+    output:
+      validated_sub_map_contract: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: schema_contract
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_sub_map_schema.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest-submap-schema'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 不以 additionalProperties 靜默接受 sub_maps；不要求 child shard 具備完整 root environment/domains；runtime
+      path safety 不能只靠 JSON Schema
+    todo:
+    - '[ ] #71：補齊 sub_maps 與 owner schema'
+    checkpoint:
+    - '[x] CP-1-071-SUBMAP-SCHEMA (validated：2026-07-15 人工要求解決)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - root sub_maps 必須是 scope 到非空相對 YAML 路徑的 object mapping，不接受 array。
+    - module.sub_map 必須是非空字串，值為 root 或 root sub_maps 已宣告的 scope；跨欄位 scope 驗證由 loader
+      執行。
+    - 保持沒有 sub_maps 的既有 flat IR 完全相容。
+    - schema 只處理結構；absolute、path traversal、cycle、missing 與 duplicate module 由 adad_core
+      fail-fast。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols: []
+  environment_contract:
+    type: schema
+    description: 將 environment 宣告納入 Markdown parser、IR schema 與編譯 gate（#3）。
+    source: adad_cli/workflow/environment_contract.py
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - compile_map
+    - validate_schema
+    input:
+      environment: object
+    output:
+      validated_environment: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: schema_first
+    verification: []
+    decisions:
+    - 純 CLI 專案必須明確宣告 not_required
+    todo:
+    - '[ ] 規格總覽 #3：環境宣告機械化'
+    checkpoint:
+    - '[ ] CP-1-021 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+  module_contract_schema:
+    type: schema
+    description: 補強模組的 Pattern、Complexity/Algorithm、Invariants、Verification、生命週期與觀測契約（#9-16）。
+    source: adad_cli/workflow/module_contract_schema.py
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - compile_map
+    - validate_schema
+    input:
+      module_contract: object
+    output:
+      normalized_module_contract: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: schema_first
+    verification: []
+    decisions:
+    - 高複雜度模組必須有 Algorithm；觀測契約不與 description 混用
+    todo:
+    - '[ ] 規格總覽 #9-16：補齊模組契約欄位與驗證'
+    checkpoint:
+    - '[ ] CP-1-022 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+  rollback_and_concurrency_contract:
+    type: schema
+    description: 宣告 Task 重試失敗後的 rollback 策略與平行修改衝突處理（#17-18）。
+    source: adad_cli/workflow/execution_policy.py
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - adad_task
+    input:
+      execution_policy: object
+    output:
+      guarded_execution_policy: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: explicit_contract
+    verification: []
+    decisions:
+    - 先宣告 rollback 與鎖定邊界，再導入執行期機制
+    todo:
+    - '[ ] 規格總覽 #17-18：失敗清理與併發衝突契約'
+    checkpoint:
+    - '[ ] CP-1-023 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+  task_contract_schema:
+    type: schema
+    description: '聚合 #19～#23 的原子契約驗證結果，產生完整的 per-task contract 快照。'
+    source: adad_cli/workflow/task_contract_schema.py::validate_task_contract,_validate_json_schema_subset
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - generate_task
+    - task_semantic_contract
+    - task_non_goals_contract
+    - task_verification_conditions
+    - task_assumptions_contract
+    - task_input_json_schema
+    - task_output_json_schema
+    input:
+      task_contract: object
+    output:
+      validated_task_contract: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: thin_orchestrator
+    verification: []
+    decisions:
+    - Preconditions/Postconditions 擴充 Verification case，不建立重複欄位
+    todo:
+    - '[ ] 規格總覽 #19-23：Task 規格化'
+    checkpoint:
+    - '[x] CP-1-024 (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 0
+  task_semantic_contract:
+    type: schema
+    description: 將 Task 的自然語言 description 升級為可驗證的結構化 Semantic Contract（#19）。
+    source: adad_cli/workflow/task_contract_schema.py::validate_semantic_contract
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - validate_schema
+    input:
+      description: string
+    output:
+      semantic_contract: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: schema_first
+    verification: []
+    decisions:
+    - Semantic Contract 必須保留人類可讀摘要，並提供機器可驗證的目標與完成條件
+    todo:
+    - '[ ] 規格總覽 #19：結構化 Semantic Contract'
+    checkpoint:
+    - '[x] CP-1-024-A (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  task_non_goals_contract:
+    type: schema
+    description: 為 Task 增加明確的 Non-goal 清單，限制 Agent 不得自行擴張的工作範圍（#20）。
+    source: adad_cli/workflow/task_contract_schema.py::validate_non_goals
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - validate_schema
+    input:
+      non_goals: array
+    output:
+      validated_non_goals: array
+    exceptions: []
+    invariants: []
+    preferred_pattern: explicit_contract
+    verification: []
+    decisions:
+    - 空陣列代表已明確確認沒有額外 Non-goal，不得以缺少欄位代替
+    todo:
+    - '[ ] 規格總覽 #20：Non-goal 契約'
+    checkpoint:
+    - '[x] CP-1-024-B (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  task_verification_conditions:
+    type: schema
+    description: 以既有 Verification case 的 input、expect 與 expect_exception 表達 Preconditions/Postconditions，不新增重複欄位（#21）。
+    source: adad_cli/workflow/task_contract_schema.py::validate_verification_conditions
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - verify_implementation
+    input:
+      verification_cases: array
+    output:
+      validated_verification_cases: array
+    exceptions: []
+    invariants: []
+    preferred_pattern: extend_existing_contract
+    verification: []
+    decisions:
+    - Preconditions 由 case input 與前置狀態表達；Postconditions 由 expect 或 expect_exception
+      表達
+    todo:
+    - '[ ] 規格總覽 #21：以前後條件強化 Verification case'
+    checkpoint:
+    - '[x] CP-1-024-C (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  task_assumptions_contract:
+    type: schema
+    description: 為 Task 增加可快照、可審核的 Assumptions 清單（#22）。
+    source: adad_cli/workflow/task_contract_schema.py::validate_assumptions
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - validate_schema
+    input:
+      assumptions: array
+    output:
+      validated_assumptions: array
+    exceptions: []
+    invariants: []
+    preferred_pattern: explicit_contract
+    verification: []
+    decisions:
+    - Assumption 只描述 Task 成立所依賴的外部事實，不得重複 Preconditions 或 Non-goal
+    todo:
+    - '[ ] 規格總覽 #22：Assumptions 契約'
+    checkpoint:
+    - '[x] CP-1-024-D (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  task_input_json_schema:
+    type: schema
+    description: 將既有通用 schema 驗證能力套用至 per-task Input JSON Schema（#23）。
+    source: adad_cli/workflow/task_contract_schema.py::validate_task_input_schema
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - validate_schema
+    input:
+      input_schema: object
+    output:
+      validated_input_schema: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: schema_first
+    verification: []
+    decisions:
+    - 沿用 validate_schema 的支援子集與錯誤格式，不建立第二套 JSON Schema 引擎
+    todo:
+    - '[ ] 規格總覽 #23-A：per-task Input JSON Schema'
+    checkpoint:
+    - '[x] CP-1-024-E (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  task_output_json_schema:
+    type: schema
+    description: 將既有通用 schema 驗證能力套用至 per-task Output JSON Schema（#23）。
+    source: adad_cli/workflow/task_contract_schema.py::validate_task_output_schema
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - validate_schema
+    input:
+      output_schema: object
+    output:
+      validated_output_schema: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: schema_first
+    verification: []
+    decisions:
+    - 沿用 validate_schema 的支援子集與錯誤格式，不建立第二套 JSON Schema 引擎
+    todo:
+    - '[ ] 規格總覽 #23-B：per-task Output JSON Schema'
+    checkpoint:
+    - '[x] CP-1-024-F (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  execution_contracts:
+    type: schema
+    description: 宣告並逐步驗證 side effect、determinism、idempotency、state change、purity、resource
+      與 concurrency 契約（#24-32）。
+    source: adad_cli/workflow/execution_contracts.py
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - check_invariants
+    - verify_implementation
+    input:
+      execution_contract: object
+    output:
+      execution_verdict: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: executable_contract
+    verification: []
+    decisions:
+    - Exception verification 併入 case；purity 以 Pattern 的 machine-readable flag 表示
+    todo:
+    - '[ ] 規格總覽 #24-32：執行、例外與資源契約'
+    checkpoint:
+    - '[ ] CP-1-025 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 0
+  dependency_and_retry_contract:
+    type: schema
+    description: 宣告相依模組的契約摘要與逐 Task retry budget，並控制 Task 快照的 context 膨脹（#33-35）。
+    source: adad_cli/workflow/dependency_contract.py
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - generate_task
+    - adad_task
+    input:
+      dependency_contract: object
+    output:
+      bounded_dependency_context: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: bounded_context
+    verification: []
+    decisions:
+    - Dependency version 暫不導入，待確認實際需求
+    todo:
+    - '[ ] 規格總覽 #33-35：相依契約與重試預算'
+    checkpoint:
+    - '[ ] CP-1-026 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+  verification_strategy:
+    type: verifier
+    description: 擴充 case 的 boundary、invalid input、exception、fixture、determinism 與
+      golden/property 驗證策略（#36-39）。
+    source: adad_cli/workflow/verification_strategy.py
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - verify_implementation
+    input:
+      verification_plan: object
+    output:
+      verification_report: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: executable_specification
+    verification: []
+    decisions:
+    - Coverage gate 列為 P2，先強化 case 覆蓋規則
+    todo:
+    - '[ ] 規格總覽 #36-39：驗證策略演進'
+    checkpoint:
+    - '[ ] CP-1-027 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 0
+  resolve_verification_fixture_inputs:
+    type: function
+    description: '解析 Verification case 宣告的 UTF-8 JSON fixture 來源，將資料安全注入 case input；路徑必須限制在專案根目錄內，且不得靜默覆寫原始
+      input，作為 #37 Fixture / Mock Data 來源宣告的原子基礎能力。'
+    source: adad_cli/workflow/verification_fixtures.py::resolve_verification_fixture_inputs
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      case: object
+      project_root: string
+    output:
+      resolved_case: object
+    exceptions: []
+    invariants:
+    - 'deny_calls: [eval, exec, os.chdir, pickle.load, yaml.load]'
+    preferred_pattern: boundary_adapter
+    verification:
+    - case:
+        input:
+          case:
+            input:
+              value: 1
+            expect: 1
+          project_root: .
+        expect:
+          input:
+            value: 1
+          expect: 1
+    - case:
+        input:
+          case:
+            input: {}
+            fixtures:
+            - input_key: payload
+              source: C:\outside.json
+          project_root: .
+        expect_exception: ValueError
+    - case:
+        input:
+          case:
+            input: {}
+            fixtures:
+            - input_key: payload
+              source: /outside.json
+          project_root: .
+        expect_exception: ValueError
+    - case:
+        input:
+          case:
+            input: {}
+            fixtures:
+            - input_key: payload
+              source: ../outside.json
+          project_root: .
+        expect_exception: ValueError
+    - case:
+        input:
+          case:
+            input:
+              payload: {}
+            fixtures:
+            - input_key: payload
+              source: tests/fixture.json
+          project_root: .
+        expect_exception: ValueError
+    decisions: []
+    todo:
+    - '[ ] #37 第一原子步驟：解析並安全注入 JSON fixture input'
+    checkpoint:
+    - '[ ] CP-1-046 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 驗證 case 是 object、case.input 是 object，且 fixtures 缺省時視為空陣列；fixtures 存在時必須是 descriptor
+      array。
+    - 逐筆驗證 descriptor 僅具非空 `input_key` 與 `source`；以 host Path、PurePosixPath 與 PureWindowsPath
+      的語意拒絕所有平台的絕對路徑，並拒絕重複 input_key 及既有 input key 衝突。
+    - 將 source 相對 project_root 解析並正規化，確認結果仍位於 project_root 且是存在的 regular file。
+    - 以嚴格 UTF-8 讀取並解析 JSON，把解析值注入新 input，最後回傳保留原 case 其他欄位的新 case。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  task_readiness_and_audit:
+    type: gate
+    description: 將 required field/readiness score、模型可執行的複雜度預算、Task 分解門禁與可追溯審批留痕納入核發及
+      CP-2 流程（#40-42、#49）。
+    source: adad_cli/workflow/task_readiness.py
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - generate_task
+    - adad_task
+    - compile_map
+    - task_complexity_policy
+    input:
+      task_snapshot: object
+    output:
+      readiness_result: object
+      audit_record: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: fail_fast_gate
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 規格總覽 #40、#42：Readiness 與 audit 契約'
+    - '[x] 規格總覽 #41：high complexity 缺 Algorithm 已阻斷編譯'
+    - '[x] 規格總覽 #49：Task 核發門禁已套用 complexity policy；high 必須拆分，人工 override 待後續契約。'
+    checkpoint:
+    - '[ ] CP-1-028 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 0
+  task_complexity_policy:
+    type: function
+    description: 以純函式判定施工 Task 應直接核發、補齊規格或拆分；已接線 generate_task，high complexity 一律要求拆分，人工
+      override 待後續契約實作（#49）。
+    source: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py::evaluate_task_complexity
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      target_file: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py
+      legacy_file: adad_cli/task_complexity.py
+      allowed_symbols: '[evaluate_task_complexity]'
+      forbidden_files: '[adad_cli/core.py, adad_cli/sync_assets.py, system_map.md,
+        README.md]'
+      test_file: tests/test_task_complexity.py
+      complexity: string
+      has_algorithm: boolean
+      has_boundaries: boolean
+      has_verification: boolean
+      model_capability: string
+      override_approved: boolean
+      override_reason: string
+    output:
+      decision: string
+    exceptions: []
+    invariants:
+    - 'deny_imports: [yaml, subprocess, os]'
+    preferred_pattern: pure_function
+    verification:
+    - case:
+        input:
+          complexity: low
+          has_algorithm: false
+          has_boundaries: false
+          has_verification: false
+          model_capability: low
+          override_approved: false
+          override_reason: ''
+        expect: issue
+    - case:
+        input:
+          complexity: medium
+          has_algorithm: true
+          has_boundaries: true
+          has_verification: true
+          model_capability: standard
+          override_approved: false
+          override_reason: ''
+        expect: issue
+    - case:
+        input:
+          complexity: medium
+          has_algorithm: true
+          has_boundaries: true
+          has_verification: false
+          model_capability: standard
+          override_approved: false
+          override_reason: ''
+        expect: complete_spec
+    - case:
+        input:
+          complexity: high
+          has_algorithm: true
+          has_boundaries: true
+          has_verification: true
+          model_capability: high
+          override_approved: false
+          override_reason: ''
+        expect: split
+    - case:
+        input:
+          complexity: high
+          has_algorithm: true
+          has_boundaries: true
+          has_verification: true
+          model_capability: high
+          override_approved: true
+          override_reason: atomic external transaction
+        expect: issue_override
+    - case:
+        input:
+          complexity: high
+          has_algorithm: true
+          has_boundaries: true
+          has_verification: true
+          model_capability: standard
+          override_approved: true
+          override_reason: atomic external transaction
+        expect: split
+    decisions: []
+    todo:
+    - '[x] 規格總覽 #49 第一階段：純函式複雜度決策矩陣與直接 pytest'
+    checkpoint:
+    - '[x] CP-1-037 (validated)'
+    - '[x] CP-3-049-DIRECT-PYTEST (validated：2026-07-18 人工確認；僅授權直接 pytest)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 將 complexity 與 model_capability 正規化為小寫，僅接受 complexity=[low, medium, high] 與
+      model_capability=[low, standard, high]；非法值拋出 ValueError。
+    - complexity=low 時回傳 `issue`。
+    - complexity=medium 時，只有 has_algorithm、has_boundaries、has_verification 全為 true
+      才回傳 `issue`，否則回傳 `complete_spec`。
+    - complexity=high 時，只有 model_capability=high、override_approved=true 且 override_reason
+      去除空白後非空，才回傳 `issue_override`。
+    - 其餘 high 情況一律回傳 `split`；不得讀寫檔案、環境變數、全域狀態或呼叫外部服務。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  context_policy:
+    type: policy
+    description: 宣告 required/forbidden context、priority 與來源，並讓 Task 快照遵循裁剪策略（#43-47）。
+    source: adad_cli/workflow/context_policy.py
+    domain: ADAD_Roadmap
+    subsystem: Contract_Evolution
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - generate_task
+    - read_context
+    input:
+      context_policy: object
+    output:
+      curated_context: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: least_context
+    verification: []
+    decisions:
+    - Context budget 屬 Kernel 整合追蹤項，不與 ADAD schema 強耦合
+    todo:
+    - '[ ] 規格總覽 #43-47：Context 契約'
+    checkpoint:
+    - '[ ] CP-1-029 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+  package_version:
+    type: metadata
+    description: 維護 ADAD CLI 的唯一套件版本來源，供 setuptools、CLI 與 upgrade 流程共同讀取。
+    source: adad_cli/__init__.py
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      release_version: string
+    output:
+      package_version: string
+    exceptions: []
+    invariants: []
+    preferred_pattern: single_source_of_truth
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -c
+        - import adad_cli; assert adad_cli.__version__ == '1.6.2'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - 版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.2
+    todo:
+    - '[ ] 發布 1.6.2：整合 Task／source-lock 強化、資產同步與 pytest 回歸覆蓋'
+    checkpoint:
+    - '[x] CP-1-075-PATCH-RELEASE (validated：2026-07-16 人工要求更新 1.6.1 並安裝本機版本)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+    known_symbols: []
+  documentation_alignment:
+    type: documentation
+    description: 對齊 README 的 CLI 工具表與 Phase/Checkpoint 文件，使其反映 Task 快照工作流（#1-2）。
+    source: README.md
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - generate_task
+    - adad_task
+    - check_domain_boundary
+    input: {}
+    output:
+      user_documentation: markdown
+    exceptions: []
+    invariants: []
+    preferred_pattern: documentation_as_contract
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 規格總覽 #1-2：README 對齊'
+    checkpoint:
+    - '[ ] CP-1-030 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  continuous_integration:
+    type: pipeline
+    description: 在 push 與 pull request 執行架構編譯、資產同步檢查、ADAD gate 與 pytest（#6）。
+    source: .github/workflows/verify.yml
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - sync_adad_assets
+    - adad_pre_commit
+    input:
+      git_revision: string
+    output:
+      check_results: report
+    exceptions: []
+    invariants: []
+    preferred_pattern: continuous_verification
+    verification: []
+    decisions:
+    - CI 必須先驗證 generated assets 與 adad_source 一致
+    todo:
+    - '[ ] 規格總覽 #6：CI/CD'
+    checkpoint:
+    - '[ ] CP-1-031 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 1
+  release_changelog:
+    type: documentation
+    description: 以 CHANGELOG 維護版本化改善紀錄，取代 README 尾端長篇變更文字（#7）。
+    source: CHANGELOG.md
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      release_changes: array
+    output:
+      changelog_entry: markdown
+    exceptions: []
+    invariants: []
+    preferred_pattern: keep_a_changelog
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 規格總覽 #7：版本化變更紀錄'
+    checkpoint:
+    - '[ ] CP-1-032 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  release_sop:
+    type: documentation
+    description: '#65 整理 CI/linked-worktree 發布契約；#72 新增 sub_maps root-count、upgrade
+      與外部專案驗收；#73 改為完整 development snapshot，避免只發布最後 commit 而遺漏累積修正。'
+    source: docs/RELEASE_SOP.md
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - adad_pre_commit
+    - adad_core
+    - continuous_integration
+    input:
+      release_incidents: array
+    output:
+      release_procedure: markdown
+    exceptions: []
+    invariants: []
+    preferred_pattern: documentation_as_contract
+    verification: []
+    decisions:
+    - release worktree 必須從 origin/main 建立；發布內容必須等於指定 development commit 的完整 tracked
+      snapshot，禁止只取最後 commit 的 diff；sub_maps 發布必須驗證 root/child count 不變、FinanceImport
+      可查與 upgrade 後不膨脹；禁止 no-verify；Actions 成功後才更新本機
+    todo:
+    - '[ ] #65：補齊巢狀臨時 repo 的 CI event context 隔離 SOP'
+    - '[ ] #72：補齊 sub_maps 發布、安裝與外部專案 upgrade 驗收'
+    - '[ ] #73：以完整 development snapshot 發布並驗證漏帶檔案為零'
+    checkpoint:
+    - '[x] CP-1-063-SOP (validated：2026-07-15 人工核准納入發布經驗)'
+    - '[x] CP-1-065-SOP (validated：2026-07-15 人工核准納入巢狀 CI 經驗)'
+    - '[x] CP-1-072-SUBMAP-RELEASE (validated：2026-07-15 人工要求更新本機版本)'
+    - '[x] CP-1-073-FULL-SNAPSHOT (validated：2026-07-16 人工要求修正發布 SOP)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  project_venv_python:
+    type: function
+    description: 依專案根目錄與作業系統決定唯一受管理的 `.venv` Python 直譯器路徑（#48）。
+    source: adad_cli/core.py::_project_venv_python
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      project_root: path
+    output:
+      python_path: path
+    exceptions: []
+    invariants:
+    - 'deny_imports: [virtualenv]'
+    preferred_pattern: pure_function
+    verification: []
+    decisions:
+    - 不讀取 shell PATH；`.venv` 是唯一受管理的環境名稱
+    todo:
+    - '[ ] 規格總覽 #48-1：解析專案 `.venv` 直譯器路徑'
+    checkpoint:
+    - '[x] CP-1-033-A (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 3
+  init_project_virtual_environment:
+    type: lifecycle
+    description: '`adad init` 編排已拆分的 `.venv` 建立與 pre-commit hook 寫入節點（#48）。'
+    source: adad_cli/core.py::init_project,_normalize_agents,load_project_agents,save_project_agents,_copy_file_if_absent,_setup_claude_project_skill,_ensure_claude_md_import,_ensure_codex_root_agents_md
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - ensure_project_virtual_environment
+    - write_project_pre_commit_hook
+    input:
+      project_root: path
+      agents: array
+    output:
+      environment_status: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [virtualenv]'
+    preferred_pattern: thin_orchestrator
+    verification: []
+    decisions:
+    - 本 repo 已手動完成單一 .venv 整理；本節點只修正 CLI 的未來 init 行為
+    - 舊 venv 可能含使用者資料，遷移採提示優先
+    todo:
+    - '[ ] 規格總覽 #48-2：初始化唯一 `.venv` 與 hook'
+    checkpoint:
+    - '[x] CP-1-033-B (validated)'
+    - '[x] CP-3-048-F (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  ensure_project_virtual_environment:
+    type: function
+    description: 建立或保留專案唯一受管理的 `.venv`，舊 `venv` 僅提示而不搬移或刪除（#48）。
+    source: adad_cli/core.py::_ensure_project_virtual_environment
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      project_root: path
+    output:
+      environment_status: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [virtualenv]'
+    preferred_pattern: idempotent_resource
+    verification: []
+    decisions:
+    - 舊 venv 可能含使用者資料，遷移採提示優先
+    todo:
+    - '[ ] 規格總覽 #48-2A：建立或保留唯一 `.venv`'
+    checkpoint:
+    - '[x] CP-3-048-E (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  write_project_pre_commit_hook:
+    type: function
+    description: 使用專案 `.venv` 直譯器寫入 pre-commit hook，供 init 與 upgrade 共用（#48）。
+    source: adad_cli/core.py::_write_project_pre_commit_hook
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - project_venv_python
+    input:
+      project_root: path
+      hook_src: path
+    output:
+      hook_status: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [virtualenv]'
+    preferred_pattern: shared_resource_writer
+    verification: []
+    decisions:
+    - Rule of Two 要求 init 與 upgrade 共用相同 hook 寫入邏輯
+    todo:
+    - '[ ] 規格總覽 #48-2B：以專案 `.venv` 寫入 hook'
+    checkpoint:
+    - '[x] CP-3-048-A (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 2
+  upgrade_project_virtual_environment:
+    type: lifecycle
+    description: '`adad upgrade` 同步 workflow、正式 schema 與 hook；不覆蓋使用者架構內容，且不得將 Python
+      編譯快取複製到專案。'
+    source: adad_cli/core.py::upgrade_project,_iter_relative_files,_sync_file
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - write_project_pre_commit_hook
+    - automated_test_suite
+    input:
+      project_root: path
+      agents: array
+      test_file: tests/test_upgrade_project.py
+      allowed_symbols: '[upgrade_project, _iter_relative_files, _sync_file]'
+      allowed_files: '[adad_cli/core.py, tests/test_upgrade_project.py]'
+    output:
+      environment_status: object
+      schema_sync_status: object
+      report: object（added、updated、unchanged 均不得包含 __pycache__ 或 *.pyc）
+    exceptions: []
+    invariants:
+    - 'deny_imports: [virtualenv]'
+    preferred_pattern: thin_orchestrator
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - -q
+        - tests/test_upgrade_project.py
+        - --basetemp
+        - '{workspace}/pytest'
+        cwd: project
+        expect_exit: 0
+    decisions:
+    - upgrade 不得以隱含方式建立虛擬環境
+    - system_map.schema.json 與 task_schema.json 為套件管理契約，更新前須備份
+    - _iter_relative_files 必須排除任一層 __pycache__ 與 *.pyc
+    todo:
+    - '[ ] 規格總覽 #48-3：升級時重寫既有 `.venv` hook'
+    - '[ ] #76-B3：upgrade 實際輸出與 report 排除 Python 編譯快取'
+    checkpoint:
+    - '[x] CP-1-033-C (validated)'
+    - '[x] CP-3-048-B (validated)'
+    - '[x] CP-1-076-B3-UPGRADE-CACHE (validated：2026-07-16 人工核准)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 遞迴列舉套件 workflow 資產時，排除相對路徑任一層為 __pycache__ 的檔案及副檔名為 .pyc 的檔案。
+    - Antigravity 與 Claude 的 upgrade 複製路徑共用相同過濾結果。
+    - 回歸測試必須在來源資產樹植入快取，執行 upgrade_project 後檢查實際輸出與 report 均無快取。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  remove_project_virtual_environment:
+    type: function
+    description: 只移除專案受管理的 `.venv`；舊 `venv` 保留並提示人工處理（#48）。
+    source: adad_cli/core.py::_remove_project_virtual_environment
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      project_root: path
+    output:
+      environment_status: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [virtualenv]'
+    preferred_pattern: safe_cleanup
+    verification: []
+    decisions:
+    - 舊 venv 可能含使用者資料，因此禁止破壞性自動清理
+    todo:
+    - '[ ] 規格總覽 #48-4A：安全移除唯一 `.venv`'
+    checkpoint:
+    - '[x] CP-3-048-C (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+  clean_project_virtual_environment:
+    type: lifecycle
+    description: '`adad remove` 委派安全清理節點處理 `.venv`，並保留其他既有清理職責（#48）。'
+    source: adad_cli/core.py::clean_project
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - remove_project_virtual_environment
+    input:
+      project_root: path
+      purge_docs: boolean
+    output:
+      environment_status: object
+    exceptions: []
+    invariants:
+    - 'deny_imports: [virtualenv]'
+    preferred_pattern: thin_orchestrator
+    verification: []
+    decisions:
+    - 舊 venv 可能含使用者資料，因此禁止破壞性自動清理
+    todo:
+    - '[ ] 規格總覽 #48-4：安全清理唯一 `.venv`'
+    checkpoint:
+    - '[x] CP-1-033-D (validated)'
+    - '[x] CP-3-048-D (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  ensure_claude_pretooluse_hook:
+    type: function
+    description: 以 `settings_path` 所屬專案的 `.venv` Python 產生跨平台安全 command，並在 Claude
+      `.claude/settings.json` 中冪等新增或更新 ADAD PreToolUse hook；既有 `python3` 舊命令必須升級，使用者其他
+      hooks 與設定必須完整保留。
+    source: adad_cli/core.py::_ensure_claude_pretooluse_hook,_remove_claude_pretooluse_hook
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - project_venv_python
+    - render_portable_python_hook_command
+    input:
+      settings_path: path
+    output:
+      hook_status: object
+    exceptions: []
+    invariants:
+    - 'require_calls: [_project_venv_python, render_portable_python_hook_command]'
+    - 'deny_calls: [subprocess.run, subprocess.Popen, os.system]'
+    preferred_pattern: idempotent_configuration_upsert
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 讓 init/upgrade 自動升級 Claude hook 的 `python3` 舊命令並保持設定冪等'
+    checkpoint:
+    - '[ ] CP-1-045 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - 由 `settings_path` 推導 project root，取得 project `.venv` Python，將 `os.name` 映射為精確
+      command family，再呼叫 portable renderer 得到唯一期望 command。
+    - 以 UTF-8 strict 讀取既有 JSON；不存在時使用空物件，解析失敗時保留原檔並回傳略過狀態。
+    - 尋找 matcher 相同且 command 含目標腳本名稱的既有 hook；command 不同則就地更新，相同則不寫檔；找不到時只追加 ADAD hook。
+    - 僅在結構實際變更時寫回設定並回傳 `created` 或 `updated`，否則回傳 `unchanged`。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  global_installation_distribution:
+    type: lifecycle
+    description: 管理全域 ADAD 規則安裝、解除安裝與可攜發行封裝。
+    source: adad_cli/core.py::install_global,uninstall_global,pack_dist,_write_global_rules_block
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      agents: array
+    output:
+      installation_status: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: lifecycle_orchestrator
+    verification: []
+    decisions:
+    - 全域規則寫入集中管理；封裝不依賴呼叫端 cwd
+    todo: []
+    checkpoint: []
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+  blocked_task_reporting:
+    type: integration
+    description: 提供 task_block 到 blocked 報告的結構化 MCP 與文字備援流程（規格能力 1-4）。
+    source: adad_source/blocked_report/report_blocked_mcp.py::main
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - adad_core
+    input:
+      json_rpc_request: object
+    output:
+      json_rpc_response: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: structured_failure
+    verification: []
+    decisions:
+    - 不支援自訂工具的平台使用 schema 加文字擷取作為降級方案
+    todo:
+    - '[x] #51：結構化 blocked 回報的直接 pytest'
+    checkpoint:
+    - '[x] CP-1-034 (validated：2026-07-18 人工確認既有 MCP source binding)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  platform_instruction_renderer:
+    type: generator
+    description: 從單一 instruction source 產生 Claude、Antigravity 與 Codex 的平台格式指示檔（規格第
+      2 節）。
+    source: adad_cli/platform_instructions.py
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - sync_adad_assets
+    input:
+      platform_instruction_source: object
+    output:
+      rendered_instructions: array
+    exceptions: []
+    invariants: []
+    preferred_pattern: generate_from_ssot
+    verification: []
+    decisions:
+    - 平台格式不同，但讀取邊界、blocked 格式與 harness 時機必須語意一致
+    todo:
+    - '[ ] 規格第 2 節：平台 instruction SSOT 與 renderer'
+    - '[ ] 重整 ADAD 指示檔分層：將 `.agents/AGENTS.md` 縮為硬性規則與 skill 入口；完整 ADAD 架構、Checkpoint
+      與地圖操作流程僅保留於 `adad-workflow/SKILL.md`，降低每輪固定上下文成本。'
+    checkpoint:
+    - '[ ] CP-1-035 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: dirty
+    fan_in_snapshot: 0
+  platform_compatibility_assessment:
+    type: checklist
+    description: 對新 Kernel/平台記錄 MCP、hooks、ACL、structured output 與本地 CLI 可用性，避免宣稱不存在的強制保證（規格第
+      4 節）。
+    source: docs/platform_compatibility.md
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      platform_capabilities: object
+    output:
+      compatibility_report: object
+    exceptions: []
+    invariants: []
+    preferred_pattern: explicit_capability_matrix
+    verification: []
+    decisions:
+    - 未通過的能力必須標記為指示性與人工 review 風險
+    todo:
+    - '[ ] 規格第 4 節：平台相容性 Checklist'
+    checkpoint:
+    - '[ ] CP-1-036 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+  run_utf8_subprocess:
+    type: function
+    description: 以明確 UTF-8 文字邊界執行單次子程序，統一回傳 returncode、stdout 與 stderr，避免 Windows
+      CP950、macOS/Linux UTF-8 locale 與 shell quoting 造成不一致。
+    source: adad_cli/platform_io.py::run_utf8_subprocess,_safe_decode
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      argv: array
+      cwd: string_or_null
+    output:
+      process_result: object
+    exceptions: []
+    invariants:
+    - 'deny_calls: [subprocess.Popen, os.chdir]'
+    preferred_pattern: boundary_adapter
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 跨平台 UTF-8 子程序邊界：Windows、macOS 與 Linux 行為一致'
+    checkpoint:
+    - '[ ] CP-1-038 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  repository_line_ending_policy:
+    type: configuration
+    description: 以版本控制內的 `.gitattributes` 明確規範文字與腳本換行，讓 Windows、macOS、Linux checkout
+      與 commit 的內容一致，避免 CRLF/LF 差異造成架構過期判斷、資產同步或解析結果不一致。
+    source: .gitattributes
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies: []
+    input:
+      repository_file_types: array
+    output:
+      gitattributes_policy: file
+    exceptions: []
+    invariants: []
+    preferred_pattern: policy_as_code
+    verification: []
+    decisions: []
+    todo:
+    - '[ ] 建立跨平台版本庫換行政策並避免既有檔案被隱性批次改寫'
+    checkpoint:
+    - '[ ] CP-1-042 (planned)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm: []
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 0
+  render_portable_python_hook_command:
+    type: function
+    description: 使用專案 `.venv` 的 Python 直譯器與 hook 腳本路徑，依明確的 `windows` 或 `posix` command
+      family 引用規則產生可攜式 command；不得把此輸入誤解為 `sys.platform` 的 `win32`、`linux` 或 `darwin`，並須正確處理含空白或特殊字元的專案路徑。
+    source: adad_cli/platform_io.py::render_portable_python_hook_command
+    domain: ADAD_Roadmap
+    subsystem: Platform_Integration
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - project_venv_python
+    input:
+      python_executable: path
+      script_path: path
+      platform_family: string
+    output:
+      command: string
+    exceptions: []
+    invariants:
+    - 'deny_calls: [subprocess.run, subprocess.Popen, os.system]'
+    preferred_pattern: boundary_adapter
+    verification:
+    - case:
+        input:
+          python_executable: C:\Program Files\Python\python.exe
+          script_path: C:\Project Space\hook.py
+          platform_family: windows
+        expect: '"C:\Program Files\Python\python.exe" "C:\Project Space\hook.py"'
+    - case:
+        input:
+          python_executable: /opt/My Python/bin/python
+          script_path: /work/My Project/hook.py
+          platform_family: posix
+        expect: '''/opt/My Python/bin/python'' ''/work/My Project/hook.py'''
+    - case:
+        input:
+          python_executable: python
+          script_path: hook.py
+          platform_family: win32
+        expect_exception: ValueError
+    decisions: []
+    todo:
+    - '[ ] 移除 Claude PreToolUse hook 的 `python3` 硬編碼並支援含空白路徑'
+    checkpoint:
+    - '[ ] CP-1-043 (planned)'
+    - '[x] CP-3-044 (validated)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: low
+    algorithm:
+    - 先以精確字串比對驗證 `platform_family`，不是 `windows` 或 `posix` 時立即拋出 `ValueError`。
+    - '`windows` 使用符合 CreateProcess/CommandLineToArgvW 的 argv 引用規則渲染 Python 與腳本路徑。'
+    - '`posix` 使用 POSIX shell 引用規則分別引用 Python 與腳本路徑，再以單一空白連接。'
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: validated
+    fan_in_snapshot: 1
+domains:
+  ADAD_Workflow:
+    description: ADAD (Architecture-Driven Agentic Development) 的架構與工作流核心管理工具集。
+    allowed_dependencies: []
+    subsystems:
+      Core_Engine:
+        description: 負責架構地圖讀寫、狀態推進、DAG 依賴分析與 Invariants 校驗的核心模組。
+        map_file: system_map.md
+      Test_Quality:
+        description: 管理可重複的最小回歸測試集合，以及具明確目的與邊界的暫時測試資產生命週期。
+        map_file: system_map.md
+      Enforcement_Gates:
+        description: 機械強制執行層——commit 階段與 agent 工具呼叫前後的閘門、驗證與 Task 生命週期控管，把 AGENTS.md
+          的軟性規則轉成硬規則。
+        map_file: system_map.md
+    map_file: system_map.md
+  ADAD_Roadmap:
+    description: 規格總覽中已完成能力與後續演進工作的可施工架構地圖。
+    allowed_dependencies:
+    - ADAD_Workflow
+    subsystems:
+      Completed_Baseline:
+        description: 已落地能力的驗證基線。
+        map_file: docs\domains\adad_roadmap.md
+      Contract_Evolution:
+        description: Schema、Task 與執行契約缺口的可獨立施工節點。
+        map_file: docs\domains\adad_roadmap.md
+      Product_Delivery:
+        description: 文件、發佈、CI 與專案環境的一致性交付。
+        map_file: docs\domains\adad_roadmap.md
+      Platform_Integration:
+        description: 將跨平台指示與平台能力降級情況變成可追蹤的產品資產。
+        map_file: docs\domains\adad_roadmap.md
+    map_file: docs\domains\adad_roadmap.md
+environment:
+  state: not_required
+  services: []

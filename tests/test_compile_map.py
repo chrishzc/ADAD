@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import shutil
 
-from conftest import SYSTEM_MAP_SCHEMA_PATH, run_script, read_yaml
+from conftest import run_script, read_yaml, REPO_ROOT
 
 VALID_MD = """# ADAD Architecture Source
 
@@ -63,7 +63,7 @@ DUPLICATE_MODULE_MD = VALID_MD + """
 
 def _write_md(project_dir, content):
     (project_dir / "system_map.md").write_text(content, encoding="utf-8")
-    shutil.copy(SYSTEM_MAP_SCHEMA_PATH, project_dir / "system_map.schema.json")
+    shutil.copy(REPO_ROOT / "system_map.schema.json", project_dir / "system_map.schema.json")
 
 
 def test_compile_map_produces_valid_yaml(project_dir):
@@ -222,3 +222,20 @@ def test_compile_map_fails_when_exception_not_verified(project_dir):
     assert data["success"] is False
     assert "TypeError" in data["error"]
     assert "缺乏對應的 expect_exception" in data["error"]
+
+
+def test_normalize_markdown_source_code_fences():
+    import importlib.util
+    from pathlib import Path
+    source_path = Path(__file__).parents[1] / "adad_source" / "agents" / "skills" / "adad-workflow" / "scripts" / "source_normalization.py"
+    spec = importlib.util.spec_from_file_location("source_normalization_under_test", source_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    normalize = module.normalize_markdown_source
+
+    assert normalize("`file.py`") == "file.py"
+    assert normalize("``file.py``") == "file.py"
+    assert normalize("```\nfile.py\n```") == "file.py"
+    assert normalize("```python\nfile.py\n```") == "file.py"
+    assert normalize("```yaml\nfile.py::func\n```") == "file.py::func"
+    assert normalize("file.py") == "file.py"

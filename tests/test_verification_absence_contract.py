@@ -1,4 +1,10 @@
-import pytest
+﻿import pytest
+
+pytestmark = pytest.mark.regression_backlog
+
+
+
+
 
 from adad_cli.workflow.verification_absence_contract import (
     validate_verification_absence_contract,

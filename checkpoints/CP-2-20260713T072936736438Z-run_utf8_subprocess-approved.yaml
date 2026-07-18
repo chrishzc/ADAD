@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260713T072936736438Z-run_utf8_subprocess
+  phase: 2
+  timestamp: '2026-07-13T07:29:36.736438+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: run_utf8_subprocess
+    task_id: run_utf8_subprocess@v3@b32cdc
+    system_map_version: 3
+    source_hash: b32cdcb03765b89285a5fcc048c3dee028e7dd9fc39abd61bbf41625d4e00ce9
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

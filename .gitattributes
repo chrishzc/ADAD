@@ -1,6 +1,9 @@
 # Default behavior for all files
 * text=auto
 
+# UTF-8 text policy (editor/CI enforce via .editorconfig + pre-commit):
+# - keep text files normalized by repo; explicit line ending rules below.
+
 # Cross-platform text formats (Enforce LF)
 *.py text eol=lf
 *.md text eol=lf
@@ -10,6 +13,10 @@
 *.toml text eol=lf
 *.sh text eol=lf
 *.ps1 text eol=lf
+*.txt text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+*.rst text eol=lf
 
 # Windows-specific scripts (Enforce CRLF)
 *.bat text eol=crlf

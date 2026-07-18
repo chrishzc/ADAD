@@ -29,3 +29,14 @@ def test_cache_files_are_not_managed_or_copied(tmp_path):
 
     assert _tree_files(target) == {"managed.txt": b"canonical"}
     assert not target.joinpath("__pycache__").exists()
+
+
+def test_sync_twice_is_idempotent_in_isolated_target(tmp_path):
+    # Write operations must never mutate the checked-out project's .agents tree.
+    res1 = sync_assets(write=True, target_root=tmp_path)
+    assert res1["success"] is True
+
+    res2 = sync_assets(write=False, target_root=tmp_path)
+    assert res2["success"] is True
+    assert res2["differences"] == []
+    assert (tmp_path / ".agents" / "AGENTS.md").is_file()

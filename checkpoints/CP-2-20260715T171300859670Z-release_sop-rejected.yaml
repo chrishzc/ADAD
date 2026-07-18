@@ -1,0 +1,16 @@
+checkpoint_payload:
+  id: CP-2-20260715T171300859670Z-release_sop
+  phase: 2
+  timestamp: '2026-07-15T17:13:00.859670+00:00'
+  triggered_by: human
+  status: rejected
+  target:
+    node_name: release_sop
+    task_id: release_sop@v17@d2ffb3
+    system_map_version: 17
+    source_hash: d2ffb393868a31c99e9de043d8e178cc9f079bb1eed024747b83407cb249192c
+  decision:
+    action: rejected
+    reviewer: chris
+    comment: 'fast-forward 路徑仍無條件 git commit；且未引用的 <ADAD_REPO>/<EXTERNAL_REPO> placeholder
+      不能直接在 PowerShell 執行。Fingerprint: release-sop.snapshot-unconditional-commit-breaks-fast-forward'

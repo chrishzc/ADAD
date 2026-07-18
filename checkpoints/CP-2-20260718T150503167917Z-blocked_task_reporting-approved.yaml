@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260718T150503167917Z-blocked_task_reporting
+  phase: 2
+  timestamp: '2026-07-18T15:05:03.167917+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: blocked_task_reporting
+    task_id: blocked_task_reporting@v17@79ff75
+    system_map_version: 17
+    source_hash: 79ff7512d776dd401856dc95b3def5487ec659ffc8a81cab4933b005447c4d71
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

@@ -183,7 +183,7 @@ def _ensure_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) ->
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(settings_path))) or "."
     python_path = _project_venv_python(project_root)
     script_path = os.path.normpath(os.path.join(project_root, ".agents", "skills", "adad-workflow", "scripts", "adad_pretooluse_gate.py"))
-    
+
     if os.name == "nt":
         platform_family = "windows"
     elif os.name == "posix":
@@ -475,7 +475,11 @@ def init_project(agents=None, project_root: str = ".") -> dict:
 def _iter_relative_files(base: Path):
     """遞迴列出 base 底下所有檔案的相對路徑。"""
     for root, _dirs, files in os.walk(base):
+        if "__pycache__" in Path(root).parts:
+            continue
         for name in files:
+            if name.endswith(".pyc"):
+                continue
             full = Path(root) / name
             yield full.relative_to(base)
 
@@ -915,12 +919,8 @@ def _write_project_pre_commit_hook(project_root: str, hook_src: str) -> dict:
 
     hook_dst = os.path.join(git_dir, "hooks", "pre-commit")
     python_path = _project_venv_python(project_root)
-    # Git hooks are always interpreted by /bin/sh, including Git for Windows.
-    # Shell paths must therefore use forward slashes rather than cmd.exe paths.
-    shell_python_path = python_path.replace("\\", "/")
-    shell_hook_src = hook_src.replace("\\", "/")
     hook_content = f"""#!/bin/sh
-"{shell_python_path}" "{shell_hook_src}"
+"{python_path}" "{hook_src}"
 """
 
     old_content = None

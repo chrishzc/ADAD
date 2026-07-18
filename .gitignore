@@ -55,15 +55,6 @@ htmlcov/
 # === ADAD 隔離工作區（每次 Task 的本機執行產物，不進版控） ===
 .agents/workspaces/
 
-# main is a release branch: ADAD self-dogfooding state belongs on development.
-/AGENTS.md
-/system_map.md
-/system_map.yaml
-/system_map.schema.json
-/checkpoints/
-/docs/domains/adad_roadmap.md
-/docs/specifications/05_task_backlog.md
-
 # === 系統檔案 ===
 .DS_Store
 Thumbs.db
