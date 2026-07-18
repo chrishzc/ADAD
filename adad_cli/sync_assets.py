@@ -25,20 +25,20 @@ def _tree_files(root: Path) -> dict[str, bytes]:
     }
 
 
-def _compare_file(source: Path, target: Path) -> list[str]:
+def _compare_file(source: Path, target: Path, target_root: Path) -> list[str]:
     if not target.is_file() or source.read_bytes() != target.read_bytes():
-        return [str(target.relative_to(REPOSITORY_ROOT))]
+        return [str(target.relative_to(target_root))]
     return []
 
 
-def _compare_tree(source: Path, target: Path) -> list[str]:
+def _compare_tree(source: Path, target: Path, target_root: Path) -> list[str]:
     source_files = _tree_files(source)
     if not target.is_dir():
-        return [str(target.relative_to(REPOSITORY_ROOT))]
+        return [str(target.relative_to(target_root))]
 
     target_files = _tree_files(target)
     return [
-        str(target.relative_to(REPOSITORY_ROOT) / relative_path)
+        str(target.relative_to(target_root) / relative_path)
         for relative_path in sorted(set(source_files) | set(target_files))
         if source_files.get(relative_path) != target_files.get(relative_path)
     ]
@@ -56,25 +56,31 @@ def _copy_tree(source: Path, target: Path) -> None:
     shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
 
-def managed_assets() -> tuple[list[tuple[Path, Path]], list[tuple[Path, Path]]]:
+def managed_assets(
+    target_root: Path = REPOSITORY_ROOT,
+) -> tuple[list[tuple[Path, Path]], list[tuple[Path, Path]]]:
     """Return canonical file and directory mappings without touching project state."""
     agents = SOURCE_ROOT / "agents"
-    resources = REPOSITORY_ROOT / "adad_cli" / "resources"
+    resources = target_root / "adad_cli" / "resources"
     files = [
-        (agents / "AGENTS.md", REPOSITORY_ROOT / ".agents" / "AGENTS.md"),
+        (agents / "AGENTS.md", target_root / ".agents" / "AGENTS.md"),
         (agents / "AGENTS.md", resources / "agents" / "AGENTS.md"),
     ]
     trees = [
-        (agents / "skills" / "adad-workflow", REPOSITORY_ROOT / ".agents" / "skills" / "adad-workflow"),
+        (agents / "skills" / "adad-workflow", target_root / ".agents" / "skills" / "adad-workflow"),
         (agents / "skills" / "adad-workflow", resources / "agents" / "skills" / "adad-workflow"),
         (SOURCE_ROOT / "templates", resources / "templates"),
     ]
     return files, trees
 
 
-def sync_assets(write: bool) -> dict[str, object]:
+def sync_assets(
+    write: bool,
+    target_root: Path | None = None,
+) -> dict[str, object]:
     """Synchronize or verify the managed asset outputs from ``adad_source``."""
-    files, trees = managed_assets()
+    target_root = REPOSITORY_ROOT if target_root is None else Path(target_root)
+    files, trees = managed_assets(target_root)
     for source, _ in [*files, *trees]:
         assert source.exists(), f"Missing canonical asset: {source}"
 
@@ -87,11 +93,11 @@ def sync_assets(write: bool) -> dict[str, object]:
     differences = [
         difference
         for source, target in files
-        for difference in _compare_file(source, target)
+        for difference in _compare_file(source, target, target_root)
     ] + [
         difference
         for source, target in trees
-        for difference in _compare_tree(source, target)
+        for difference in _compare_tree(source, target, target_root)
     ]
     return {"success": not differences, "mode": "write" if write else "check", "differences": differences}
 

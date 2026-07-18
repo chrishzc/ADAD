@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260718T132010068356Z-pytest_regression_lifecycle
+  phase: 2
+  timestamp: '2026-07-18T13:20:10.068356+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: pytest_regression_lifecycle
+    task_id: pytest_regression_lifecycle@v17@a05d8d
+    system_map_version: 17
+    source_hash: a05d8dd79893a6ee0ea3851543bb8b652e3c3d166a436b034964370cd28747d0
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

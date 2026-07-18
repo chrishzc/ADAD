@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260716T051119892565Z-package_version
+  phase: 2
+  timestamp: '2026-07-16T05:11:19.892565+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: package_version
+    task_id: package_version@v17@586855
+    system_map_version: 17
+    source_hash: 58685526a9b34d53c29fdb5a197b416f765d34e42f2076449a5789c12ac31056
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

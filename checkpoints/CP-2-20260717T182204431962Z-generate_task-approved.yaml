@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260717T182204431962Z-generate_task
+  phase: 2
+  timestamp: '2026-07-17T18:22:04.431962+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: generate_task
+    task_id: generate_task@v17@8b1c72
+    system_map_version: 17
+    source_hash: 8b1c7228620463769deeefec6b549974ad67e584050198523ce9beb65bd017d4
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

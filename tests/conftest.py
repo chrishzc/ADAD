@@ -1,24 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-tests/conftest.py — 全套測試共用的 fixtures 與輔助函式。
-
-設計原則（跟本專案「機械強制優於自律」一致）：
-  - 每支腳本都是獨立的 CLI 工具（見 scripts/*.py），所以測試策略採黑箱方式：
-    用 subprocess 實際呼叫腳本、餵真實參數/stdin，檢查 stdout/exit code，
-    而不是 import 內部函式白箱測試。理由：這些腳本被設計成「不依賴任何
-    特定平台呼叫方式」的獨立 CLI（見 規格總覽.md 1-3），黑箱測試才真正驗證
-    使用者/agent 實際呼叫時會發生什麼事，而不是驗證 Python import 路徑通不通。
-  - `adad_core.py` 本身已有內建的 run_self_test()（見 test_adad_core_selftest.py），
-    覆蓋核心邏輯的細節分支；這裡的黑箱測試著重在每支 CLI 腳本的「輸入/輸出契約」
-    與「錯誤路徑」，兩者互補，不重複造輪子。
-  - 每個測試都在 tmp_path 底下的乾淨假專案跑，不會動到真正的
-    system_map.md / system_map.yaml，也不需要 git 使用者身分等外部狀態
-    （adad_pre_commit 測試除外，那支本質上就是 git hook，需要一個真的 tmp git repo）。
+tests/conftest.py
+共用 fixtures、輔助工具，以及 pytest lifecycle hooks。
+測試目標在於保證 temporary 測試的隔離與清理行為，且不影響既有 CI 行為。
 """
+import ast
 import json
 import os
+import stat
+import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -28,7 +21,7 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
-# tests/ 在 repo 根目錄底下，腳本則在 adad_cli/resources/.../scripts/ 底下。
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = (
     REPO_ROOT
@@ -54,7 +47,7 @@ CI_EVENT_ENV_VARS = {
 
 
 def workflow_test_harness(inherited_environment, explicit_env_overrides=None):
-    """建立隔離外層 CI event context、但允許測試明確 opt-in 的子程序環境。"""
+    """建立子行程的測試環境，避免 CI env 污染。"""
     child_environment = dict(inherited_environment)
     for name in CI_EVENT_ENV_VARS:
         child_environment.pop(name, None)
@@ -64,25 +57,25 @@ def workflow_test_harness(inherited_environment, explicit_env_overrides=None):
 
 
 def script_path(name):
-    """回傳 scripts/ 目錄下某支腳本的絕對路徑，找不到就直接讓測試失敗並給出清楚訊息。"""
+    """回傳指定 script 的絕對路徑。"""
     p = SCRIPTS_DIR / name
-    assert p.exists(), f"找不到腳本 {p}（SCRIPTS_DIR 設定是否正確？）"
+    assert p.exists(), f"script 不存在：{p}"
     return str(p)
 
 
 def run_script(name, args=None, cwd=None, input_text=None, env=None):
     """
-    呼叫 <name> 這支 CLI 腳本。
-
-    回傳 (returncode, parsed_json_or_None, stdout, stderr)：
-      - parsed_json 在 stdout 不是合法 JSON 時為 None（例如 resume_analysis.py
-        輸出的是 Markdown 報告，不是 JSON，呼叫端這種情況應該只看 stdout 原文）。
-      - input_text 用於需要餵 stdin 的腳本（例如 adad_pretooluse_gate.py）；
-        不帶 input_text 時 stdin 預設是空字串，等同非互動情境
-        （這正好用來驗證 adad_task.py approve/reject 的「非 tty 一律拒絕」邏輯）。
+    執行 adad-workflow 腳本並回傳 (returncode, parsed_json_or_None, stdout, stderr)。
     """
     cmd = [sys.executable, script_path(name)] + (args or [])
     env_vars = workflow_test_harness(os.environ, env)
+    # Prepend REPO_ROOT to PYTHONPATH so that local packages (adad_cli) are importable
+    python_path = env_vars.get("PYTHONPATH", "")
+    repo_root_str = str(REPO_ROOT)
+    if python_path:
+        env_vars["PYTHONPATH"] = f"{repo_root_str}{os.pathsep}{python_path}"
+    else:
+        env_vars["PYTHONPATH"] = repo_root_str
     proc = subprocess.run(
         cmd,
         cwd=cwd,
@@ -103,35 +96,375 @@ def run_script(name, args=None, cwd=None, input_text=None, env=None):
 @pytest.fixture
 def project_dir(tmp_path, monkeypatch):
     """
-    一個乾淨的假 ADAD 專案目錄：把 cwd 切過去，讓腳本讀寫的
-    system_map.yaml / .agents/tasks/ 等相對路徑都落在這裡，
-    不會動到真正的 repo 或互相污染其他測試。
+    建立 isolated 工作目錄並切換 cwd，避免影響主專案。
     """
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
 
 def write_yaml(project_dir, data):
-    """把一份 dict 寫成 project_dir/system_map.yaml。"""
-    assert yaml is not None, "此測試需要 PyYAML，請先 pip install pyyaml"
+    """將 dict 寫成 YAML。"""
+    assert yaml is not None, "缺少 PyYAML，請先安裝：pip install pyyaml"
     with open(project_dir / "system_map.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
 
 
 def read_yaml(project_dir):
-    assert yaml is not None, "此測試需要 PyYAML，請先 pip install pyyaml"
+    """讀取 YAML。"""
+    assert yaml is not None, "缺少 PyYAML，請先安裝：pip install pyyaml"
     with open(project_dir / "system_map.yaml", "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
+_LIFECYCLE_TRACKER_KEY = "_adad_temporary_cleanup_state"
+_TEMPORARY_RUN_ID_RE = re.compile(r"[0-9a-f]{32}")
+
+
+def _temporary_lifecycle_state(config):
+    state = getattr(config, _LIFECYCLE_TRACKER_KEY, None)
+    if state is None:
+        state = {
+            "temporary_files": set(),
+            "preserve": False,
+            "run_root": None,
+            "run_root_identity": None,
+            "fixture_status": "uninitialized",
+            "run_root_created": False,
+            "run_root_verified": False,
+        }
+        setattr(config, _LIFECYCLE_TRACKER_KEY, state)
+    return state
+
+
+def _is_temporary_marker(item):
+    return item.get_closest_marker("temporary") is not None
+
+
+def _is_regression_backlog_marker(item):
+    return item.get_closest_marker("regression_backlog") is not None
+
+
+def _item_path(item):
+    raw_path = getattr(item, "path", None) or getattr(item, "fspath", None)
+    assert raw_path is not None, "pytest item path unavailable"
+    return Path(str(raw_path))
+
+
+def _is_temporary_path_allowed(repo_root, candidate):
+    candidate = Path(candidate)
+    if ".." in candidate.as_posix().split("/"):
+        return False
+    if candidate.suffix.lower() != ".py":
+        return False
+    if not candidate.is_absolute():
+        return False
+    try:
+        relative = candidate.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return False
+    return (
+        len(relative.parts) >= 3
+        and relative.parts[0] == "tests"
+        and relative.parts[1] == "_temporary"
+    )
+
+
+def _path_safe_for_temporary(candidate):
+    for part in [candidate, *candidate.parents]:
+        if part.is_symlink():
+            return False
+        is_junction = getattr(part, "is_junction", lambda: False)
+        if bool(is_junction()):
+            return False
+    return True
+
+
+def _temporary_test_purpose(path):
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Name)
+                    and target.id == "TEMPORARY_TEST_PURPOSE"
+                ):
+                    return node.value.value
+        if (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "TEMPORARY_TEST_PURPOSE"
+        ):
+            return node.value.value
+    return ""
+
+
+def _is_own_temporary_root(candidate):
+    return (
+        candidate is not None
+        and candidate.parent == REPO_ROOT / ".pytest-temporary"
+        and bool(_TEMPORARY_RUN_ID_RE.fullmatch(candidate.name))
+    )
+
+
+def _temporary_root_identity(path):
+    info = path.lstat()
+    return (
+        info.st_mode,
+        info.st_ino,
+        info.st_dev,
+        getattr(info, "st_uid", None),
+        getattr(info, "st_gid", None),
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def temporary_artifact_root(request):
+    state = _temporary_lifecycle_state(request.config)
+    run_id = os.environ.get("PYTEST_TEMPORARY_RUN_ID") or uuid.uuid4().hex
+
+    def _reject(status, message):
+        state["preserve"] = True
+        state["run_root"] = None
+        state["run_root_identity"] = None
+        state["run_root_created"] = False
+        state["run_root_verified"] = False
+        state["fixture_status"] = status
+        raise pytest.UsageError(message)
+
+    run_root = REPO_ROOT / ".pytest-temporary" / run_id
+    state["run_root"] = None
+    state["run_root_identity"] = None
+    state["run_root_created"] = False
+    state["run_root_verified"] = False
+    temporary_parent = run_root.parent
+    state["fixture_status"] = "initializing"
+    if not _TEMPORARY_RUN_ID_RE.fullmatch(run_id):
+        _reject("invalid_run_id", f"invalid run-id for temporary fixture: {run_id}")
+
+    try:
+        if not _path_safe_for_temporary(temporary_parent):
+            _reject("run_root_parent_unsafe", "temporary parent path is unsafe")
+        if temporary_parent.resolve() != (REPO_ROOT / ".pytest-temporary").resolve():
+            _reject(
+                "run_root_parent_outside_boundary",
+                "temporary parent outside boundary",
+            )
+    except OSError:
+        _reject("run_root_parent_io", "temporary parent I/O uncertain")
+
+    try:
+        run_root.mkdir(parents=True, exist_ok=False)
+        state["run_root_created"] = True
+    except FileExistsError:
+        state["preserve"] = True
+        state["run_root"] = None
+        state["run_root_identity"] = None
+        state["run_root_created"] = False
+        state["run_root_verified"] = False
+        try:
+            if run_root.is_symlink():
+                _reject(
+                    "run_root_collision_is_symlink",
+                    "temporary run-root collision is symlink",
+                )
+            is_run_root_junction = getattr(run_root, "is_junction", lambda: False)
+            if bool(is_run_root_junction()):
+                _reject(
+                    "run_root_collision_is_junction",
+                    "temporary run-root collision is junction",
+                )
+            info = run_root.lstat()
+            if not stat.S_ISDIR(info.st_mode):
+                _reject(
+                    "run_root_collision_not_directory",
+                    "temporary run-root collision not directory",
+                )
+            if not _path_safe_for_temporary(run_root.parent):
+                _reject(
+                    "run_root_collision_parent_unsafe",
+                    "temporary run-root collision parent unsafe",
+                )
+            if run_root.parent.resolve() != (REPO_ROOT / ".pytest-temporary").resolve():
+                _reject(
+                    "run_root_collision_parent_boundary_changed",
+                    "temporary run-root collision parent boundary changed",
+                )
+            state["fixture_status"] = "collision"
+            return None
+        except OSError:
+            _reject(
+                "run_root_collision_io",
+                "temporary run-root collision I/O uncertain",
+            )
+    except OSError:
+        _reject("run_root_create_io", "temporary run-root create failed")
+
+    try:
+        if run_root.is_symlink():
+            _reject("run_root_is_symlink", "temporary run-root became symlink")
+        is_run_root_junction = getattr(run_root, "is_junction", lambda: False)
+        if bool(is_run_root_junction()):
+            _reject("run_root_is_junction", "temporary run-root became junction")
+        info = run_root.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            _reject(
+                "run_root_not_directory",
+                "temporary run-root became non-directory",
+            )
+        if not _path_safe_for_temporary(run_root.parent):
+            _reject("run_root_parent_unsafe", "temporary run-root parent unsafe")
+        if run_root.parent.resolve() != (REPO_ROOT / ".pytest-temporary").resolve():
+            _reject(
+                "run_root_parent_boundary_changed",
+                "temporary run-root parent boundary changed",
+            )
+        state["run_root_identity"] = _temporary_root_identity(run_root)
+        state["run_root"] = run_root
+        state["run_root_verified"] = True
+        state["fixture_status"] = "ready"
+    except OSError:
+        _reject("run_root_metadata_failure", "temporary run-root identity failed")
+    return run_root
+
+
+def pytest_configure(config):
+    _temporary_lifecycle_state(config)
+    config.addinivalue_line(
+        "markers",
+        "temporary: temporary test that belongs to a controlled artifact lifetime",
+    )
+
+
+def pytest_collection_modifyitems(session, config, items):
+    state = _temporary_lifecycle_state(config)
+    for item in items:
+        if not _is_temporary_marker(item):
+            continue
+
+        try:
+            path = _item_path(item)
+            if not _is_temporary_path_allowed(REPO_ROOT, path):
+                state["preserve"] = True
+                raise pytest.UsageError(
+                    f"temporary 測試只能位於 tests/_temporary/**/*.py：{path}"
+                )
+            if not _path_safe_for_temporary(path):
+                state["preserve"] = True
+                raise pytest.UsageError(f"temporary 測試路徑不安全：{path}")
+            if _is_regression_backlog_marker(item):
+                state["preserve"] = True
+                raise pytest.UsageError(
+                    f"temporary 測試不可同時標記 regression_backlog：{path}"
+                )
+            purpose = _temporary_test_purpose(path)
+            if not purpose.strip():
+                state["preserve"] = True
+                raise pytest.UsageError(f"TEMPORARY_TEST_PURPOSE 未提供：{path}")
+            state["temporary_files"].add(path)
+        except pytest.UsageError:
+            raise
+        except (OSError, RuntimeError, SyntaxError, UnicodeError) as exc:
+            state["preserve"] = True
+            raise pytest.UsageError(
+                f"temporary 測試 collection I/O 不確定：{getattr(item, 'path', '<unknown>')}"
+            ) from exc
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if _is_temporary_marker(item) and report.outcome in {"failed", "skipped"}:
+        _temporary_lifecycle_state(item.config)["preserve"] = True
+
+
+def pytest_sessionfinish(session, exitstatus):
+    state = _temporary_lifecycle_state(session.config)
+    if (
+        exitstatus != 0
+        or state.get("preserve")
+        or state.get("fixture_status") != "ready"
+        or not state.get("run_root_verified")
+    ):
+        return
+
+    run_root = state.get("run_root")
+    run_root_identity = state.get("run_root_identity")
+    if not run_root_identity:
+        state["preserve"] = True
+        return
+    if not _is_own_temporary_root(run_root):
+        state["preserve"] = True
+        return
+
+    try:
+        if run_root.is_symlink():
+            state["preserve"] = True
+            return
+        is_run_root_junction = getattr(run_root, "is_junction", lambda: False)
+        if bool(is_run_root_junction()):
+            state["preserve"] = True
+            return
+        if not _path_safe_for_temporary(run_root.parent):
+            state["preserve"] = True
+            return
+        if run_root.parent.resolve() != (REPO_ROOT / ".pytest-temporary").resolve():
+            state["preserve"] = True
+            return
+        if _temporary_root_identity(run_root) != run_root_identity:
+            state["preserve"] = True
+            return
+    except OSError:
+        state["preserve"] = True
+        return
+
+    preflight_paths = []
+    for path in sorted(state["temporary_files"]):
+        try:
+            if not _is_temporary_path_allowed(REPO_ROOT, path):
+                state["preserve"] = True
+                return
+            if not _path_safe_for_temporary(path):
+                state["preserve"] = True
+                return
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            state["preserve"] = True
+            return
+        except OSError:
+            state["preserve"] = True
+            return
+        if not stat.S_ISREG(mode):
+            state["preserve"] = True
+            return
+        preflight_paths.append(path)
+
+    for path in preflight_paths:
+        try:
+            path.unlink()
+        except OSError:
+            state["preserve"] = True
+            return
+
+    try:
+        run_root.rmdir()
+    except OSError:
+        state["preserve"] = True
+        return
+
+
 def make_module(**overrides):
-    """
-    產生一份符合 system_map.schema.json 必要欄位的最小 module dict，
-    可用 overrides 覆蓋任何欄位，避免每個測試都要重複寫滿全部必填欄位。
-    """
     base = {
         "type": "tool",
-        "description": "測試用範例模組",
+        "description": "測試專用 sample tool",
         "source": "sample_tool.py",
         "domain": None,
         "subsystem": None,
@@ -156,7 +489,6 @@ def make_module(**overrides):
 
 @pytest.fixture
 def base_modules():
-    """一份只有一個模組 `sample_tool` 的最小 system_map 資料，個別測試依需求覆蓋擴充。"""
     return {
         "version": 1,
         "environment": {"state": "not_required", "services": []},

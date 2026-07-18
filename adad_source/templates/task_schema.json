@@ -25,7 +25,8 @@
                 "retry_budget",
                 "required_context",
                 "forbidden_context",
-                "context_priority"
+                "context_priority",
+                "non_goals"
               ]
             }
           }
@@ -95,7 +96,8 @@
             "retry_budget": { "type": "integer" },
             "required_context": { "type": "array" },
             "forbidden_context": { "type": "array" },
-            "context_priority": { "type": "object" }
+            "context_priority": { "type": "object" },
+            "non_goals": { "type": "array", "items": { "type": "string" } }
           }
         },
         "dependency_interfaces": { "type": "object" }

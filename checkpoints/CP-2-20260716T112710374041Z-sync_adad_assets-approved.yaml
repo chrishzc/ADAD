@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260716T112710374041Z-sync_adad_assets
+  phase: 2
+  timestamp: '2026-07-16T11:27:10.374041+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: sync_adad_assets
+    task_id: sync_adad_assets@v17@71a7c1
+    system_map_version: 17
+    source_hash: 71a7c12999078d65e6a0cc697f72f2d412afe1b1dd0316554ff532f4286fc6cb
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

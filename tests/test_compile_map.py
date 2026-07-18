@@ -222,3 +222,20 @@ def test_compile_map_fails_when_exception_not_verified(project_dir):
     assert data["success"] is False
     assert "TypeError" in data["error"]
     assert "缺乏對應的 expect_exception" in data["error"]
+
+
+def test_normalize_markdown_source_code_fences():
+    import importlib.util
+    from pathlib import Path
+    source_path = Path(__file__).parents[1] / "adad_source" / "agents" / "skills" / "adad-workflow" / "scripts" / "source_normalization.py"
+    spec = importlib.util.spec_from_file_location("source_normalization_under_test", source_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    normalize = module.normalize_markdown_source
+
+    assert normalize("`file.py`") == "file.py"
+    assert normalize("``file.py``") == "file.py"
+    assert normalize("```\nfile.py\n```") == "file.py"
+    assert normalize("```python\nfile.py\n```") == "file.py"
+    assert normalize("```yaml\nfile.py::func\n```") == "file.py::func"
+    assert normalize("file.py") == "file.py"

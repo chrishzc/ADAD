@@ -33,25 +33,27 @@
 - Decisions: [測試與 build backend 依賴透過 .venv 的 dev extra 安裝；resources/**/* 必須以 exclude-package-data 排除任意層級 __pycache__ 與 *.pyc]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_sync_assets.py"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_package_assets.py", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0, "timeout": 120}
 - Dependencies: []
 - Input:
-  - allowed_files: [pyproject.toml]
+  - test_file: tests/test_package_assets.py
+  - allowed_files: [pyproject.toml, tests/test_package_assets.py]
 - Output:
   - test_result: report
 - TODO:
   - [x] 規格總覽 #5：pytest 測試套件已建立
-  - [ ] #76-A：設定 packaging 開發依賴及 wheel/sdist package-data 快取排除
+  - [ ] #76-B2：以獨立 packaging regression 驗證 wheel/sdist 不含 Python 編譯快取
 - Checkpoint:
   - [x] CP-1-020 (validated)
   - [x] CP-2-020 (deployed)
   - [x] CP-1-076-SPLIT-PACKAGING (validated：2026-07-16 人工核准拆分)
+  - [x] CP-1-076-B2-PACKAGE-TEST (validated：2026-07-16 人工核准)
 
 ##### Module: workflow_test_harness
 - Type: test_harness
 - Observability: not_required
 - Description: #64 隔離測試子程序與外層 GitHub Actions event context，避免臨時 Git repo 誤走 CI diff 路徑。
-- Source: tests/conftest.py
+- Source: tests/conftest.py::workflow_test_harness,script_path,run_script,project_dir,write_yaml,read_yaml,make_module,base_modules
 - Preferred Pattern: hermetic_test_harness
 - Complexity: medium
 - Algorithm:
@@ -227,7 +229,7 @@
 - Type: schema
 - Observability: not_required
 - Description: 聚合 #19～#23 的原子契約驗證結果，產生完整的 per-task contract 快照。
-- Source: adad_cli/workflow/task_contract_schema.py::validate_task_contract
+- Source: adad_cli/workflow/task_contract_schema.py::validate_task_contract,_validate_json_schema_subset
 - Preferred Pattern: thin_orchestrator
 - Complexity: low
 - Decisions: [Preconditions/Postconditions 擴充 Verification case，不建立重複欄位]
@@ -497,7 +499,7 @@
   - complexity=high 時，只有 model_capability=high、override_approved=true 且 override_reason 去除空白後非空，才回傳 `issue_override`。
   - 其餘 high 情況一律回傳 `split`；不得讀寫檔案、環境變數、全域狀態或呼叫外部服務。
 - Decisions:
-  - 此 Task 不修改 generate_task、adad_core、system_map、文件、測試或其他節點。
+  - 此 Task 不修改 generate_task、adad_core、system_map、文件或其他節點；僅允許新增與維護 `tests/test_task_complexity.py` 作為此純函式的直接回歸測試。
   - `high` 的人工例外必須同時具備高能力模型、核准旗標與不可再拆原因，缺一不可。
 - Invariants:
   - deny_imports: [yaml, subprocess, os]
@@ -513,7 +515,8 @@
   - target_file: adad_source/agents/skills/adad-workflow/scripts/task_complexity.py
   - legacy_file: adad_cli/task_complexity.py
   - allowed_symbols: [evaluate_task_complexity]
-  - forbidden_files: [adad_cli/core.py, adad_cli/sync_assets.py, system_map.md, tests, README.md]
+  - forbidden_files: [adad_cli/core.py, adad_cli/sync_assets.py, system_map.md, README.md]
+  - test_file: tests/test_task_complexity.py
   - complexity: string
   - has_algorithm: boolean
   - has_boundaries: boolean
@@ -524,9 +527,10 @@
 - Output:
   - decision: string
 - TODO:
-  - [ ] 規格總覽 #49 第一階段：實作純函式複雜度決策矩陣
+  - [x] 規格總覽 #49 第一階段：純函式複雜度決策矩陣與直接 pytest
 - Checkpoint:
   - [x] CP-1-037 (validated)
+  - [x] CP-3-049-DIRECT-PYTEST (validated：2026-07-18 人工確認；僅授權直接 pytest)
 
 ##### Module: context_policy
 - Type: policy
@@ -557,17 +561,17 @@
 - Source: adad_cli/__init__.py
 - Preferred Pattern: single_source_of_truth
 - Complexity: low
-- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次修復發布為 1.6.1]
+- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.2]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.1'"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.2'"], "cwd": "project", "expect_exit": 0}
 - Dependencies: []
 - Input:
   - release_version: string
 - Output:
   - package_version: string
 - TODO:
-  - [ ] #75：將函式級 Source gate 與 Windows pytest 暫存修復發布為 1.6.1
+  - [ ] 發布 1.6.2：整合 Task／source-lock 強化、資產同步與 pytest 回歸覆蓋
 - Checkpoint:
   - [x] CP-1-075-PATCH-RELEASE (validated：2026-07-16 人工要求更新 1.6.1 並安裝本機版本)
 
@@ -743,26 +747,37 @@
 ##### Module: upgrade_project_virtual_environment
 - Type: lifecycle
 - Observability: not_required
-- Description: `adad upgrade` 同步 workflow、正式 schema 與 hook；不覆蓋使用者架構內容。
+- Description: `adad upgrade` 同步 workflow、正式 schema 與 hook；不覆蓋使用者架構內容，且不得將 Python 編譯快取複製到專案。
 - Source: adad_cli/core.py::upgrade_project,_iter_relative_files,_sync_file
 - Preferred Pattern: thin_orchestrator
-- Complexity: low
-- Decisions: [upgrade 不得以隱含方式建立虛擬環境, system_map.schema.json 與 task_schema.json 為套件管理契約，更新前須備份]
+- Complexity: medium
+- Decisions: [upgrade 不得以隱含方式建立虛擬環境, system_map.schema.json 與 task_schema.json 為套件管理契約，更新前須備份, _iter_relative_files 必須排除任一層 __pycache__ 與 *.pyc]
 - Invariants:
   - deny_imports: [virtualenv]
-- Verification: []
-- Dependencies: [write_project_pre_commit_hook]
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_upgrade_project.py", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
+- Dependencies: [write_project_pre_commit_hook, automated_test_suite]
 - Input:
   - project_root: path
   - agents: array
+  - test_file: tests/test_upgrade_project.py
+  - allowed_symbols: [upgrade_project, _iter_relative_files, _sync_file]
+  - allowed_files: [adad_cli/core.py, tests/test_upgrade_project.py]
 - Output:
   - environment_status: object
   - schema_sync_status: object
+  - report: object（added、updated、unchanged 均不得包含 __pycache__ 或 *.pyc）
+- Algorithm:
+  - 遞迴列舉套件 workflow 資產時，排除相對路徑任一層為 __pycache__ 的檔案及副檔名為 .pyc 的檔案。
+  - Antigravity 與 Claude 的 upgrade 複製路徑共用相同過濾結果。
+  - 回歸測試必須在來源資產樹植入快取，執行 upgrade_project 後檢查實際輸出與 report 均無快取。
 - TODO:
   - [ ] 規格總覽 #48-3：升級時重寫既有 `.venv` hook
+  - [ ] #76-B3：upgrade 實際輸出與 report 排除 Python 編譯快取
 - Checkpoint:
   - [x] CP-1-033-C (validated)
   - [x] CP-3-048-B (validated)
+  - [x] CP-1-076-B3-UPGRADE-CACHE (validated：2026-07-16 人工核准)
 
 ##### Module: remove_project_virtual_environment
 - Type: function
@@ -866,20 +881,20 @@
 - Type: integration
 - Observability: not_required
 - Description: 提供 task_block 到 blocked 報告的結構化 MCP 與文字備援流程（規格能力 1-4）。
-- Source: adad_cli/integrations/blocked_reporting.py
+- Source: adad_source/blocked_report/report_blocked_mcp.py::main
 - Preferred Pattern: structured_failure
 - Decisions: [不支援自訂工具的平台使用 schema 加文字擷取作為降級方案]
 - Invariants: []
 - Verification: []
-- Dependencies: [adad_task]
+- Dependencies: [adad_core]
 - Input:
-  - blocked_reason: object
+  - json_rpc_request: object
 - Output:
-  - blocked_task: object
+  - json_rpc_response: object
 - TODO:
-  - [ ] 規格能力 1-4：結構化 blocked 回報
+  - [x] #51：結構化 blocked 回報的直接 pytest
 - Checkpoint:
-  - [ ] CP-1-034 (planned)
+  - [x] CP-1-034 (validated：2026-07-18 人工確認既有 MCP source binding)
 
 ##### Module: platform_instruction_renderer
 - Type: generator
@@ -897,6 +912,7 @@
   - rendered_instructions: array
 - TODO:
   - [ ] 規格第 2 節：平台 instruction SSOT 與 renderer
+  - [ ] 重整 ADAD 指示檔分層：將 `.agents/AGENTS.md` 縮為硬性規則與 skill 入口；完整 ADAD 架構、Checkpoint 與地圖操作流程僅保留於 `adad-workflow/SKILL.md`，降低每輪固定上下文成本。
 - Checkpoint:
   - [ ] CP-1-035 (planned)
 
@@ -923,7 +939,7 @@
 - Type: function
 - Observability: not_required
 - Description: 以明確 UTF-8 文字邊界執行單次子程序，統一回傳 returncode、stdout 與 stderr，避免 Windows CP950、macOS/Linux UTF-8 locale 與 shell quoting 造成不一致。
-- Source: adad_cli/platform_io.py::run_utf8_subprocess
+- Source: adad_cli/platform_io.py::run_utf8_subprocess,_safe_decode
 - Preferred Pattern: boundary_adapter
 - Complexity: low
 - Decisions:

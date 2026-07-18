@@ -1,9 +1,59 @@
 ## 5. 代辦事項總表（合併版，執行清單）
 
-以下代辦目前編號至 #72，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
+以下代辦目前最高已使用編號為 #83，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
 待辦事項。**這節才是「現在要動手做哪一項」的答案**，第 1~4 節是「做完之後系統該
 長什麼樣子」的規格。
 
+## 任務狀態與固定 Pytest 對照（含測試存在性）
+
+| 任務 | 狀態 | Pytest | 測試存在性 | 狀態證據 |
+| --- | --- | --- | --- | --- |
+| #1 | done | tests/test_generate_task.py::test_generate_task_creates_snapshot | 存在 | |
+| #2 | done | tests/test_task_contract_schema.py::test_validate_structured_json | 存在 | |
+| #3 | done | tests/test_compile_map.py::test_compile_map_produces_valid_yaml | 存在 | |
+| #4 | done | tests/test_adad_task.py::test_submit_succeeds_when_checks_pass | 存在 | |
+| #5 | done | tests/test_adad_pre_commit.py::test_allows_editing_planned_module | 存在 | |
+| #6 | done | tests/test_adad_pretooluse_gate.py::test_gate_allows_editing_when_task_assigned | 存在 | |
+| #7 | done | tests/test_adad_task.py::test_submit_succeeds_when_checks_pass | 存在 | |
+| #9 | done | tests/test_read_context.py::test_read_context_returns_target_node_fields | 存在 | |
+| #10 | done | tests/test_generate_task.py::test_task_schema_accepts_complete_v3_snapshot | 存在 | |
+| #11 | done | tests/test_check_invariants.py::test_check_invariants_flags_denied_import | 存在 | |
+| #12 | done | tests/test_verify_implementation.py::test_verify_implementation_case_pass_and_fail | 存在 | |
+| #13 | done | tests/test_check_domain_boundary.py::test_check_domain_boundary_allows_declared_cross_domain_dependency | 存在 | |
+| #14 | done | tests/test_transit_state.py::test_transit_state_allows_valid_transition | 存在 | |
+| #15 | done | tests/test_task_contract_schema.py::test_validate_structured_json | 存在 | |
+| #16 | done | tests/test_generate_task.py::test_generate_task_blocks_required_observability_without_signals | 存在 | |
+| #17 | done | tests/test_adad_task.py::test_approval_lock_mismatch_rolls_back_task_map_and_checkpoint | 存在 | |
+| #18 | done | tests/test_adad_task.py::test_source_lock_blocks_parallel_tasks_and_releases_after_approval | 存在 | |
+| #19 | done | tests/test_task_contract_schema.py::test_semantic_contract_integration_generate | 存在 | |
+| #20 | done | tests/test_task_contract_schema.py::test_non_goals_integration_generate | 存在 | |
+| #21 | done | tests/test_task_contract_schema.py::test_verification_integration_execute | 存在 | |
+| #22 | done | tests/test_task_contract_schema.py::test_validate_task_input_schema_ok | 存在 | |
+| #23 | done | tests/test_task_contract_schema.py::test_validate_task_output_schema_ok | 存在 | |
+| #24 | done | tests/test_check_invariants.py::test_check_invariants_passes_clean_file | 存在 | |
+| #26 | done | tests/test_task_contract_schema.py::test_validate_structured_json | 存在 | |
+| #31 | done | tests/test_task_contract_schema.py::test_validate_structured_json | 存在 | |
+| #32 | done | tests/test_verify_implementation.py::test_verify_implementation_case_pass_and_fail | 存在 | |
+| #35 | done | tests/test_generate_task.py::test_task_schema_accepts_complete_v3_snapshot | 存在 | |
+| #36 | done | tests/test_verify_implementation.py::test_verify_implementation_command_can_opt_into_project_cwd | 存在 | |
+| #40 | done | tests/test_generate_task.py::test_generate_task_enforces_complexity_budget | 存在 | |
+| #41 | done | tests/test_compile_map.py::test_compile_map_rejects_high_complexity_without_algorithm | 存在 | high complexity 缺 Algorithm 的直接回歸測試。 |
+| #42 | done | tests/test_adad_task.py::test_approve_rejected_without_human_tty | 存在 | |
+| #43 | done | tests/test_generate_task.py::test_task_schema_accepts_complete_v3_snapshot | 存在 | |
+| #44 | done | tests/test_generate_task.py::test_task_schema_v3_rejects_missing_fidelity_field | 存在 | 驗證 `forbidden_context` 為 v3 快照必要欄位。 |
+| #46 | done | tests/test_generate_task.py::test_task_schema_accepts_complete_v3_snapshot | 存在 | |
+| #48 | done | tests/test_upgrade_project.py::test_upgrade_replaces_root_schemas_and_keeps_backups | 存在 | |
+| #49 | done | tests/test_task_complexity.py | 存在 | 直接覆蓋核發決策矩陣與非法值 fail-fast；CP-2 已核准。 |
+| #50 | done | tests/test_sync_assets.py::test_sync_twice_is_idempotent | 存在 | |
+| #51 | done | tests/test_blocked_task_reporting.py | 存在 | 直接覆蓋 MCP 協定／schema 與 unknown task 的結構化錯誤；CP-2 已核准。 |
+| #52 | done | tests/test_prepare_isolation.py::test_prepare_isolation | 存在 | |
+| #53 | done | tests/test_adad_task.py::test_submit_succeeds_when_checks_pass | 存在 | 已完成 v2/v3 相容及 Task Gate 驗證。 |
+| #54 | done | tests/test_generate_task.py::test_task_schema_accepts_complete_v3_snapshot | 存在 | 已完成 v3 schema、`generate_task` 升級及 Readiness 驗證。 |
+| #57 | done | tests/test_compile_map.py::test_normalize_markdown_source_code_fences | 存在 | 已完成 Source 正規化接入 `parse_markdown`。 |
+| #58 | done | tests/test_verify_implementation.py::test_verify_implementation_command_timeout_decodes_bytes | 存在 | 已完成例外路徑與鎖清理、CP-2 審查。 |
+| #81 | done | tests/test_pytest_regression_lifecycle.py::test_temporary_lifecycle_state_has_exact_fixed_fields | 存在 | 已完成 lifecycle 實作、TODO 清理及狀態推進。 |
+| #82 | planned | — | 尚未建立 | pytest runner 應在 OS temp 建立受控 `--basetemp`；成功後安全清除，失敗時保留並回報診斷路徑，且禁止將暫存根放在 repo 或其父目錄。 |
+| #83 | planned | — | 尚未建立 | `.agents/AGENTS.md` 僅保留專案硬性規則與 ADAD skill 入口；完整架構、Checkpoint 與地圖操作流程由 `adad-workflow/SKILL.md` 唯一承載。 |
 ### A. 工程衛生（文件與實作落差 / Dogfooding / 測試 CI）
 
 |#|代辦事項|歸屬|優先度|
@@ -20,6 +70,8 @@
 |63|Release SOP 缺少 linked-worktree `GIT_*` 洩漏、release index 污染檢查、GitHub push 空 `GITHUB_BASE_REF` 與發布後 Actions 驗證；補成可重複執行的故障預防清單。|文件 / Dogfooding|**P0**|
 |64|測試 harness 繼承外層 GitHub Actions 的 `CI`／`GITHUB_*` event context，使臨時 repo 誤走 `HEAD~1` 或遠端 base；預設隔離並保留明確 opt-in。|測試 / Dogfooding|**P0**|
 |65|Release SOP 必須記錄巢狀測試與外層 CI context 的邊界、重現方式及驗收條件，避免同類 CI 修補反覆浪費發布時間。|文件 / Dogfooding|**P0**|
+|82|pytest 外層暫存根生命週期：由統一 runner 建立受控 `--basetemp`；成功後僅清除本次 owned root，失敗時保留並輸出路徑；拒絕 repo／repo parent、symlink、junction、identity mismatch 與未通過 preflight 的清理。|測試 / Dogfooding|**P1**|
+|83|**ADAD 指示檔分層與去重**：`.agents/AGENTS.md` 縮為每輪必讀的專案硬性規則與 `adad-workflow` skill 入口；完整 ADAD 架構、Checkpoint 與地圖操作流程僅保留於 `.agents/skills/adad-workflow/SKILL.md`。同步調整產物，避免重複規範佔用固定上下文。|ADAD 文件 / 資產同步|**P1**|
 |66|Task 匯出的 pattern／decision summary 在參考文件不存在時夾帶載入錯誤文字，污染子代理上下文；應改為乾淨的缺省摘要或結構化 warning。|Task 核發品質|**P1**|
 |67|Verification 對「鍵不存在」與 `null` 缺少明確語意及核發前一致性檢查，造成規格與 Algorithm 衝突；應提供 deletion assertion 或 Readiness gate。|Task 核發品質|**P1**|
 |68|Reviewer 判定 Task 編碼異常前應做 strict UTF-8 byte decode、replacement character 與 JSON read-back；不得只憑終端顯示退回，避免誤算退回次數。|Reviewer 品質|**P1**|
@@ -88,7 +140,7 @@
 |#|代辦事項|歸屬|優先度|
 |---|---|---|---|
 |36|~~Boundary/Invalid Input/Exception Cases——不新增欄位，改由 Task Readiness 要求 case 類型~~ **✅ 已完成（併入 #40）**|Task Readiness|已完成|
-|37|**🟡 第一階段完成**：已實作並核准 `resolve_verification_fixture_inputs`，支援專案內 UTF-8 JSON fixture 注入、跨平台絕對／drive／UNC／逃逸路徑阻擋、key 衝突與原物件不變性。尚待：① `system_map.schema.json` 接受 `case.fixtures`；② `verify_implementation` 呼叫 resolver，完成真正的 Kernel 執行注入。|ADAD 宣告 + Kernel 執行注入|中——進行中，不可標記全項完成|
+|37|**partial（第一階段完成）**：已實作並核准 `resolve_verification_fixture_inputs`，支援專案內 UTF-8 JSON fixture 注入、跨平台絕對／drive／UNC／逃逸路徑阻擋、key 衝突與原物件不變性。證據：尚待 `system_map.schema.json` 接受 `case.fixtures`，以及 `verify_implementation` 呼叫 resolver，完成真正的 Kernel 執行注入。|ADAD 宣告 + Kernel 執行注入|中——進行中，不可標記全項完成|
 |38|Coverage Gate（`verify_implementation.py` 升級成真的跑 coverage 工具）|Kernel|**P2，先不做**——複雜度躍升一個量級|
 |39|Property-based / Golden Test|Kernel，可選|低優先|
 |55|**Command／Integration Verification 強化測試**：補齊 unknown placeholder、POSIX absolute／Windows drive／UNC、fixture source/target 穿越、timeout、UTF-8 decode failure、stdout/stderr contains、目錄 fixture 複製與清理，以及 integration fail-fast。|Kernel pytest|中——核心流程已可用，這些是邊界與失敗路徑補強|

@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260718T132010471403Z-source_lock_pruner
+  phase: 2
+  timestamp: '2026-07-18T13:20:10.471403+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: source_lock_pruner
+    task_id: source_lock_pruner@v17@e59a55
+    system_map_version: 17
+    source_hash: e59a5506b0745d348e417a1ec584e13dfdc454b404bfe41b8f8a3b528631145f
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260718T141140923985Z-task_verification_conditions
+  phase: 2
+  timestamp: '2026-07-18T14:11:40.923985+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: task_verification_conditions
+    task_id: task_verification_conditions@v17@66f325
+    system_map_version: 17
+    source_hash: 66f325cc43c4b46286dad72885a3563cd6008b98aa3cd9c69bb1d68cd1bec274
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

@@ -1,0 +1,17 @@
+checkpoint_payload:
+  id: CP-2-20260716T103639026641Z-sync_adad_assets
+  phase: 2
+  timestamp: '2026-07-16T10:36:39.026641+00:00'
+  triggered_by: human
+  status: rejected
+  target:
+    node_name: sync_adad_assets
+    task_id: sync_adad_assets@v17@17b938
+    system_map_version: 17
+    source_hash: 17b938201056bb2a09902032ecf921948b7fdd1c84fbea59d8be918aa27bd6dc
+  decision:
+    action: rejected
+    reviewer: independent-reviewer
+    comment: 'Reviewer退回：實際 upgrade 仍複製 Python 快取，缺少 upgrade 輸出回歸測試，且 verification
+      預設 temp/runner 不穩定。fingerprints: task76b.upgrade-iter-relative-files-copies-python-cache;
+      task76b.missing-upgrade-output-regression; task76b.verification-default-temp-and-runner-timeout'

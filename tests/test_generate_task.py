@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 import json
 import importlib.util
+import sys
 from pathlib import Path
 
-from conftest import run_script, write_yaml
+from conftest import REPO_ROOT, run_script, write_yaml
 
 
 TASK_SCHEMA_PATH = (
@@ -21,6 +22,23 @@ VALIDATE_SCHEMA_PATH = (
     / "scripts"
     / "validate_schema.py"
 )
+CANONICAL_CORE_PATH = (
+    Path(__file__).parents[1]
+    / "adad_source"
+    / "agents"
+    / "skills"
+    / "adad-workflow"
+    / "scripts"
+    / "adad_core.py"
+)
+
+sys.path.insert(0, str(CANONICAL_CORE_PATH.parent))
+_core_spec = importlib.util.spec_from_file_location(
+    "canonical_adad_core_generate_task", CANONICAL_CORE_PATH
+)
+_core_module = importlib.util.module_from_spec(_core_spec)
+_core_spec.loader.exec_module(_core_module)
+CanonicalADADCore = _core_module.ADADCore
 
 
 def _load_minimal_validator():
@@ -58,6 +76,7 @@ def _task_snapshot(schema_version):
                 "required_context": [],
                 "forbidden_context": [],
                 "context_priority": {},
+                "non_goals": [],
             }
         )
     return {
@@ -112,6 +131,7 @@ def test_task_schema_v3_rejects_missing_fidelity_field():
         "required_context",
         "forbidden_context",
         "context_priority",
+        "non_goals",
     )
     validator = _task_schema_validator()
     for field in required_v3_fields:
@@ -132,11 +152,27 @@ def test_generate_task_creates_snapshot(project_dir, base_modules):
     task_path = project_dir / ".agents" / "tasks" / "sample_tool.task.json"
     assert task_path.exists()
     task_data = json.loads(task_path.read_text(encoding="utf-8"))
-    assert task_data["schema_version"] == 2
+    assert task_data["schema_version"] == 3
     assert task_data["rollback"]["strategy"] == "preserve_diff"
     assert task_data["node_name"] == "sample_tool"
     assert task_data["status"] == "assigned"
     assert task_data["spec"]["target_node"]["name"] == "sample_tool"
+
+
+def test_generate_task_uses_instance_project_root(tmp_path, base_modules, monkeypatch):
+    """Task artifacts belong to the ADADCore map instance, not the caller cwd."""
+    base_modules["modules"]["sample_tool"]["state"] = "planned"
+    write_yaml(tmp_path, base_modules)
+    monkeypatch.chdir(REPO_ROOT)
+
+    result = CanonicalADADCore(
+        tmp_path / "system_map.yaml", check_validity=False
+    ).generate_task("sample_tool")
+
+    expected_path = (tmp_path / ".agents" / "tasks" / "sample_tool.task.json").resolve()
+    assert result["success"] is True
+    assert Path(result["path"]).resolve() == expected_path
+    assert expected_path.is_file()
 
 
 def test_generate_task_blocks_when_state_not_editable(project_dir, base_modules):

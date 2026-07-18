@@ -17,8 +17,12 @@ import datetime
 import copy
 import subprocess
 import tempfile
+import signal
 from collections import Counter
 from task_complexity import evaluate_task_complexity
+from source_lock_repository import SourceLockRepository
+from source_lock_audit_service import SourceLockAuditService
+from source_normalization import normalize_markdown_source
 
 # 自動安裝 PyYAML 依賴以確保跨裝置開箱即用
 try:
@@ -38,7 +42,7 @@ MAP_FILE = "system_map.yaml"
 TASK_DIR = os.path.join(".agents", "tasks")
 SOURCE_LOCK_DIR = os.path.join(TASK_DIR, ".source_locks")
 CHECKPOINT_DIR = "checkpoints"
-TASK_SCHEMA_VERSION = 2
+TASK_SCHEMA_VERSION = 3
 TASK_STATUSES = {"assigned", "in_progress", "submitted", "approved", "rejected", "blocked"}
 
 # ponytail: 原本 RULE-02 允許修改的狀態集合，在 adad_core.py / adad_pre_commit.py /
@@ -308,7 +312,8 @@ def parse_markdown(md_content):
                 "retry_budget": 0,
                 "required_context": [],
                 "forbidden_context": [],
-                "context_priority": {}
+                "context_priority": {},
+                "non_goals": []
             }
             current_section = None
             continue
@@ -348,11 +353,11 @@ def parse_markdown(md_content):
                 if fd_match and fd_match.group(1).strip().lower() == "description":
                     data["domains"][current_domain]["subsystems"][current_subsystem]["description"] = fd_match.group(2).strip()
             continue
-            
+
         indent_match = re.match(r'^(\s+)-\s*(.*)', line)
         if indent_match and current_section:
             sub_content = indent_match.group(2).strip()
-            
+
             if current_section == "input" or current_section == "output" or current_section == "context_priority":
                 kv_match = re.match(r'^([\w_]+):\s*(.*)', sub_content)
                 if kv_match:
@@ -361,7 +366,7 @@ def parse_markdown(md_content):
                         try: v = int(v)
                         except: pass
                     data["modules"][current_module][current_section][k] = v
-            elif current_section in ["invariants", "exceptions", "verification", "todo", "checkpoint", "algorithm", "observability", "required_context", "forbidden_context"]:
+            elif current_section in ["invariants", "exceptions", "verification", "todo", "checkpoint", "algorithm", "observability", "required_context", "forbidden_context", "non_goals"]:
                 # ponytail: Verification 底下的 `case: {...}` 是可執行測試案例（JSON 語法），
                 # 跟 `must_have_assertions` 這種純字串標籤混用在同一個清單裡。
                 # 這裡在編譯期就把它解析成結構化 dict、而不是留到執行期才發現格式錯誤——
@@ -424,7 +429,7 @@ def parse_markdown(md_content):
                 else:
                     data["modules"][current_module][current_section].append(sub_content)
             continue
-            
+
         # `Sub Map` 是單值 ownership 欄位，不是可開啟的巢狀清單。
         # 空值若落入一般 list-header 分支會被靜默接受，造成 compile_map
         # 後續只能猜測 owner，因此在這裡直接 fail-fast。
@@ -436,23 +441,25 @@ def parse_markdown(md_content):
         lh_match = list_header_regex.match(line_strip)
         if lh_match:
             current_section = lh_match.group(1).strip().lower().replace(" ", "_")
+            if current_section == "non_goal":
+                current_section = "non_goals"
             if current_section == "observability":
                 data["modules"][current_module]["observability"] = {"mode": "required", "signals": []}
             elif current_section == "idempotency":
                 pass # Will be handled by field_regex if inline, or indented kv if needed. Let's just do inline.
             continue
-            
+
         f_match = field_regex.match(line_strip)
         if f_match:
             key = f_match.group(1).strip().lower().replace(" ", "_")
             val = f_match.group(2).strip()
-            
+
             if key == "type":
                 data["modules"][current_module]["type"] = val
             elif key == "description":
                 data["modules"][current_module]["description"] = val
             elif key == "source":
-                data["modules"][current_module]["source"] = val
+                data["modules"][current_module]["source"] = normalize_markdown_source(val)
             elif key == "sub_map":
                 if not val:
                     raise ValueError(
@@ -498,10 +505,14 @@ def parse_markdown(md_content):
                 # handle inline: "level: pure, side_effects: []"
                 # For simplicity, if it's just a string, store it as level
                 data["modules"][current_module]["idempotency"]["level"] = val
+            elif key == "non_goals" or key == "non-goals":
+                if val.startswith("[") and val.endswith("]"):
+                    items = [x.strip() for x in val[1:-1].split(",") if x.strip()]
+                    data["modules"][current_module]["non_goals"] = items
 
             current_section = None
             continue
-            
+
     # ponytail: 檢查所有宣告的例外是否有對應的 test case
     for mod_name, mod_info in data.get("modules", {}).items():
         declared_exceptions = [e["type"] for e in mod_info.get("exceptions", [])]
@@ -512,7 +523,7 @@ def parse_markdown(md_content):
                     expect_exc = v["case"].get("expect_exception")
                     if expect_exc:
                         verified_exceptions.add(expect_exc)
-            
+
             for exc in declared_exceptions:
                 if exc not in verified_exceptions:
                     raise ValueError(
@@ -647,6 +658,12 @@ def find_misplaced_modules(data):
     return misplaced
 
 
+class CheckpointTransactionError(Exception):
+    def __init__(self, message, transaction_recovery):
+        super().__init__(message)
+        self.transaction_recovery = transaction_recovery
+
+
 class ADADCore:
     def __init__(self, map_path=MAP_FILE, check_validity=True, project_root=None):
         self.map_path = map_path
@@ -655,6 +672,8 @@ class ADADCore:
             if project_root is not None
             else os.path.dirname(os.path.abspath(os.fspath(map_path)))
         )
+        self.task_dir = os.path.join(self.project_root, TASK_DIR)
+        self.checkpoint_dir = os.path.join(self.project_root, CHECKPOINT_DIR)
         self.module_owners = {}
         self.shard_documents = {}
         self.shard_paths = {}
@@ -668,17 +687,17 @@ class ADADCore:
     def check_ir_validity(self):
         md_path = os.path.join(self.project_root, "system_map.md")
         yaml_path = self.map_path
-        
+
         if os.path.exists(md_path):
             if not os.path.exists(yaml_path):
                 return {
                     "valid": False,
                     "error": f"找不到架構 IR 檔案 ({yaml_path})。請先執行編譯指令：python .agents/skills/adad-workflow/scripts/compile_map.py"
                 }
-            
+
             md_mtime = get_max_mtime(md_path)
             yaml_mtime = os.path.getmtime(yaml_path)
-            
+
             # 給予 1 秒的緩衝時間防範不同檔案系統時間戳記微幅飄移
             if md_mtime > yaml_mtime + 1:
                 return {
@@ -700,7 +719,7 @@ class ADADCore:
                     "valid": False,
                     "error": f"子架構 IR ({changed}) 比 root IR ({yaml_path}) 新，請重新執行編譯。"
                 }
-                
+
         return {"valid": True}
 
 
@@ -866,14 +885,14 @@ class ADADCore:
         """從 docs/adr/ 中提取設計決策摘要，僅抓取關鍵標題、狀態與決策內容以防範 Context 膨脹"""
         adr_dir = os.path.join("docs", "adr")
         file_path = os.path.join(adr_dir, f"{adr_id}.md")
-        
+
         # 增加相對路徑的容錯
         if not os.path.exists(file_path):
             file_path = os.path.join("adr", f"{adr_id}.md")
-            
+
         if not os.path.exists(file_path):
             return {"adr_id": adr_id, "error": "決策文件不存在"}
-            
+
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -935,13 +954,13 @@ class ADADCore:
         """從 docs/patterns/ 中提取設計模式規範摘要，僅抓取關鍵標題、說明與程式碼規範"""
         patterns_dir = os.path.join("docs", "patterns")
         file_path = os.path.join(patterns_dir, f"{pattern_name}.md")
-        
+
         if not os.path.exists(file_path):
             file_path = os.path.join("patterns", f"{pattern_name}.md")
-            
+
         if not os.path.exists(file_path):
             return {"pattern_name": pattern_name, "error": "模式說明文件不存在"}
-            
+
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -1013,6 +1032,7 @@ class ADADCore:
                 "source": node.get("source", ""),
                 "input": node.get("input", {}),
                 "output": node.get("output", {}),
+                "exceptions": node.get("exceptions", []),
                 "dependencies": node.get("dependencies", []),
                 "description": node.get("description", ""),
                 "map_file": node.get("map_file", "system_map.md"),
@@ -1023,11 +1043,20 @@ class ADADCore:
                 # 就完整，而不是靠事後檢查才發現。
                 "invariants": node.get("invariants", []),
                 "verification": node.get("verification", []),
-                "observability": node.get("observability"),
+                "observability": node.get("observability") or {"mode": "not_required", "signals": []},
                 # ponytail: Complexity/Algorithm——複雜函式的步驟大綱，讓實作階段
                 # 只需要「翻譯」步驟而不是重新「設計」邏輯，詳見 parse_markdown 的說明。
                 "complexity": node.get("complexity", "low"),
-                "algorithm": node.get("algorithm", [])
+                "algorithm": node.get("algorithm", []),
+                # V3 Schema fidelity fields
+                "preferred_pattern": node.get("preferred_pattern") or "none",
+                "decisions": node.get("decisions", []),
+                "idempotency": node.get("idempotency", {}),
+                "retry_budget": node.get("retry_budget", 0),
+                "required_context": node.get("required_context", []),
+                "forbidden_context": node.get("forbidden_context", []),
+                "context_priority": node.get("context_priority", {}),
+                "non_goals": node.get("non_goals", [])
             },
             "dependency_interfaces": {},
             "context_warnings": []
@@ -1046,7 +1075,7 @@ class ADADCore:
                 })
             else:
                 decisions_summary.append(f"{adr_info['title']} (狀態: {adr_info['status']}) - 決策: {adr_info['decision']}")
-        
+
         if decisions_summary:
             context["target_node"]["decisions_summary"] = decisions_summary
 
@@ -1172,7 +1201,7 @@ class ADADCore:
                 "reason": f"觸發 Rule of Two：功能特徵與現有模組高度重複，相似模組已出現 {len(matches)} 次。",
                 "duplicates": [f"{name} ({reason})" for name, reason in matches]
             }
-            
+
         return {"passed": True, "duplicates": []}
 
     def check_domain_boundary(self):
@@ -1342,12 +1371,35 @@ class ADADCore:
         for field in ("type", "description", "source"):
             if not isinstance(node.get(field), str) or not node[field].strip():
                 blockers.append(f"缺少非空白的 `{field}` 宣告")
+        description = node.get("description")
+        if isinstance(description, str) and description.strip():
+            try:
+                from adad_cli.workflow.task_contract_schema import validate_semantic_contract
+                validate_semantic_contract(description)
+            except ValueError as exc:
+                blockers.append(f"Semantic Contract validation failed: {exc}")
+        non_goals = node.get("non_goals")
+        if non_goals is not None:
+            try:
+                from adad_cli.workflow.task_contract_schema import validate_non_goals
+                validate_non_goals(non_goals)
+            except ValueError as exc:
+                blockers.append(f"Non-goals validation failed: {exc}")
         for field in ("input", "output"):
             if not isinstance(node.get(field), dict):
                 blockers.append(f"`{field}` 必須是 object")
         for field in ("invariants", "verification", "algorithm"):
             if not isinstance(node.get(field), list):
                 blockers.append(f"`{field}` 必須是 array（可為空，代表明確無額外約束）")
+        verification_list = node.get("verification", [])
+        if isinstance(verification_list, list):
+            cases = [v["case"] for v in verification_list if isinstance(v, dict) and "case" in v]
+            if cases:
+                try:
+                    from adad_cli.workflow.task_contract_schema import validate_verification_conditions
+                    validate_verification_conditions(cases)
+                except ValueError as exc:
+                    blockers.append(f"Verification conditions validation failed: {exc}")
 
         observability = node.get("observability")
         if not isinstance(observability, dict):
@@ -1416,7 +1468,7 @@ class ADADCore:
                     modules[neighbor]["state"] = "dirty"
                     dirty_list.append(neighbor)
                     queue.append(neighbor)
-                
+
         # 自身變更也轉為 dirty (若原本是 deployed 狀態)
         modules[target_node]["state"] = "dirty"
         dirty_list.insert(0, target_node)
@@ -1463,7 +1515,7 @@ class ADADCore:
     # ------------------------------------------------------------------
 
     def _task_path(self, node_name):
-        return os.path.join(TASK_DIR, f"{node_name}.task.json")
+        return os.path.join(self.task_dir, f"{node_name}.task.json")
 
     def _node_source_hash(self, node_name):
         """對節點目前在 system_map.yaml 裡的完整內容算 hash，用來偵測任務是否過期。"""
@@ -1537,10 +1589,37 @@ class ADADCore:
             errors.append("`spec.target_node` 必須是 object")
         elif target.get("name") != task_data.get("node_name"):
             errors.append("`spec.target_node.name` 必須與 `node_name` 一致")
+        else:
+            description = target.get("description")
+            if description is not None:
+                try:
+                    from adad_cli.workflow.task_contract_schema import validate_semantic_contract
+                    validate_semantic_contract(description)
+                except ValueError as exc:
+                    errors.append(f"Semantic Contract validation failed: {exc}")
+
+            if "non_goals" in target:
+                try:
+                    from adad_cli.workflow.task_contract_schema import validate_non_goals
+                    validate_non_goals(target["non_goals"])
+                except ValueError as exc:
+                    errors.append(f"Non-goals validation failed: {exc}")
+            elif task_data.get("schema_version") == 3:
+                errors.append("缺少必要欄位 `non_goals` (schema version 3)")
+
+            verification_list = target.get("verification", [])
+            if isinstance(verification_list, list):
+                cases = [v["case"] for v in verification_list if isinstance(v, dict) and "case" in v]
+                if cases:
+                    try:
+                        from adad_cli.workflow.task_contract_schema import validate_verification_conditions
+                        validate_verification_conditions(cases)
+                    except ValueError as exc:
+                        errors.append(f"Verification conditions validation failed: {exc}")
         return {"valid": not errors, "errors": errors}
 
     def _save_task(self, node_name, task_data):
-        os.makedirs(TASK_DIR, exist_ok=True)
+        os.makedirs(self.task_dir, exist_ok=True)
         path = self._task_path(node_name)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(task_data, f, ensure_ascii=False, indent=2)
@@ -1573,39 +1652,495 @@ class ADADCore:
         return self._file_hash(source_path)
 
     def _source_lock_path(self, source_path):
-        digest = hashlib.sha256(source_path.encode("utf-8")).hexdigest()
-        return os.path.join(SOURCE_LOCK_DIR, f"{digest}.lock.json")
+        repository = SourceLockRepository(
+            self.project_root, SOURCE_LOCK_DIR, self._source_path_for_node
+        )
+        return repository.lock_path(source_path)
 
     def _read_source_lock(self, source_path):
-        path = self._source_lock_path(source_path)
-        if not os.path.exists(path):
-            return None
+        repository = SourceLockRepository(
+            self.project_root, SOURCE_LOCK_DIR, self._source_path_for_node
+        )
+        return repository.read(source_path)
+
+    def _source_lock_identity(self, path):
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return {"invalid": True, "path": path}
+            from pathlib import Path
+            path = str(Path(path).resolve())
+        except Exception:
+            pass
+        try:
+            with open(path, "rb") as f:
+                pass
+        except FileNotFoundError:
+            return {
+                "success": True,
+                "state": "missing",
+                "path": os.path.abspath(os.fspath(path))
+            }
+        except OSError as exc:
+            try:
+                before = os.lstat(path)
+                identity = {
+                    "st_dev": before.st_dev,
+                    "st_ino": before.st_ino,
+                    "st_size": before.st_size,
+                    "st_mtime_ns": getattr(before, "st_mtime_ns", int(before.st_mtime * 1_000_000_000)),
+                }
+            except Exception:
+                identity = None
+            return {
+                "success": False,
+                "state": "error",
+                "path": os.path.abspath(os.fspath(path)),
+                "uncertain": True,
+                "error": str(exc),
+                "identity": identity,
+                "evidence": {
+                    "error": str(exc),
+                    "identity": identity,
+                }
+            }
+        repository = SourceLockRepository(
+            self.project_root, SOURCE_LOCK_DIR, self._source_path_for_node
+        )
+        return repository.identity(path)
+
+    def audit_source_locks(self):
+        repository = SourceLockRepository(
+            self.project_root, SOURCE_LOCK_DIR, self._source_path_for_node
+        )
+        repository.identity = self._source_lock_identity
+
+        def source_owners_for_path(source_path):
+            normalized = self._normalize_source_file_path(source_path)
+            return [
+                node_name
+                for node_name, node in self.data.get("modules", {}).items()
+                if self._normalize_source_file_path(node.get("source", ""))
+                == normalized
+            ]
+
+        service = SourceLockAuditService(
+            self.project_root,
+            TASK_DIR,
+            repository,
+            source_owners_for_path,
+            self.validate_task_snapshot,
+        )
+        service.scan_state = self._scan_source_lock_state
+        return service.audit()
+
+    def _scan_source_lock_state(self):
+        repository = SourceLockRepository(
+            self.project_root, SOURCE_LOCK_DIR, self._source_path_for_node
+        )
+        repository.identity = self._source_lock_identity
+        def source_owners_for_path(source_path):
+            normalized = self._normalize_source_file_path(source_path)
+            return [
+                node_name
+                for node_name, node in self.data.get("modules", {}).items()
+                if self._normalize_source_file_path(node.get("source", ""))
+                == normalized
+            ]
+        service = SourceLockAuditService(
+            self.project_root,
+            TASK_DIR,
+            repository,
+            source_owners_for_path,
+            self.validate_task_snapshot,
+        )
+        return service.scan_state()
+
+    def _classify_source_lock(self, lock_path, scan_state=None):
+        repository = SourceLockRepository(
+            self.project_root, SOURCE_LOCK_DIR, self._source_path_for_node
+        )
+        repository.identity = self._source_lock_identity
+        def source_owners_for_path(source_path):
+            normalized = self._normalize_source_file_path(source_path)
+            return [
+                node_name
+                for node_name, node in self.data.get("modules", {}).items()
+                if self._normalize_source_file_path(node.get("source", ""))
+                == normalized
+            ]
+        service = SourceLockAuditService(
+            self.project_root,
+            TASK_DIR,
+            repository,
+            source_owners_for_path,
+            self.validate_task_snapshot,
+        )
+        return service.classify(lock_path, scan_state)
+
+    def _revalidate_source_lock_candidate(self, candidate):
+        classification = candidate.get("classification")
+        if classification in {"stale", "orphan"}:
+            scan = self._scan_source_lock_state()
+            if not scan.get("healthy"):
+                return {
+                    "success": False,
+                    "uncertain": True,
+                    "mutation_blocked": True,
+                    "error": "[SOURCE LOCK] Global scan is incomplete.",
+                    "scan": scan
+                }
+            lock_path = candidate["canonical_path"]
+            current = self._classify_source_lock(lock_path, scan)
+            stable = (
+                current.get("classification") == classification and
+                current.get("payload_digest") == candidate.get("payload_digest") and
+                current.get("lstat_identity") == candidate.get("lstat_identity")
+            )
+            return {
+                "success": stable,
+                "candidate": current,
+                "error": None if stable else "[SOURCE LOCK] Candidate changed after audit."
+            }
+
+        if candidate.get("reason") == "active_task_missing_lock":
+            scan = self._scan_source_lock_state()
+            if not scan.get("healthy"):
+                return {
+                    "success": False,
+                    "uncertain": True,
+                    "mutation_blocked": True,
+                    "error": "[SOURCE LOCK] Global scan is incomplete.",
+                    "scan": scan
+                }
+
+            snapshot = scan.get("task_snapshots", {}).get(candidate.get("node_name"))
+            if not snapshot or not snapshot.get("artifact", {}).get("success"):
+                uncertain = bool(snapshot and snapshot.get("artifact", {}).get("uncertain"))
+                return {
+                    "success": False,
+                    "uncertain": uncertain,
+                    "mutation_blocked": uncertain,
+                    "error": "[SOURCE LOCK] Task changed after audit."
+                }
+
+            task_data = snapshot["data"]
+            if snapshot["artifact"].get("payload_digest") != candidate.get("task_identity"):
+                return {
+                    "success": False,
+                    "uncertain": False,
+                    "mutation_blocked": False,
+                    "error": "[SOURCE LOCK] Task changed after audit."
+                }
+            if snapshot["artifact"].get("identity") != candidate.get("task_lstat_identity"):
+                return {
+                    "success": False,
+                    "uncertain": False,
+                    "mutation_blocked": False,
+                    "error": "[SOURCE LOCK] Task changed after audit."
+                }
+
+            lock_path = candidate["canonical_path"]
+            probe = self._source_lock_identity(lock_path)
+
+            is_uncertain = bool(
+                probe.get("uncertain") or
+                (probe.get("state") == "error") or
+                (probe.get("invalid") and "JSON payload must be an object." not in (probe.get("error") or ""))
+            )
+            if is_uncertain:
+                return {
+                    "success": False,
+                    "uncertain": True,
+                    "mutation_blocked": True,
+                    "error": "[SOURCE LOCK] Missing-lock state is uncertain.",
+                    "evidence": probe
+                }
+
+            validation = self.validate_task_snapshot(task_data, candidate.get("node_name"))
+            lock = task_data.get("source_lock") or {}
+
+            owners = []
+            for name, info in self.data.get("modules", {}).items():
+                norm_source = self._normalize_source_file_path(info.get("source", ""))
+                norm_lock_source = self._normalize_source_file_path(lock.get("source_path", ""))
+                if norm_source == norm_lock_source:
+                    owners.append(name)
+
+            stable = (
+                validation.get("valid") is True and
+                task_data.get("status") in {"submitted", "in_progress", "assigned"} and
+                lock.get("source_path") == candidate.get("source_path") and
+                lock.get("task_id") == candidate.get("task_id") and
+                lock.get("node_name") == candidate.get("node_name") and
+                candidate.get("node_name") in owners and
+                probe.get("state") == "missing"
+            )
+            return {
+                "success": stable,
+                "uncertain": False,
+                "mutation_blocked": False,
+                "candidate": candidate,
+                "task_data": task_data,
+                "error": None if stable else "[SOURCE LOCK] Missing-lock candidate is no longer safe."
+            }
+
+        return {
+            "success": False,
+            "uncertain": False,
+            "mutation_blocked": False,
+            "error": "[SOURCE LOCK] Candidate is not recoverable."
+        }
+
+    def _quarantine_source_lock(self, path, expected):
+        repository = SourceLockRepository(
+            self.project_root, SOURCE_LOCK_DIR, self._source_path_for_node
+        )
+        return repository.quarantine(path, expected)
+
+    def reconcile_source_locks(self, mode):
+        if mode not in {"audit", "prune", "reconcile"}:
+            return {
+                "success": False,
+                "error": f"[SOURCE LOCK] Unsupported mode: {mode!r}."
+            }
+
+        report = self.audit_source_locks()
+        if mode == "audit":
+            return report
+
+        if report.get("mutation_blocked"):
+            return {
+                "success": False,
+                "mode": mode,
+                "audit": report,
+                "mutations": [],
+                "error": "[SOURCE LOCK] Audit is incomplete; mutation is blocked."
+            }
+
+        mutations = []
+        if mode == "prune":
+            candidates = report.get("categories", {}).get("stale", []) + report.get("categories", {}).get("orphan", [])
+        else: # mode == "reconcile"
+            candidates = [
+                item for item in report.get("categories", {}).get("invalid", [])
+                if item.get("reason") == "active_task_missing_lock"
+            ]
+
+        preflight = []
+        for candidate in candidates:
+            checked = self._revalidate_source_lock_candidate(candidate)
+            preflight.append({
+                "candidate": candidate,
+                "result": checked
+            })
+            if checked.get("uncertain") or checked.get("mutation_blocked"):
+                return {
+                    "success": False,
+                    "mode": mode,
+                    "audit": report,
+                    "mutation_blocked": True,
+                    "mutations": [],
+                    "preflight": preflight,
+                    "error": checked.get("error") or "[SOURCE LOCK] Candidate preflight is uncertain."
+                }
+
+        if mode == "prune":
+            for index, item in enumerate(preflight):
+                candidate = item["candidate"]
+                checked = item["result"]
+                if not checked.get("success"):
+                    mutations.append({
+                        "action": "skipped",
+                        "candidate": candidate,
+                        "error": checked.get("error")
+                    })
+                    continue
+                path = candidate["canonical_path"]
+
+                quarantined = self._quarantine_source_lock(
+                    path,
+                    {
+                        "identity": candidate["lstat_identity"],
+                        "payload_digest": candidate["payload_digest"]
+                    }
+                )
+                if not quarantined.get("success"):
+                    mutations.append({
+                        "action": "skipped",
+                        "candidate": candidate,
+                        "error": quarantined.get("error"),
+                        "evidence": quarantined
+                    })
+                    continue
+
+                fresh = self._scan_source_lock_state()
+                active_claim = any(
+                    (
+                        snapshot.get("validation", {}).get("valid") and
+                        snapshot.get("data", {}).get("status") in {"in_progress", "assigned", "submitted"} and
+                        snapshot.get("data", {}).get("source_lock", {}).get("source_path") == candidate.get("source_path")
+                    )
+                    for snapshot in fresh.get("task_snapshots", {}).values()
+                )
+                qcheck = self._source_lock_identity(quarantined["quarantine_path"])
+                stable = (
+                    fresh.get("healthy") is True and
+                    not active_claim and
+                    qcheck.get("success") is True and
+                    qcheck.get("identity") == quarantined.get("identity") and
+                    qcheck.get("payload_digest") == quarantined.get("payload_digest")
+                )
+
+                if not stable:
+                    restore = {"attempted": True, "success": False}
+                    canonical = self._source_lock_identity(path)
+                    if canonical.get("state") == "missing":
+                        try:
+                            os.rename(quarantined["quarantine_path"], path)
+                            restore["success"] = True
+                        except OSError as restore_exc:
+                            restore["error"] = str(restore_exc)
+                    else:
+                        restore["error"] = "Canonical path is occupied or uncertain."
+
+                    mutations.append({
+                        "action": "skipped",
+                        "candidate": candidate,
+                        "error": "[SOURCE LOCK] Claim or identity changed after quarantine.",
+                        "quarantine": quarantined,
+                        "restore": restore
+                    })
+
+                    if not fresh.get("healthy"):
+                        remaining_candidates = [item["candidate"] for item in preflight[index + 1:]]
+                        return {
+                            "success": False,
+                            "mode": mode,
+                            "audit": report,
+                            "mutation_blocked": True,
+                            "mutations": mutations,
+                            "preflight": preflight,
+                            "error": "[SOURCE LOCK] Global scan became uncertain during mutation.",
+                            "partial_recovery": {
+                                "remaining_candidates": remaining_candidates,
+                                "current_candidate": candidate
+                            }
+                        }
+                else:
+                    try:
+                        os.remove(quarantined["quarantine_path"])
+                        mutations.append({
+                            "action": "pruned",
+                            "candidate": candidate,
+                            "quarantine": quarantined
+                        })
+                    except OSError as exc:
+                        mutations.append({
+                            "action": "quarantined",
+                            "candidate": candidate,
+                            "error": f"[SOURCE LOCK] Failed to delete quarantine: {exc}",
+                            "quarantine": quarantined
+                        })
+        else: # mode == "reconcile"
+            for item in preflight:
+                candidate = item["candidate"]
+                checked = item["result"]
+                if not checked.get("success"):
+                    mutations.append({
+                        "action": "skipped",
+                        "candidate": candidate,
+                        "error": checked.get("error")
+                    })
+                    continue
+                task_data = checked["task_data"]
+                lock = task_data["source_lock"]
+                path = candidate["canonical_path"]
+                created_identity = None
+
+                try:
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, "x", encoding="utf-8") as f:
+                        created = os.fstat(f.fileno())
+                        created_identity = {
+                            "st_dev": created.st_dev,
+                            "st_ino": created.st_ino
+                        }
+                        json.dump(lock, f, ensure_ascii=False, indent=2)
+                        f.write("\n")
+                        f.flush()
+                        os.fsync(f.fileno())
+                    mutations.append({
+                        "action": "reconciled",
+                        "candidate": candidate
+                    })
+                except FileExistsError:
+                    mutations.append({
+                        "action": "skipped",
+                        "candidate": candidate,
+                        "error": "[SOURCE LOCK] Conflicting lock appeared during reconcile."
+                    })
+                except OSError as exc:
+                    cleanup = {
+                        "status": "not_created" if created_identity is None else "not_needed",
+                        "error": None,
+                        "manual_action_required": False
+                    }
+                    if created_identity is not None:
+                        try:
+                            current = os.lstat(path)
+                            same_identity = (
+                                current.st_dev == created_identity["st_dev"] and
+                                current.st_ino == created_identity["st_ino"]
+                            )
+                        except OSError:
+                            same_identity = False
+
+                        if same_identity:
+                            try:
+                                os.remove(path)
+                                cleanup["status"] = "removed"
+                            except OSError as cleanup_exc:
+                                cleanup.update({
+                                    "status": "cleanup_failed",
+                                    "error": str(cleanup_exc),
+                                    "manual_action_required": True
+                                })
+                        else:
+                            cleanup.update({
+                                "status": "identity_mismatch",
+                                "error": "Partial lock identity changed; cleanup refused.",
+                                "manual_action_required": True
+                            })
+
+                    mutations.append({
+                        "action": "skipped",
+                        "candidate": candidate,
+                        "error": f"[SOURCE LOCK] Failed to reconcile lock: {exc}",
+                        "partial_create_cleanup": cleanup
+                    })
+
+        success = all(item["action"] in {"pruned", "reconciled"} for item in mutations)
+        return {
+            "success": success,
+            "mode": mode,
+            "audit": report,
+            "mutation_blocked": False,
+            "preflight": preflight,
+            "mutations": mutations
+        }
+
 
     def _release_source_lock(self, task_data):
-        lock = task_data.get("source_lock") or {}
-        source_path = lock.get("source_path")
-        if not source_path:
-            return
-        path = self._source_lock_path(source_path)
-        existing = self._read_source_lock(source_path)
-        if existing and existing.get("task_id") == task_data.get("task_id"):
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
+        repository = SourceLockRepository(
+            self.project_root, SOURCE_LOCK_DIR, self._source_path_for_node
+        )
+        return repository.release(task_data)
 
     def _acquire_source_lock(self, node_name, task_id):
         """Atomically reserve one source file for one open Task."""
         source_path = self._source_path_for_node(node_name)
         if not source_path:
             return {"success": False, "error": "[SOURCE LOCK] Task has no source path."}
-        os.makedirs(SOURCE_LOCK_DIR, exist_ok=True)
-        path = self._source_lock_path(source_path)
+        os.makedirs(os.path.join(self.project_root, SOURCE_LOCK_DIR), exist_ok=True)
+        path = os.path.join(self.project_root, self._source_lock_path(source_path))
         payload = {
             "source_path": source_path,
             "node_name": node_name,
@@ -1714,10 +2249,50 @@ class ADADCore:
             "history": [{"event": "generated", "at": now}],
             "spec": self.read_context(node_name),
         }
+
+        def fail_with_cleanup(primary_error, task_errors=None):
+            release_res = self._release_source_lock(task_data)
+            if not release_res.get("success"):
+                return {
+                    "success": False,
+                    "error": f"[INVALID TASK] Failed to release lock after primary failure: {release_res.get('error')}",
+                    "primary_error": primary_error,
+                    "release_error": release_res,
+                }
+            res = {"success": False, "error": primary_error}
+            if task_errors is not None:
+                res["task_errors"] = task_errors
+            return res
+
         validation = self.validate_task_snapshot(task_data, node_name)
         if not validation["valid"]:
-            return {"success": False, "error": "[INVALID TASK] 無法產生合格 Task 快照。", "task_errors": validation["errors"]}
-        self._save_task(node_name, task_data)
+            return fail_with_cleanup("[INVALID TASK] 無法產生合格 Task 快照。", validation["errors"])
+        try:
+            serialized_task = json.dumps(task_data, ensure_ascii=False, indent=2)
+            json.loads(serialized_task)
+        except (TypeError, ValueError) as exc:
+            return fail_with_cleanup(f"[INVALID TASK] 無法序列化可解析的 Task 快照：{exc}")
+
+        task_path = self._task_path(node_name)
+        temp_path = None
+        try:
+            os.makedirs(self.task_dir, exist_ok=True)
+            descriptor, temp_path = tempfile.mkstemp(
+                prefix=f".{node_name}.", suffix=".tmp", dir=self.task_dir
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(serialized_task)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, task_path)
+        except OSError as exc:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            return fail_with_cleanup(f"[INVALID TASK] 無法原子寫入 Task 快照：{exc}")
         return {"success": True, "task_id": task_id, "path": self._task_path(node_name)}
 
     def task_submit(self, node_name, file_path=None):
@@ -1801,8 +2376,8 @@ class ADADCore:
         stamp = now.strftime("%Y%m%dT%H%M%S%fZ")
         checkpoint_id = f"CP-2-{stamp}-{node_name}"
         filename = f"{checkpoint_id}-{action}.yaml"
-        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-        path = os.path.join(CHECKPOINT_DIR, filename)
+        os.makedirs(self.checkpoint_dir, exist_ok=True)
+        path = os.path.join(self.checkpoint_dir, filename)
         payload = {
             "checkpoint_payload": {
                 "id": checkpoint_id,
@@ -1839,6 +2414,8 @@ class ADADCore:
         original_data = copy.deepcopy(self.data)
         original_task = copy.deepcopy(task_data)
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        audit = None
+        source_lock_action = None
         try:
             if action == "approved":
                 task_data["status"] = "approved"
@@ -1846,26 +2423,139 @@ class ADADCore:
                 self._advance_module_to_validated(node_name)
             else:
                 task_data["status"] = "assigned"
+
             task_data.setdefault("history", []).append({
-                "event": action, "at": now, "reviewer": reviewer, "reason": comment,
+                "event": action,
+                "at": now,
+                "reviewer": reviewer,
+                "reason": comment,
             })
+
             self._save_task(node_name, task_data)
             self.save()
+
             audit = self._write_checkpoint_audit(node_name, task_data, action, reviewer, comment)
             task_data["history"][-1]["checkpoint_id"] = audit["id"]
             task_data["history"][-1]["checkpoint_path"] = audit["path"]
             self._save_task(node_name, task_data)
+
             if action == "approved":
-                self._release_source_lock(task_data)
+                source_lock_action = self._release_source_lock(task_data)
+                if not source_lock_action.get("success") or source_lock_action.get("result") != "released":
+                    raise RuntimeError(
+                        source_lock_action.get("error") or
+                        "[SOURCE LOCK] Approval requires one exact physical lock."
+                    )
+                audit["source_lock_action"] = source_lock_action
+
             return audit
         except Exception as exc:
             self.data = original_data
+
+            recovery = {
+                "phase": "checkpoint_decision",
+                "primary_failure": {
+                    "type": type(exc).__name__,
+                    "message": str(exc)
+                },
+                "task_rollback": {
+                    "status": "not_needed",
+                    "error": None
+                },
+                "system_map_rollback": {
+                    "status": "not_needed",
+                    "error": None
+                },
+                "checkpoint_audit_rollback": {
+                    "status": "not_created",
+                    "error": None,
+                    "path": audit.get("path") if audit else None
+                },
+                "source_lock_rollback": {
+                    "status": "not_needed",
+                    "error": None,
+                    "evidence": source_lock_action
+                },
+                "safe_to_retry": False,
+                "manual_action_required": False
+            }
+
             try:
                 self._save_task(node_name, original_task)
+                recovery["task_rollback"]["status"] = "restored"
+            except Exception as rollback_exc:
+                recovery["task_rollback"] = {
+                    "status": "restore_failed",
+                    "error": str(rollback_exc)
+                }
+
+            try:
                 self.save()
-            except Exception:
-                pass
-            raise RuntimeError(f"Checkpoint 交易失敗，已回復狀態：{exc}") from exc
+                recovery["system_map_rollback"]["status"] = "restored"
+            except Exception as rollback_exc:
+                recovery["system_map_rollback"] = {
+                    "status": "restore_failed",
+                    "error": str(rollback_exc)
+                }
+
+            if audit:
+                audit_path = audit.get("path")
+                if audit_path:
+                    if not os.path.isabs(audit_path):
+                        audit_path = os.path.join(self.project_root, audit_path)
+                    try:
+                        os.remove(audit_path)
+                        recovery["checkpoint_audit_rollback"]["status"] = "removed"
+                    except FileNotFoundError:
+                        recovery["checkpoint_audit_rollback"]["status"] = "already_absent"
+                    except OSError as cleanup_exc:
+                        recovery["checkpoint_audit_rollback"] = {
+                            "status": "cleanup_failed",
+                            "error": str(cleanup_exc),
+                            "path": audit_path
+                        }
+
+            if source_lock_action:
+                restore = source_lock_action.get("restore") or source_lock_action.get("evidence", {}).get("restore")
+                if restore:
+                    recovery["source_lock_rollback"]["status"] = "restored" if restore.get("success") else "restore_failed"
+                    recovery["source_lock_rollback"]["error"] = restore.get("error")
+                elif source_lock_action.get("quarantine_path"):
+                    recovery["source_lock_rollback"]["status"] = "quarantine_preserved"
+                elif source_lock_action.get("result") in {"invalid", "error", "identity_mismatch"}:
+                    recovery["source_lock_rollback"]["status"] = "canonical_preserved"
+
+            rollback_statuses = (
+                recovery["task_rollback"]["status"],
+                recovery["system_map_rollback"]["status"],
+                recovery["checkpoint_audit_rollback"]["status"],
+                recovery["source_lock_rollback"]["status"]
+            )
+
+            manual_action_required = (
+                "restore_failed" in rollback_statuses or
+                "cleanup_failed" in rollback_statuses or
+                "quarantine_preserved" in rollback_statuses or
+                (
+                    source_lock_action is not None and
+                    source_lock_action.get("result") in {"invalid", "identity_mismatch"}
+                )
+            )
+            recovery["manual_action_required"] = manual_action_required
+
+            safe_to_retry = (
+                not manual_action_required and
+                recovery["task_rollback"]["status"] == "restored" and
+                recovery["system_map_rollback"]["status"] == "restored" and
+                recovery["checkpoint_audit_rollback"]["status"] in {"removed", "not_created", "already_absent"} and
+                recovery["source_lock_rollback"]["status"] in {"canonical_preserved", "not_needed", "restored"}
+            )
+            recovery["safe_to_retry"] = safe_to_retry
+
+            raise CheckpointTransactionError(
+                f"Checkpoint 交易失敗，未核准：{exc}",
+                recovery
+            ) from exc
 
     def task_approve(self, node_name, confirm_suffix, reviewer):
         """
@@ -1892,6 +2582,12 @@ class ADADCore:
 
         try:
             audit = self._commit_checkpoint_decision(node_name, task_data, "approved", reviewer.strip())
+        except CheckpointTransactionError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "transaction_recovery": exc.transaction_recovery
+            }
         except RuntimeError as exc:
             return {"success": False, "error": str(exc)}
         return {"success": True, "task_id": task_data["task_id"], "status": "approved", "checkpoint": audit}
@@ -1934,6 +2630,14 @@ class ADADCore:
         if not task_data:
             return {"success": False, "error": f"[BLOCKED] 任務快照不存在，無法標記 blocked。"}
 
+        validation = self.validate_task_snapshot(task_data, node_name)
+        if not validation["valid"]:
+            return {
+                "success": False,
+                "error": "[INVALID TASK] Task 快照格式不合規。",
+                "task_errors": validation["errors"]
+            }
+
         if task_data.get("status") not in TASK_EDITABLE_STATUSES:
             return {
                 "success": False,
@@ -1954,13 +2658,24 @@ class ADADCore:
 
         self._save_task(node_name, task_data)
 
-        # 解除 source lock (如果有的話) - 雖然卡住但停止編輯了
-        # ponytail: 保留 lock 給卡住的 agent 或釋放？釋放比較好，因為需要人類介入。
-        if "source_lock" in task_data:
-            del task_data["source_lock"]
-            self._save_task(node_name, task_data)
+        release = self._release_source_lock(task_data)
+        if not release["success"]:
+            return {
+                "success": False,
+                "error": release["error"],
+                "task_id": task_data["task_id"],
+                "status": "blocked",
+                "reason": reason,
+                "source_lock_action": release
+            }
 
-        return {"success": True, "task_id": task_data["task_id"], "status": "blocked", "reason": reason}
+        return {
+            "success": True,
+            "task_id": task_data["task_id"],
+            "status": "blocked",
+            "reason": reason,
+            "source_lock_action": release
+        }
 
     def check_task_gate(self, rel_path, operation="edit", candidate_hash=None):
         """
@@ -2153,7 +2868,7 @@ class ADADCore:
             match_imports = re.search(r"deny_imports:\s*\[(.*?)\]", inv)
             if match_imports:
                 deny_imports.extend([p.strip() for p in match_imports.group(1).split(",") if p.strip()])
-                
+
             match_calls = re.search(r"deny_calls:\s*\[(.*?)\]", inv)
             if match_calls:
                 deny_calls.extend([c.strip() for c in match_calls.group(1).split(",") if c.strip()])
@@ -2164,7 +2879,7 @@ class ADADCore:
 
             if "deny_env_read" in inv:
                 deny_env_read = True
-                
+
             if "deny_sys_exit" in inv:
                 deny_sys_exit = True
                 # 同時將常見的中斷呼叫加入 deny_calls
@@ -2179,7 +2894,7 @@ class ADADCore:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 tree = ast.parse(f.read(), filename=file_path)
-            
+
             target_node_ast = tree
             if node.get("type") in ["function", "class"]:
                 target_name = node_name
@@ -2260,7 +2975,7 @@ class ADADCore:
                 elif isinstance(node_visitor.type, ast.Name):
                     if node_visitor.type.id in ("Exception", "BaseException"):
                         is_bare = True
-                
+
                 if is_bare:
                     if len(node_visitor.body) == 1:
                         stmt = node_visitor.body[0]
@@ -2268,7 +2983,7 @@ class ADADCore:
                             self.bare_excepts.append(node_visitor.lineno)
                         elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis:
                             self.bare_excepts.append(node_visitor.lineno)
-                
+
                 self.generic_visit(node_visitor)
 
         visitor = InvariantVisitor()
@@ -2439,6 +3154,18 @@ class ADADCore:
         return any(arg == "--basetemp" or arg.startswith("--basetemp=") for arg in argv)
 
     @staticmethod
+    def _has_pytest_cacheprovider_disabled(argv):
+        return any(
+            arg in ("-p=no:cacheprovider", "-pno:cacheprovider")
+            or (
+                arg == "-p"
+                and index + 1 < len(argv)
+                and argv[index + 1] == "no:cacheprovider"
+            )
+            for index, arg in enumerate(argv)
+        )
+
+    @staticmethod
     def _resolve_project_python(project_root):
         """優先使用專案 .venv 的跨平台 Python，找不到時沿用目前直譯器。"""
         relative_path = (
@@ -2451,19 +3178,58 @@ class ADADCore:
 
     @staticmethod
     def _decode_verification_output(value, output_encoding="utf-8"):
-        """Strictly validate UTF-8 while retaining replacement text for diagnostics."""
         raw = value or b""
-        supported = str(output_encoding or "utf-8").lower().replace("_", "-") in {
-            "utf-8", "utf8"
+        normalized = str(output_encoding or "utf-8").strip().replace("_", "-").lower()
+        supported = {
+            "utf-8",
+            "utf8",
+            "cp1252",
+            "cp932",
+            "cp936",
+            "gbk",
+            "shift-jis",
+            "ms932",
         }
-        if isinstance(raw, str):
-            return raw, supported, None if supported else f"unsupported output_encoding: {output_encoding}"
-        if not supported:
+        if normalized not in supported:
+            if isinstance(raw, str):
+                return raw, False, f"unsupported output_encoding: {output_encoding}"
             return raw.decode("utf-8", errors="replace"), False, f"unsupported output_encoding: {output_encoding}"
+        encoding = "utf-8" if normalized in {"utf-8", "utf8"} else normalized
+        if isinstance(raw, str):
+            return raw, True, None
         try:
-            return raw.decode("utf-8"), True, None
+            return raw.decode(encoding), True, None
         except UnicodeDecodeError as error:
-            return raw.decode("utf-8", errors="replace"), False, str(error)
+            return raw.decode(encoding, errors="replace"), False, str(error)
+
+    @staticmethod
+    def _resolve_verification_cwd(cwd_name, workspace, project_root, step_index):
+        if not isinstance(cwd_name, str) or not cwd_name.strip():
+            raise ValueError("command.cwd 必須是字串。")
+        cwd_name = cwd_name.strip()
+        if cwd_name == "workspace":
+            resolved = os.path.realpath(workspace)
+            return resolved, {"requested_cwd": cwd_name, "resolved_cwd": resolved, "scope": "workspace", "step_index": step_index}
+        if cwd_name == "project":
+            resolved = os.path.realpath(project_root)
+            return resolved, {"requested_cwd": cwd_name, "resolved_cwd": resolved, "scope": "project", "step_index": step_index}
+        portable = cwd_name.replace("\\", "/")
+        if (
+            os.path.isabs(portable)
+            or re.match(r"^[A-Za-z]:", portable)
+            or portable.startswith("//")
+            or ".." in portable.split("/")
+        ):
+            raise ValueError(f"command.cwd 不支援的相對路徑語意：{cwd_name}")
+        base_abs = os.path.realpath(workspace)
+        resolved = os.path.realpath(os.path.join(base_abs, *portable.split("/")))
+        try:
+            inside_workspace = os.path.commonpath([base_abs, resolved]) == base_abs
+        except ValueError:
+            inside_workspace = False
+        if not inside_workspace:
+            raise ValueError(f"command.cwd 目標路徑超出 workspace：{cwd_name}")
+        return resolved, {"requested_cwd": cwd_name, "resolved_cwd": resolved, "scope": "workspace-relative", "step_index": step_index}
 
     @staticmethod
     def _verification_subprocess_environment():
@@ -2496,23 +3262,41 @@ class ADADCore:
                 raise ValueError("expect_exit 必須是整數或 'nonzero'。")
             if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 300:
                 raise ValueError("timeout 必須大於 0 且不超過 300 秒。")
-            if cwd_name not in ("workspace", "project"):
-                raise ValueError("command.cwd 必須是 'workspace' 或 'project'。")
             argv = self._expand_verification_argv(command.get("argv"), placeholders)
-            if self._is_pytest_command(argv) and not self._has_pytest_basetemp(argv):
-                argv.extend(["--basetemp", os.path.join(workspace, f"pytest-{step_index}")])
-            execution_cwd = workspace if cwd_name == "workspace" else placeholders["project"]
+            if self._is_pytest_command(argv):
+                if not self._has_pytest_basetemp(argv):
+                    basetemp_dir = workspace
+                    if ".agents" not in basetemp_dir:
+                        basetemp_dir = os.path.join(basetemp_dir, ".agents", "workspaces")
+                    argv.extend(
+                        ["--basetemp", os.path.join(basetemp_dir, f"pytest-{step_index}")]
+                    )
+                if not self._has_pytest_cacheprovider_disabled(argv):
+                    argv.extend(["-p", "no:cacheprovider"])
+            execution_cwd, cwd_info = self._resolve_verification_cwd(
+                cwd_name, workspace, placeholders["project"], step_index
+            )
             result["argv"] = argv
             result["cwd"] = execution_cwd
-            completed = subprocess.run(
-                argv,
-                cwd=execution_cwd,
-                env=self._verification_subprocess_environment(),
-                shell=False,
-                capture_output=True,
-                text=False,
-                timeout=timeout,
-            )
+            result["cwd_diagnostics"] = cwd_info
+            process_kwargs = {
+                "cwd": execution_cwd,
+                "env": self._verification_subprocess_environment(),
+                "shell": False,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+            }
+            if os.name == "nt":
+                process_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                process_kwargs["start_new_session"] = True
+            process = subprocess.Popen(argv, **process_kwargs)
+            stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
+            completed = type("CompletedProcess", (), {
+                "returncode": process.returncode,
+                "stdout": stdout_bytes,
+                "stderr": stderr_bytes,
+            })()
             output_encoding = command.get("output_encoding", "utf-8")
             stdout, stdout_valid, stdout_error = self._decode_verification_output(completed.stdout, output_encoding)
             stderr, stderr_valid, stderr_error = self._decode_verification_output(completed.stderr, output_encoding)
@@ -2538,8 +3322,27 @@ class ADADCore:
         except subprocess.TimeoutExpired as e:
             result["error"] = f"command 執行逾時（{timeout} 秒）。"
             output_encoding = command.get("output_encoding", "utf-8")
-            stdout, stdout_valid, stdout_error = self._decode_verification_output(e.stdout, output_encoding)
-            stderr, stderr_valid, stderr_error = self._decode_verification_output(e.stderr, output_encoding)
+            stdout_bytes, stderr_bytes = e.stdout, e.stderr
+            try:
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                    )
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+                stdout_bytes, stderr_bytes = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired as drain_error:
+                stdout_bytes = drain_error.stdout if drain_error.stdout is not None else stdout_bytes
+                stderr_bytes = drain_error.stderr if drain_error.stderr is not None else stderr_bytes
+                result["termination_error"] = "command tree termination did not drain within 5 seconds."
+            except Exception as termination_error:
+                result["termination_error"] = f"command tree termination failed: {termination_error}"
+            stdout, stdout_valid, stdout_error = self._decode_verification_output(stdout_bytes, output_encoding)
+            stderr, stderr_valid, stderr_error = self._decode_verification_output(stderr_bytes, output_encoding)
             result.update({
                 "returncode": None,
                 "stdout": stdout[-4000:],
@@ -2568,7 +3371,7 @@ class ADADCore:
 
         project_root = self.project_root
         source_path = os.path.realpath(os.path.abspath(real_file_path))
-        workspace_root = os.path.join(project_root, ".agents", "workspaces")
+        workspace_root = project_root
         try:
             os.makedirs(workspace_root, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="adad_verify_", dir=workspace_root) as workspace:
@@ -2712,12 +3515,26 @@ class ADADCore:
         commands = [v["command"] for v in verification if isinstance(v, dict) and "command" in v]
         command_results = []
         for idx, command in enumerate(commands):
-            wrapped = self._run_integration_verification(
-                {"name": f"command_{idx}", "steps": [command]}, real_file_path, idx
-            )
-            step_result = wrapped["step_results"][0] if wrapped["step_results"] else {
-                "step_index": 0, "passed": False, "error": wrapped.get("error")
-            }
+            if command.get("cwd", "workspace") == "project":
+                placeholders = {
+                    "python": sys.executable,
+                    "project_python": self._resolve_project_python(self.project_root),
+                    "source": os.path.realpath(os.path.abspath(real_file_path)),
+                    "project": self.project_root,
+                    "workspace": self.project_root,
+                }
+                step_result = self._run_verification_command(
+                    command, self.project_root, placeholders, idx
+                )
+            else:
+                wrapped = self._run_integration_verification(
+                    {"name": f"command_{idx}", "steps": [command]},
+                    real_file_path,
+                    idx,
+                )
+                step_result = wrapped["step_results"][0] if wrapped["step_results"] else {
+                    "step_index": 0, "passed": False, "error": wrapped.get("error")
+                }
             command_results.append(step_result)
 
         integrations = [
@@ -2764,7 +3581,7 @@ class ADADCore:
 def run_self_test():
     print("[ADAD Test] 啟動 ADAD 核心引擎自我測試...")
     test_file = "test_system_map.yaml"
-    
+
     # 建立測試資料
     test_data = {
         "version": 1,
@@ -2799,13 +3616,13 @@ def run_self_test():
             }
         }
     }
-    
+
     with open(test_file, "w", encoding="utf-8") as f:
         yaml.safe_dump(test_data, f)
-        
+
     try:
         core = ADADCore(test_file, check_validity=False)
-        
+
         # 1. 測試讀取上下文
         ctx = core.read_context("user_service")
         assert "db_connector" in ctx["dependency_interfaces"]
@@ -2891,7 +3708,7 @@ def run_self_test():
         test_code_content = "import db_connector\nimport sys\n"
         with open(test_code_file, "w", encoding="utf-8") as f:
             f.write(test_code_content)
-        
+
         try:
             core.get_node("calculate_jp_tax")["invariants"] = ["deny_imports: [db_connector]"]
             res = core.check_invariants("calculate_jp_tax", test_code_file)
@@ -2902,13 +3719,13 @@ def run_self_test():
         finally:
             if os.path.exists(test_code_file):
                 os.remove(test_code_file)
-        
+
         # 6. 測試 ADR 設計決策提取與智慧裁剪
         test_adr_file = os.path.join("docs", "adr", "ADR-TEST-999.md")
         os.makedirs(os.path.dirname(test_adr_file), exist_ok=True)
-        
+
         test_adr_content = """# ADR-TEST-999: 測試採用 Redis 進行快取
-        
+
 ## 狀態
 Approved
 
@@ -2924,7 +3741,7 @@ Approved
 """
         with open(test_adr_file, "w", encoding="utf-8") as f:
             f.write(test_adr_content)
-            
+
         try:
             core.get_node("calculate_jp_tax")["decisions"] = ["ADR-TEST-999"]
             ctx = core.read_context("calculate_jp_tax")
@@ -2942,7 +3759,7 @@ Approved
         # 7. 測試模式載入與斷言檢查 (Verification)
         test_pattern_file = os.path.join("docs", "patterns", "test_pattern.md")
         os.makedirs(os.path.dirname(test_pattern_file), exist_ok=True)
-        
+
         test_pattern_content = """# Test Pattern 模式規範
 
 ## 說明
@@ -2954,7 +3771,7 @@ Approved
 """
         with open(test_pattern_file, "w", encoding="utf-8") as f:
             f.write(test_pattern_content)
-            
+
         test_impl_file = "test_impl_file.py"
         try:
             # 7.1 驗證模式載入與裁剪
@@ -2966,22 +3783,22 @@ Approved
             assert "說明: 這是一個用來自我測試的模式說明。" in pat_summary
             assert "規範: - 第一條規範：必須要寫得很好。 - 第二條規範：一定要遵守。" in pat_summary
             print("  - 測試 7.1: 設計模式外部化與 Context 智慧載入成功")
-            
+
             # 7.2 驗證無斷言的阻斷
             core.get_node("calculate_jp_tax")["verification"] = ["must_have_assertions"]
-            
+
             with open(test_impl_file, "w", encoding="utf-8") as f:
                 f.write("def func():\n    return 42\n")
-            
+
             res_fail = core.verify_implementation("calculate_jp_tax", test_impl_file)
             assert res_fail["success"] is False
             assert "必須包含至少一個 assert" in res_fail["error"]
             print("  - 測試 7.2: Verification 無斷言實作自動阻斷成功")
-            
+
             # 7.3 驗證有斷言的通過
             with open(test_impl_file, "w", encoding="utf-8") as f:
                 f.write("def func():\n    assert True\n    return 42\n")
-                
+
             res_pass = core.verify_implementation("calculate_jp_tax", test_impl_file)
             assert res_pass["success"] is True
             print("  - 測試 7.3: Verification 有斷言實作順利通過成功")

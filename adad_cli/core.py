@@ -475,7 +475,11 @@ def init_project(agents=None, project_root: str = ".") -> dict:
 def _iter_relative_files(base: Path):
     """遞迴列出 base 底下所有檔案的相對路徑。"""
     for root, _dirs, files in os.walk(base):
+        if "__pycache__" in Path(root).parts:
+            continue
         for name in files:
+            if name.endswith(".pyc"):
+                continue
             full = Path(root) / name
             yield full.relative_to(base)
 

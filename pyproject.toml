@@ -34,6 +34,9 @@ dev = ["pytest>=7.0", "setuptools>=61", "wheel"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "regression_backlog: tests required for fixed backlog regression checks after changes",
+]
 
 # ponytail: 這一段就是原本缺少的關鍵。
 # 有了 [project.scripts]，pip/pipx 安裝後會在 PATH 上產生一個

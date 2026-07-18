@@ -50,7 +50,7 @@ def cmd_submit(args):
     file_path = args[1] if len(args) > 1 else None
     core = ADADCore()
     res = core.task_submit(node_name, file_path)
-    
+
     if res.get("success"):
         # Task #53: 偵測 Schema 缺口並給出警告
         import subprocess
@@ -64,7 +64,7 @@ def cmd_submit(args):
                 res["warnings"] = gap_data.get("gaps", [])
             except:
                 pass
-                
+
     print(json.dumps(res, ensure_ascii=False, indent=2))
     sys.exit(0 if res.get("success") else 1)
 
@@ -107,11 +107,38 @@ def cmd_isolate(args):
     sys.exit(res.returncode)
 
 
+def cmd_locks(args):
+    if len(args) == 0:
+        mode = "audit"
+    elif len(args) == 1:
+        if args[0] == "--prune":
+            mode = "prune"
+        elif args[0] == "--reconcile":
+            mode = "reconcile"
+        else:
+            print(json.dumps({"success": False, "error": f"不支援的參數: {args[0]} (Usage: --prune | --reconcile)"}, ensure_ascii=False, indent=2))
+            sys.exit(1)
+    else:
+        print(json.dumps({"success": False, "error": "不支援多個或組合參數 (Usage: --prune | --reconcile)"}, ensure_ascii=False, indent=2))
+        sys.exit(1)
+
+    core = ADADCore()
+    if mode == "audit":
+        res = core.audit_source_locks()
+    elif mode == "prune":
+        res = core.reconcile_source_locks("prune")
+    else:
+        res = core.reconcile_source_locks("reconcile")
+
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    sys.exit(0 if res.get("success") is True else 1)
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("submit", "approve", "reject", "isolate"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("submit", "approve", "reject", "isolate", "locks"):
         print(json.dumps({
             "success": False,
-            "error": "用法: python adad_task.py <submit|approve|reject|isolate> <node_name> [...]"
+            "error": "用法: python adad_task.py <submit|approve|reject|isolate|locks> <node_name> [...]"
         }, ensure_ascii=False))
         sys.exit(1)
 
@@ -124,6 +151,8 @@ def main():
         cmd_reject(rest)
     elif sub == "isolate":
         cmd_isolate(rest)
+    elif sub == "locks":
+        cmd_locks(rest)
 
 
 if __name__ == "__main__":

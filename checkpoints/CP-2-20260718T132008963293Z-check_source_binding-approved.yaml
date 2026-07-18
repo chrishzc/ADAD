@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260718T132008963293Z-check_source_binding
+  phase: 2
+  timestamp: '2026-07-18T13:20:08.963293+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: check_source_binding
+    task_id: check_source_binding@v17@44de46
+    system_map_version: 17
+    source_hash: 44de4682531bf2d6996b2ddb0edbc99c2bc791befaa1aa36b0056f4bfd9e2e08
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''
