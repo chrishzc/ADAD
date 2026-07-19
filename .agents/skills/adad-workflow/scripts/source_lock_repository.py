@@ -607,6 +607,14 @@ class SourceLockRepository:
                         "manual action is required."
                     )
                     return cleanup
+                if current.get("state") == "present":
+                    current_payload = current.get("payload") or {}
+                    if current_payload.get("task_id") != task_id:
+                        cleanup["error"] = (
+                            "Canonical lock belongs to a different task; "
+                            "ownership check failed to prevent race condition."
+                        )
+                        return cleanup
                 cleanup["attempted"] = True
                 quarantined = self.quarantine(path, current)
                 cleanup["quarantine"] = quarantined

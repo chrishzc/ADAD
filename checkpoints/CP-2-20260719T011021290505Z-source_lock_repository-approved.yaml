@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260719T011021290505Z-source_lock_repository
+  phase: 2
+  timestamp: '2026-07-19T01:10:21.290505+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: source_lock_repository
+    task_id: source_lock_repository@v18@01c602
+    system_map_version: 18
+    source_hash: 01c602040486dbfb0426355efbff31178856c686c359a1d618efbd11d4e6adb2
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''
