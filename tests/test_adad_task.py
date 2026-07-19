@@ -1,4 +1,4 @@
-﻿
+
 
 # -*- coding: utf-8 -*-
 import pytest
@@ -178,10 +178,19 @@ def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch
         return process
 
     def fake_run(argv, **kwargs):
-        captured["termination"] = (argv, kwargs)
+        captured["termination_run"] = (argv, kwargs)
+
+    def fake_killpg(pgid, sig):
+        captured["killpg"] = (pgid, sig)
 
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(_canonical_module.subprocess, "run", fake_run)
+
+    import os
+    if hasattr(os, "killpg"):
+        monkeypatch.setattr(os, "killpg", fake_killpg)
+    else:
+        monkeypatch.setattr(_canonical_module.os, "killpg", fake_killpg, raising=False)
 
     result = core._run_verification_command(
         {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
@@ -194,8 +203,14 @@ def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch
     assert result["returncode"] is None
     assert result["stdout"] == "after"
     assert result["stderr"] == "after-error"
-    assert captured["kwargs"]["creationflags"] == _canonical_module.subprocess.CREATE_NEW_PROCESS_GROUP
-    assert captured["termination"][0] == ["taskkill", "/PID", "4321", "/T", "/F"]
+
+    if os.name == "nt":
+        assert captured["kwargs"]["creationflags"] == _canonical_module.subprocess.CREATE_NEW_PROCESS_GROUP
+        assert captured["termination_run"][0] == ["taskkill", "/PID", "4321", "/T", "/F"]
+    else:
+        assert captured["kwargs"]["preexec_fn"] == os.setsid
+        assert captured["killpg"] == (4321, _canonical_module.signal.SIGKILL)
+
     assert process.communicate_calls == 2
 
 
