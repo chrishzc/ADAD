@@ -2,6 +2,7 @@
 import os
 import subprocess
 import importlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +13,7 @@ pytestmark = pytest.mark.regression_backlog
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-VENV_PYTHON = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+PYTEST_PYTHON = Path(sys.executable)
 
 
 def _project_root(tmp_path):
@@ -39,7 +40,7 @@ def _run_isolated_pytest(project_root, *args):
 
 def _run_isolated_pytest_with_env(project_root, env_overrides, *args):
     cmd = [
-        str(VENV_PYTHON),
+        str(PYTEST_PYTHON),
         "-m",
         "pytest",
         "-q",
