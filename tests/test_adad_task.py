@@ -208,7 +208,7 @@ def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch
         assert captured["kwargs"]["creationflags"] == _canonical_module.subprocess.CREATE_NEW_PROCESS_GROUP
         assert captured["termination_run"][0] == ["taskkill", "/PID", "4321", "/T", "/F"]
     else:
-        assert captured["kwargs"]["preexec_fn"] == os.setsid
+        assert captured["kwargs"]["start_new_session"] is True
         assert captured["killpg"] == (4321, _canonical_module.signal.SIGKILL)
 
     assert process.communicate_calls == 2
