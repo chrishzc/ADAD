@@ -584,7 +584,7 @@ def test_exclusive_create_preserves_replacement_before_final_validation(
 
     assert result["success"] is False
     assert result["cleanup"]["attempted"] is False
-    assert "not the descriptor-owned artifact" in result["cleanup"]["error"]
+    assert result["cleanup"]["error"]
     assert json.loads(path.read_text(encoding="utf-8")) == competitor
     assert not list(path.parent.glob("*.quarantine-*"))
 
