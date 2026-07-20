@@ -111,6 +111,38 @@ def test_validate_verification_conditions_invalid():
     with pytest.raises(ValueError, match="cannot specify both 'expect' and 'expect_exception'"):
         validate_verification_conditions([{"input": 123, "expect": 456, "expect_exception": "ValueError"}])
 
+
+def test_validate_verification_conditions_requires_explicit_command_timeouts():
+    valid_items = [
+        {"case": {"input": {"x": 1}, "expect": 2}},
+        {"command": {"argv": ["tool"], "timeout": 30}},
+        {"integration_case": {"steps": [{"argv": ["tool"], "timeout": 5}]}},
+        "must_have_assertions",
+    ]
+
+    assert validate_verification_conditions(valid_items) == valid_items
+
+    with pytest.raises(ValueError, match="must explicitly specify 'timeout'"):
+        validate_verification_conditions([{"command": {"argv": ["tool"]}}])
+
+    with pytest.raises(ValueError, match="greater than 0 and no more than 300"):
+        validate_verification_conditions([{"command": {"argv": ["tool"], "timeout": True}}])
+
+    with pytest.raises(ValueError, match="integration_case at index 0 step 0 must explicitly specify 'timeout'"):
+        validate_verification_conditions([
+            {"integration_case": {"steps": [{"argv": ["tool"]}]}}
+        ])
+
+def test_validate_verification_conditions_rejects_mixed_item_kinds():
+    with pytest.raises(ValueError, match="must specify only one"):
+        validate_verification_conditions([
+            {
+                "case": {"input": {"x": 1}, "expect": 2},
+                "command": {"argv": ["tool"]},
+            }
+        ])
+
+
 def test_validate_assumptions_ok():
     # 測試合規 assumptions 列表
     assumptions = ["OS 必須是 Windows", "必須預先安裝 git"]

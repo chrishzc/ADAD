@@ -90,6 +90,93 @@ INCLUDE_PATTERN = re.compile(r'<!--\s*include:?\s*(\S+?\.(?:md|yaml|txt))\s*-->'
 沒有 `domain` 資訊的模組（例如尚未走三層架構、或舊專案還沒補標記）會被跳過，
 不會被誤判為違規，向下相容既有專案。
 
+## 6. 2026-07-19：Verification runner、被動資產漂移與 Windows 中斷事件
+
+### 現象
+
+- `adad_core` 的 Task submit 在 Windows 顯示 `KeyboardInterrupt`，或以摘要回傳
+  `Verification 檢查未通過`。
+- structured receipt 顯示 pytest 子行程其實已輸出 `70 passed`，但父 runner 在
+  `process.communicate()` 收集輸出時收到中斷，因此依 fail-closed 規則拒絕將 Task
+  轉為 `submitted`。
+- `.agents/skills/.../adad_core.py` 與 canonical
+  `adad_source/agents/.../adad_core.py` 的 hash 不同；`sync_assets --check` 也列出
+  `adad_core.py`、`adad_task.py` 與 packaged resource 的差異。使用者從 `.agents`
+  執行 CLI，因而可能取得和 canonical 不同的 runner 行為。
+
+### 成因
+
+1. 先前直接改動被動 `.agents` 副本，沒有先回寫 canonical source 再由
+   `sync_assets` 生成，破壞「只有 `adad_source` 可主動修改」的單一真實來源規則。
+2. Verification workspace 的舊規則把所有 `cwd=project` command 一律改為隔離
+   workspace；這和 non-pytest command 應保留 project-root `{workspace}` 的相容性
+   要求衝突，且 project-root pytest basetemp 又容易遭 Windows 鎖定。
+3. 受控／內嵌 Windows console 會向父 Python 發出中斷；這個訊號可能在 pytest
+   已輸出成功摘要後才到達。父 runner 沒有可確認的子行程成功 exit code 時，不能
+   將該次驗證視為成功。
+
+### 修正與驗證
+
+- 採用 R3 折衷規則：只有 pytest command（即使 `cwd=project`）建立 project-root
+  內、每次唯一的 `adad_verify_work_*` workspace；非 pytest 的 `cwd=project`
+  command 仍以 project root 作 `{workspace}`。
+- canonical `adad_core.py` 補上上述規則及受中斷時的 structured fail-closed receipt；
+  `tests/test_adad_task.py` 增加 pytest workspace 隔離回歸。
+- canonical 驗證結果為 `70 passed`；Task 以不附著 console 的 `pythonw.exe` runner
+  成功提交並完成 CP-2 核准。不得以手動改寫 Task status 或略過 verification 取代此流程。
+
+### 預防與後續
+
+- 修改 workflow asset 時只改 `adad_source`，再以 `python -m adad_cli.sync_assets --check`
+  驗證；不得直接修 `.agents` 或 `adad_cli/resources`。
+- `adad_task.py` 的被動資產漂移屬另一個原子節點：先將其 index CLI 變更補回
+  canonical source、完成其 Task 驗證後，才能執行全域資產同步；不可為了修正
+  `adad_core` 單一 Task 而覆寫其他節點的未同步變更。
+- 遇到外部中斷時，只有已確認子行程 exit code 為成功才可視為成功；否則保留
+  structured evidence 並拒絕提交。受 console control event 影響的 Windows 環境，
+  可使用 `pythonw.exe` 啟動已驗證的提交程序以避免附著 console。
+
+### 6.1 操作 Runbook：pytest 顯示通過，但 Verification 被中斷
+
+此案例的辨識條件是同一筆 `command_results` 同時符合：
+
+- `stdout` 已含 `N passed in ...`；
+- `interrupted` 為 `true`；
+- `returncode` 為 `null`，並帶有 `command 執行被使用者中斷`。
+
+這表示 pytest 摘要可作為診斷證據，**不能**取代預期 exit code；Verification 必須維持
+fail-closed。它不是 assertion failure，也不能僅憑 submit 的泛化錯誤訊息歸因為
+`.agents/tasks` ACL 或 snapshot 寫入問題。先在專案根目錄直接取得 structured receipt：
+
+```powershell
+.\.venv\Scripts\python.exe .\.agents\skills\adad-workflow\scripts\verify_implementation.py adad_core
+```
+
+若 receipt 符合上述中斷特徵，且 pytest 的測試摘要已符合 Task 的驗證要求，使用下列
+不附著 console 的方式重新執行 submit。保留 stdout、stderr 與 exit code，作為提交證據：
+
+```powershell
+$script = Join-Path $PWD ".agents\skills\adad-workflow\scripts\adad_task.py"
+$out = Join-Path $env:TEMP "adad-submit-adad_core.out"
+$err = Join-Path $env:TEMP "adad-submit-adad_core.err"
+
+$p = Start-Process `
+  -FilePath ".\.venv\Scripts\pythonw.exe" `
+  -ArgumentList @($script, "submit", "adad_core") `
+  -RedirectStandardOutput $out `
+  -RedirectStandardError $err `
+  -Wait -PassThru -WindowStyle Hidden
+
+"exit_code=$($p.ExitCode)"
+Get-Content -Raw $out
+Get-Content -Raw $err
+```
+
+只有 `exit_code=0` 且 stdout 的 JSON 為 `success: true`、`status: submitted` 時，才可
+進入人工 CP-2。不要手動改寫 Task status、略過 verification，或以移除 ACL deny 作為此
+症狀的預設修復；若 receipt 沒有中斷特徵，再另行檢查 `.agents/tasks` 及
+`.agents/tasks/.task_index.lock` 的 create/write/rename/delete 可寫性。
+
 
 ## 驗證方式
 

@@ -1,6 +1,6 @@
 ## 5. 代辦事項總表（合併版，執行清單）
 
-以下代辦目前最高已使用編號為 #83，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
+以下代辦目前最高已使用編號為 #85，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
 待辦事項。**這節才是「現在要動手做哪一項」的答案**，第 1~4 節是「做完之後系統該
 長什麼樣子」的規格。
 
@@ -51,9 +51,23 @@
 | #54 | done | tests/test_generate_task.py::test_task_schema_accepts_complete_v3_snapshot | 存在 | 已完成 v3 schema、`generate_task` 升級及 Readiness 驗證。 |
 | #57 | done | tests/test_compile_map.py::test_normalize_markdown_source_code_fences | 存在 | 已完成 Source 正規化接入 `parse_markdown`。 |
 | #58 | done | tests/test_verify_implementation.py::test_verify_implementation_command_timeout_decodes_bytes | 存在 | 已完成例外路徑與鎖清理、CP-2 審查。 |
+| #61 | done | tests/test_verify_implementation.py::test_verification_command_ignores_outer_git_index_and_preserves_other_env | 存在 | CP-2 `adad_core@v18@8576c7` 已核准；驗證子程序清除 repo-routing `GIT_*`，並斷言外層 index 未變。 |
+| #62 | done | tests/test_adad_pre_commit.py::test_get_staged_files_selects_expected_diff_target | 存在 | CP-2 已核准；空／缺少 `GITHUB_BASE_REF` 回退 `HEAD~1`，PR 仍使用 `origin/<base>`。 |
+| #63 | done | 不需要（SOP 文件契約） | 不適用 | `RELEASE_SOP.md` 已列入 linked-worktree `GIT_*`、release index、空 base ref 與 Actions 驗收；v1.6.2 已依此執行。 |
+| #64 | done | tests/test_adad_pre_commit.py::test_workflow_test_harness_strips_outer_ci_event_context | 存在 | CP-2 已核准；harness 預設移除 CI／GitHub event context，僅明確 override 可 opt-in。 |
+| #65 | done | 不需要（SOP 文件契約） | 不適用 | `RELEASE_SOP.md` 已記錄巢狀 pytest／CI context 邊界、最小重現與驗收。 |
+| #66 | done | tests/test_read_context.py::test_read_context_missing_references_are_structured_warnings | 存在 | CP-2 `adad_core@v18@8576c7` 已核准；缺失參考改列入 `context_warnings` 結構。 |
+| #67 | done | tests/test_verification_absence_contract.py | 存在 | CP-2 `verification_absence_contract@v17` 已核准；以 `expect_absent_keys` 表達鍵不存在。 |
+| #68 | done | 不需要（Reviewer 文件規則） | 不適用 | `.agents/AGENTS.md` 的「Reviewer Unicode 證據規則」已要求 strict UTF-8、U+FFFD、JSON read-back 與撤回規則。 |
+| #69 | done | tests/test_sub_maps.py | 存在 | CP-2 `adad_core@v18@8576c7` 已核准；已覆蓋遞迴合併、owner 保存與 path/cycle fail-fast。 |
+| #70 | done | tests/test_compile_sub_maps.py | 存在 | CP-2 `compile_map@v17@0bbd06` 已核准；既有 owner／明確 Sub Map 分流，root 保持不膨脹。 |
+| #71 | done | tests/test_sub_map_schema.py | 存在 | CP-2 `sub_map_schema@v17@7691db` 已核准；Schema 定義 `sub_maps` 與 `sub_map` ownership。 |
+| #72 | done | 不需要（SOP 文件契約） | 不適用 | `RELEASE_SOP.md` 已含 root/child count、FinanceImport、外部專案 upgrade 與 Actions 後本機更新驗收。 |
 | #81 | done | tests/test_pytest_regression_lifecycle.py::test_temporary_lifecycle_state_has_exact_fixed_fields | 存在 | 已完成 lifecycle 實作、TODO 清理及狀態推進。 |
 | #82 | planned | — | 尚未建立 | pytest runner 應在 OS temp 建立受控 `--basetemp`；成功後安全清除，失敗時保留並回報診斷路徑，且禁止將暫存根放在 repo 或其父目錄。 |
 | #83 | planned | — | 尚未建立 | `.agents/AGENTS.md` 僅保留專案硬性規則與 ADAD skill 入口；完整架構、Checkpoint 與地圖操作流程由 `adad-workflow/SKILL.md` 唯一承載。 |
+| #84 | planned | — | 尚未建立 | `adad_core` 需明確建立 Phase-2 末尾的交付步驟：`validated -> linted/tested -> deployed`，不得讓 approve 自動跳過中間狀態，並補齊對應 checklist / regression 驗證。 |
+| #85 | planned | — | 尚未建立 | 本次案例：純 README／一般文件變更與可證明不重疊的施工，被全域 Task／Source Lock 一律序列化而無法平行處理；需依風險分級豁免或縮小鎖定單位，同時保留 fail-closed 與審計證據。 |
 ### A. 工程衛生（文件與實作落差 / Dogfooding / 測試 CI）
 
 |#|代辦事項|歸屬|優先度|
@@ -65,20 +79,20 @@
 |5|~~沒有正式測試套件（無 `/tests`、無 pytest），CLI 腳本缺少自動化覆蓋~~ **✅ 已完成**（已建立 pytest 套件，涵蓋 workflow CLI、Task lifecycle、schema、跨平台 I/O、hook 與 Verification fixture；`pyproject.toml` 提供 `dev` extra 與 pytest 設定。2026-07-13 使用全域 `C:\Python314\python.exe -m pytest -q` 實際執行，135 項全數通過。）|測試|已完成|
 |6|~~沒有 CI/CD（無 `.github/workflows`），README 建議的「CI 跑 `adad_pre_commit.py`」自己沒做到~~ **✅ 已完成**（GitHub Actions 會在 push／pull request 執行資產同步檢查、ADAD guardrail、架構編譯與完整 pytest。）|CI|已完成|
 |7|~~沒有 `CHANGELOG.md`，Improvements 都寫在 README 尾巴長條文字，無版本對照~~ **✅ 已完成**（已建立 `CHANGELOG.md`，維護版本化與 Unreleased 改善紀錄。）|文件|已完成|
-|61|Verification command 在 linked worktree 的 commit hook 內繼承 `GIT_INDEX_FILE` 等 repo-scoped 環境，巢狀 Git 測試會誤讀／污染外層 release index；runner 必須清除 repo-routing Git 變數並驗證外層 index 不變。|ADAD Core / Dogfooding|**P0**|
-|62|GitHub push 事件的 `GITHUB_BASE_REF` 為空字串，CI diff base 被組成無效的 `origin/`；空值／缺值須回退 `HEAD~1`，並補 push、PR、非 CI 測試。|Pre-commit / CI|**P0**|
-|63|Release SOP 缺少 linked-worktree `GIT_*` 洩漏、release index 污染檢查、GitHub push 空 `GITHUB_BASE_REF` 與發布後 Actions 驗證；補成可重複執行的故障預防清單。|文件 / Dogfooding|**P0**|
-|64|測試 harness 繼承外層 GitHub Actions 的 `CI`／`GITHUB_*` event context，使臨時 repo 誤走 `HEAD~1` 或遠端 base；預設隔離並保留明確 opt-in。|測試 / Dogfooding|**P0**|
-|65|Release SOP 必須記錄巢狀測試與外層 CI context 的邊界、重現方式及驗收條件，避免同類 CI 修補反覆浪費發布時間。|文件 / Dogfooding|**P0**|
+|61|~~Verification command 在 linked worktree 的 commit hook 內繼承 `GIT_INDEX_FILE` 等 repo-scoped 環境，巢狀 Git 測試會誤讀／污染外層 release index；runner 必須清除 repo-routing Git 變數並驗證外層 index 不變。~~ **✅ 已完成**（見任務狀態表與 `tests/test_verify_implementation.py`。）|ADAD Core / Dogfooding|已完成（原 P0）|
+|62|~~GitHub push 事件的 `GITHUB_BASE_REF` 為空字串，CI diff base 被組成無效的 `origin/`；空值／缺值須回退 `HEAD~1`，並補 push、PR、非 CI 測試。~~ **✅ 已完成**（見 `tests/test_adad_pre_commit.py`。）|Pre-commit / CI|已完成（原 P0）|
+|63|~~Release SOP 缺少 linked-worktree `GIT_*` 洩漏、release index 污染檢查、GitHub push 空 `GITHUB_BASE_REF` 與發布後 Actions 驗證；補成可重複執行的故障預防清單。~~ **✅ 已完成**（`RELEASE_SOP.md`；v1.6.2 實際發布驗收。）|文件 / Dogfooding|已完成（原 P0）|
+|64|~~測試 harness 繼承外層 GitHub Actions 的 `CI`／`GITHUB_*` event context，使臨時 repo 誤走 `HEAD~1` 或遠端 base；預設隔離並保留明確 opt-in。~~ **✅ 已完成**（見 `tests/test_adad_pre_commit.py`。）|測試 / Dogfooding|已完成（原 P0）|
+|65|~~Release SOP 必須記錄巢狀測試與外層 CI context 的邊界、重現方式及驗收條件，避免同類 CI 修補反覆浪費發布時間。~~ **✅ 已完成**（`RELEASE_SOP.md` 的最小重現與驗收條件。）|文件 / Dogfooding|已完成（原 P0）|
 |82|pytest 外層暫存根生命週期：由統一 runner 建立受控 `--basetemp`；成功後僅清除本次 owned root，失敗時保留並輸出路徑；拒絕 repo／repo parent、symlink、junction、identity mismatch 與未通過 preflight 的清理。|測試 / Dogfooding|**P1**|
 |83|**ADAD 指示檔分層與去重**：`.agents/AGENTS.md` 縮為每輪必讀的專案硬性規則與 `adad-workflow` skill 入口；完整 ADAD 架構、Checkpoint 與地圖操作流程僅保留於 `.agents/skills/adad-workflow/SKILL.md`。同步調整產物，避免重複規範佔用固定上下文。|ADAD 文件 / 資產同步|**P1**|
-|66|Task 匯出的 pattern／decision summary 在參考文件不存在時夾帶載入錯誤文字，污染子代理上下文；應改為乾淨的缺省摘要或結構化 warning。|Task 核發品質|**P1**|
-|67|Verification 對「鍵不存在」與 `null` 缺少明確語意及核發前一致性檢查，造成規格與 Algorithm 衝突；應提供 deletion assertion 或 Readiness gate。|Task 核發品質|**P1**|
-|68|Reviewer 判定 Task 編碼異常前應做 strict UTF-8 byte decode、replacement character 與 JSON read-back；不得只憑終端顯示退回，避免誤算退回次數。|Reviewer 品質|**P1**|
-|69|ADADCore 必須遞迴載入 YAML `sub_maps`、追蹤 module owner 並依 owner 儲存；禁止合併讀取後整份倒回 root。|ADAD Core / Split IR|**P0**|
-|70|`compile_map` 必須沿用既有 owner 或明確 `Sub Map` 分流，阻斷新節點 owner 不明，避免 63 節點再次膨脹進 root。|Compiler / Split IR|**P0**|
-|71|正式 Schema 必須定義 `sub_maps` mapping 與 module ownership；路徑、循環、重名交由 runtime fail-fast。|Schema / Split IR|**P0**|
-|72|Release SOP 增加 root/child count、FinanceImport context、upgrade 後不膨脹及 Actions 成功後更新本機的驗收。|Release / Dogfooding|**P0**|
+|66|~~Task 匯出的 pattern／decision summary 在參考文件不存在時夾帶載入錯誤文字，污染子代理上下文；應改為乾淨的缺省摘要或結構化 warning。~~ **✅ 已完成**（結構化 `context_warnings`；見 `tests/test_generate_task.py`。）|Task 核發品質|已完成（原 P1）|
+|67|~~Verification 對「鍵不存在」與 `null` 缺少明確語意及核發前一致性檢查，造成規格與 Algorithm 衝突；應提供 deletion assertion 或 Readiness gate。~~ **✅ 已完成**（`expect_absent_keys`；見 `tests/test_verification_absence_contract.py`。）|Task 核發品質|已完成（原 P1）|
+|68|~~Reviewer 判定 Task 編碼異常前應做 strict UTF-8 byte decode、replacement character 與 JSON read-back；不得只憑終端顯示退回，避免誤算退回次數。~~ **✅ 已完成**（`.agents/AGENTS.md` Reviewer Unicode 證據規則。）|Reviewer 品質|已完成（原 P1）|
+|69|~~ADADCore 必須遞迴載入 YAML `sub_maps`、追蹤 module owner 並依 owner 儲存；禁止合併讀取後整份倒回 root。~~ **✅ 已完成**（見 `tests/test_sub_maps.py`。）|ADAD Core / Split IR|已完成（原 P0）|
+|70|~~`compile_map` 必須沿用既有 owner 或明確 `Sub Map` 分流，阻斷新節點 owner 不明，避免 63 節點再次膨脹進 root。~~ **✅ 已完成**（見 `tests/test_compile_sub_maps.py`。）|Compiler / Split IR|已完成（原 P0）|
+|71|~~正式 Schema 必須定義 `sub_maps` mapping 與 module ownership；路徑、循環、重名交由 runtime fail-fast。~~ **✅ 已完成**（見 `tests/test_sub_map_schema.py`。）|Schema / Split IR|已完成（原 P0）|
+|72|~~Release SOP 增加 root/child count、FinanceImport context、upgrade 後不膨脹及 Actions 成功後更新本機的驗收。~~ **✅ 已完成**（`RELEASE_SOP.md` 與 v1.6.2 發布驗收。）|Release / Dogfooding|已完成（原 P0）|
 
 ### B. Schema / 架構層級缺口（Architecture Proposal / 模組定義）
 
@@ -195,6 +209,12 @@
 |---|---|---|---|
 |54|**Task 快照保真度**：`generate_task`／`read_context_by_node` 必須把 Module 的 inline `Decisions`（以及其他施工必要欄位）完整帶入 `.agents/tasks/<node>.task.json`，並新增 schema／pytest 防止欄位靜默遺失。2026-07-13 #37 首次核發因 pytest 要求只存在於 `Decisions`、Task 端未收到而遭駁回，已證明這是可重現的核發品質缺口。|ADAD Task snapshot + Kernel|**高——會讓 coding 模型在資訊不完整下仍通過提交 Gate**|
 
+### H. 流程適用性與並行性缺口
+
+|#|代辦事項|歸屬|優先度|
+|---|---|---|---|
+|85|**變更風險分級與可證明不重疊的平行施工**：記錄 2026-07-19 案例：純 README／一般文件變更與其他可獨立處理的工作，因所有變更一律要求 Task 核發、CP-2 驗收，且同一 Source 一律採檔案級 Source Lock，遭完全序列化。新增明確的 `documentation_exempt` 類別（僅 allowlist 的一般 Markdown 文件、純文件 diff、不得觸碰 `system_map*`、`AGENTS.md`、`SKILL.md`、schema、模板、CI 或生成資產），免核發與驗收但產出變更清單／豁免理由；將 Source Lock 改為只在已宣告且可證明不重疊的施工單位上允許平行（不同 `file.py::symbol`、無共用 `allowed_files`／生成產物／驗證寫入），其餘情況維持 fail-closed。回歸測試須覆蓋：一般 README 放行、治理文件仍受 Gate、不同 symbol 放行、同 symbol／共用產物拒絕，以及審計收據完整性。|ADAD Task Gate + Source Lock + pytest|**P1**——高影響；若錯誤放寬會破壞施工隔離，因此預設拒絕且只對可證明安全的情況開放。|
+
 ### 2026-07-13 更新紀錄
 
 - 完成跨平台 UTF-8 subprocess、strict read、atomic write 與 `.gitattributes` 換行政策。
@@ -220,7 +240,7 @@
 |#58|2|2／3|2|1|v8 Task 已提交；13 focused tests 通過，UTF-8 Gate 與診斷契約完成|`task58-adad_core-missing-task-gate-and-acceptance`|
 |#54|1|1／3|1|2|v7 Task 已提交；Schema v3/v2 相容驗證完成|`task-54.snapshot-fidelity.unbound-schema-and-core-conflict`|
 |#57|2|2／3|2|1|v8 Task 已提交；整檔 Source 修訂後 Invariants 與 4 cases 通過|`task-57.source-backtick-unbound-parser-contract`|
-|#59/#60|1|1／3|1|0|合併規格被 Readiness Gate 退回；已拆為四個 sequential medium Task|`task-59-60.combined-high-readiness-atomicity`|
+|#59/#60|1|1／3|1|0|**✅ 已完成**（已拆為 4 個 sequential medium Task 且已全部通過編譯、測試與核准）|task-59-60.combined-high-readiness-atomicity|
 |#59 Hook|2|1／3|1|2|R1 明定解析 diagnostic JSON 後比較 Windows Path；舊 Task 停止，新 Task 重發|`task-59-hook.raw-json-windows-path-escaping`|
 |#62|2|1／3|0|1|首版實作與 18 tests 通過，但核發後新增 #63 使 Task source_hash 過期；依 v14 重發，不計 coding 失敗|`task-62.issue-before-architecture-batch-finalized`|
 
@@ -251,6 +271,6 @@ R1 修訂摘要：
 
 
 ### 代辦事項優先順序
-- #59、#60、#58、#54、#37（剩餘 case fixture schema + verifier 接線）、#55、#56、#57、#33、#29；低優先再評估 #28、#47。
+- #59、#60、#58、#54、#85、#37（剩餘 case fixture schema + verifier 接線）、#55、#56、#57、#33、#29；低優先再評估 #28、#47。
 
 `#25/#27/#30/#34/#38/#39` 這幾項工程量大或收益不確定，建議明確標記 P2，避免搶資源。

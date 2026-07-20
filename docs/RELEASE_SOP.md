@@ -171,6 +171,33 @@ Push-Location $release
 Pop-Location
 ```
 
+同一個步驟也必須更新「使用者層級」的 `adad` 命令；它是外部專案未安裝
+`adad-cli` 時實際解析到的 CLI。不要使用外部專案的 `.venv\Scripts\python.exe`，
+否則只會更新單一專案而非全域命令。以下命令會透過 Windows Python Launcher
+選取使用者 Python、從已驗證的 release worktree 安裝，並直接驗證該使用者
+Scripts 目錄內的 `adad.exe`：
+
+```powershell
+Push-Location $release
+$globalPython = (py -3 -c "import sys; print(sys.executable)").Trim()
+if (-not $globalPython) { throw "找不到使用者 Python；無法更新全域 adad CLI" }
+$userScripts = (& $globalPython -c "import sysconfig; print(sysconfig.get_path('scripts', scheme='nt_user'))").Trim()
+if (-not $userScripts) { throw "無法解析使用者 Python Scripts 目錄" }
+
+& $globalPython -m pip install --user --upgrade .
+if ($LASTEXITCODE -ne 0) { throw "全域 adad-cli 升級失敗" }
+
+$globalAdad = Join-Path $userScripts 'adad.exe'
+if (-not (Test-Path -LiteralPath $globalAdad)) { throw "找不到更新後的全域 adad.exe: $globalAdad" }
+& $globalAdad --version
+if ($LASTEXITCODE -ne 0) { throw "全域 adad CLI 版本驗證失敗" }
+Pop-Location
+```
+
+外部專案不應在自身 `pyproject.toml` 宣告 `adad-cli`。若專案已有
+`.venv\Scripts\adad.exe`，它會在啟用 venv 後優先於上述全域 CLI；必須一併
+升級該 venv 的套件，或移除過時的專案層安裝後再驗證 `Get-Command adad`。
+
 不得直接拿使用者正在開發的專案試升級。從含 `sub_maps` 的外部專案建立乾淨副本 `<UPGRADE_COPY>`，確認 `git status --short` 為空：
 
 ```powershell

@@ -30,14 +30,14 @@
 - Description: 維護 pytest 與套件建置測試依賴，並在 setuptools 邊界排除 Python 編譯快取（規格總覽 #5、#76-A）。
 - Source: pyproject.toml
 - Preferred Pattern: black_box_test
-- Decisions: [測試與 build backend 依賴透過 .venv 的 dev extra 安裝；resources/**/* 必須以 exclude-package-data 排除任意層級 __pycache__ 與 *.pyc]
+- Decisions: [測試與 build backend 依賴透過 .venv 的 dev extra 安裝；resources/**/* 必須以 exclude-package-data 排除任意層級 __pycache__ 與 *.pyc；build hook 必須在 build_py 前後清除 build/lib/adad_cli/resources 中的既有 bytecode，避免重用髒 build 目錄]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_package_assets.py", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0, "timeout": 120}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_package_assets.py", "--basetemp", "{workspace}/pytest", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 120}
 - Dependencies: []
 - Input:
   - test_file: tests/test_package_assets.py
-  - allowed_files: [pyproject.toml, tests/test_package_assets.py]
+  - allowed_files: [pyproject.toml, adad_cli/build_hooks.py, tests/test_package_assets.py]
 - Output:
   - test_result: report
 - TODO:
@@ -153,7 +153,7 @@
 - Decisions: [不以 additionalProperties 靜默接受 sub_maps；不要求 child shard 具備完整 root environment/domains；runtime path safety 不能只靠 JSON Schema]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_sub_map_schema.py", "-q", "--basetemp", "{workspace}/pytest-submap-schema"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_sub_map_schema.py", "-q", "--basetemp", "{workspace}/pytest-submap-schema", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: [adad_core, compile_map]
 - Input:
   - root_ir: object
@@ -288,18 +288,18 @@
 ##### Module: task_verification_conditions
 - Type: schema
 - Observability: not_required
-- Description: 以既有 Verification case 的 input、expect 與 expect_exception 表達 Preconditions/Postconditions，不新增重複欄位（#21）。
+- Description: 驗證完整 Verification 項目：case 以 input、expect 與 expect_exception 表達 Preconditions/Postconditions；command 必須使用既有 timeout 欄位並明確提供正數秒數，不新增重複欄位（#21）。
 - Source: adad_cli/workflow/task_contract_schema.py::validate_verification_conditions
 - Preferred Pattern: extend_existing_contract
 - Complexity: low
-- Decisions: [Preconditions 由 case input 與前置狀態表達；Postconditions 由 expect 或 expect_exception 表達]
-- Invariants: []
+- Decisions: [Preconditions 由 case input 與前置狀態表達；Postconditions 由 expect 或 expect_exception 表達；command timeout 必須為明確正數，外層執行 timeout 由 Agent 規範保留至少 10 秒清理與回報時間]
+- Invariants: [每個 Verification command 都必須明確提供 timeout，且 timeout 為大於 0 且不超過 300 的數值；每個 dict Verification 項目只能指定 case、command、integration_case 三者之一]
 - Verification: []
 - Dependencies: [verify_implementation]
 - Input:
-  - verification_cases: array
+  - verification_items: array
 - Output:
-  - validated_verification_cases: array
+  - validated_verification_items: array
 - TODO:
   - [ ] 規格總覽 #21：以前後條件強化 Verification case
 - Checkpoint:
@@ -561,17 +561,17 @@
 - Source: adad_cli/__init__.py
 - Preferred Pattern: single_source_of_truth
 - Complexity: low
-- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.2]
+- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.3]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.2'"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.3'"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: []
 - Input:
   - release_version: string
 - Output:
   - package_version: string
 - TODO:
-  - [ ] 發布 1.6.2：整合 Task／source-lock 強化、資產同步與 pytest 回歸覆蓋
+  - [ ] 發布 1.6.3：Task index、Verification timeout 契約與 Windows pytest runner 強化
 - Checkpoint:
   - [x] CP-1-075-PATCH-RELEASE (validated：2026-07-16 人工要求更新 1.6.1 並安裝本機版本)
 
@@ -631,6 +631,30 @@
 - Checkpoint:
   - [ ] CP-1-032 (planned)
 
+##### Module: task_backlog_reconciliation
+- Type: documentation
+- Observability: not_required
+- Description: 將已驗證完成的 backlog 項目回填為完成狀態，並連結專屬 pytest、核准 checkpoint 或文件驗收證據，避免舊 P0／P1 紀錄再次被誤判為待辦。
+- Source: docs/specifications/05_task_backlog.md
+- Preferred Pattern: documentation_as_evidence
+- Complexity: low
+- Decisions:
+  - 僅能將已有可重現 pytest、已核准 CP-2 或可定位文件驗收證據的項目標為完成。
+  - 原優先度必須保留為歷史資訊；沒有專屬 pytest 的純文件規則必須明示「不需要」及原因。
+  - 未完成項目不得因同類功能已完成而一併結案。
+- Invariants: []
+- Verification: []
+- Dependencies: []
+- Input:
+  - backlog_entries: array
+- Output:
+  - reconciled_backlog: markdown
+- Retry Budget: 2
+- TODO:
+  - [ ] 回填已完成項目的狀態與可定位證據
+- Checkpoint:
+  - [x] CP-1-084-BACKLOG-RECONCILIATION (validated：2026-07-19 人工核准)
+
 ##### Module: release_sop
 - Type: documentation
 - Observability: not_required
@@ -656,6 +680,31 @@
   - [x] CP-1-065-SOP (validated：2026-07-15 人工核准納入巢狀 CI 經驗)
   - [x] CP-1-072-SUBMAP-RELEASE (validated：2026-07-15 人工要求更新本機版本)
   - [x] CP-1-073-FULL-SNAPSHOT (validated：2026-07-16 人工要求修正發布 SOP)
+
+##### Module: windows_verification_interrupt_runbook
+- Type: documentation
+- Observability: not_required
+- Description: 將 Windows 受控 console 在 pytest 已輸出成功摘要後仍向父 runner 注入中斷、使 Verification fail-closed 的辨識與提交復原程序記錄於 FIXES。
+- Source: docs/FIXES.md
+- Preferred Pattern: documentation_as_evidence
+- Complexity: low
+- Decisions:
+  - `stdout` 的 passed 摘要不是成功依據；必須同時取得預期 exit code，否則維持 Verification 失敗。
+  - `interrupted: true`、`returncode: null` 與「command 執行被使用者中斷」是 console control event 的辨識證據，不得先歸因為 assertion failure 或 Task snapshot ACL。
+  - 已完成驗證的 Task 應以不附著 console 的 `pythonw.exe` 搭配 `Start-Process -Wait` 提交，並保留 stdout、stderr 與 exit code。
+  - 不得手動修改 Task status、略過 verification，或先移除 ACL deny 作為此症狀的預設處置。
+- Invariants: []
+- Verification: []
+- Dependencies: [adad_core]
+- Input:
+  - verification_receipt: object
+- Output:
+  - troubleshooting_runbook: markdown
+- Retry Budget: 2
+- TODO:
+  - [ ] 記錄 Windows console interruption 的判讀、排除項目與可複製提交指令。
+- Checkpoint:
+  - [x] CP-1-086-WINDOWS-VERIFY-RUNBOOK (validated：2026-07-20 人工核准)
 
 ##### Module: project_venv_python
 - Type: function
@@ -755,7 +804,7 @@
 - Invariants:
   - deny_imports: [virtualenv]
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_upgrade_project.py", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_upgrade_project.py", "--basetemp", "{workspace}/pytest", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: [write_project_pre_commit_hook, automated_test_suite]
 - Input:
   - project_root: path

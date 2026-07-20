@@ -46,6 +46,17 @@ def test_built_archives_exclude_python_cache(tmp_path):
     cache_dir.mkdir(parents=True)
     cache_dir.joinpath("cached.cpython-311.pyc").write_bytes(b"cache")
     resources.joinpath("nested", "loose.pyc").write_bytes(b"cache")
+    stale_build_cache = (
+        project
+        / "build"
+        / "lib"
+        / "adad_cli"
+        / "resources"
+        / "agents"
+        / "__pycache__"
+    )
+    stale_build_cache.mkdir(parents=True)
+    stale_build_cache.joinpath("stale.cpython-311.pyc").write_bytes(b"cache")
 
     wheel, sdist = _build_archives(project, output)
 
@@ -56,5 +67,7 @@ def test_built_archives_exclude_python_cache(tmp_path):
 
     assert any(name.endswith("resources/agents/AGENTS.md") for name in wheel_names)
     assert any(name.endswith("resources/agents/AGENTS.md") for name in sdist_names)
+    assert "adad_cli/workflow/__init__.py" in wheel_names
+    assert any(name.endswith("/adad_cli/workflow/__init__.py") for name in sdist_names)
     assert not any(_contains_python_cache(name) for name in wheel_names)
     assert not any(_contains_python_cache(name) for name in sdist_names)

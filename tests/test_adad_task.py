@@ -6,6 +6,7 @@ import pytest
 pytestmark = pytest.mark.regression_backlog
 
 import sys
+import os
 import builtins
 import json
 import importlib.util
@@ -112,6 +113,46 @@ def test_verification_runner_injects_pytest_cacheprovider_once(
     assert [arg for arg in captured[0] if arg in expected_disabled_tokens] == expected_disabled_tokens
 
 
+def test_task_readiness_rejects_command_without_explicit_timeout(
+    project_dir, base_modules
+):
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {"command": {"argv": [sys.executable, "-c", "pass"]}}
+    ]
+    write_yaml(project_dir, base_modules)
+    core = CanonicalADADCore(project_dir / "system_map.yaml", check_validity=False)
+
+    result = core.check_task_readiness("sample_tool")
+
+    assert result["ready"] is False
+    assert any("timeout" in blocker for blocker in result["blockers"])
+
+
+def test_task_snapshot_rejects_command_without_explicit_timeout(
+    project_dir, base_modules
+):
+    base_modules["modules"]["sample_tool"]["verification"] = [
+        {
+            "command": {
+                "argv": [sys.executable, "-c", "pass"],
+                "timeout": 1,
+            }
+        }
+    ]
+    write_yaml(project_dir, base_modules)
+    core = CanonicalADADCore(project_dir / "system_map.yaml", check_validity=False)
+    assert core.generate_task("sample_tool")["success"] is True
+    snapshot = core.load_task("sample_tool")
+    snapshot["spec"]["target_node"]["verification"] = [
+        {"command": {"argv": [sys.executable, "-c", "pass"]}}
+    ]
+
+    result = core.validate_task_snapshot(snapshot, "sample_tool")
+
+    assert result["valid"] is False
+    assert any("timeout" in error for error in result["errors"])
+
+
 def test_project_verification_command_avoids_disposable_workspace(tmp_path, monkeypatch):
     source = tmp_path / "sample_tool.py"
     source.write_text("def sample_tool():\n    return True\n", encoding="utf-8")
@@ -151,6 +192,45 @@ def test_project_verification_command_avoids_disposable_workspace(tmp_path, monk
     assert captured == [(str(tmp_path), str(tmp_path), 0)]
 
 
+def test_project_pytest_command_uses_isolated_workspace(tmp_path, monkeypatch):
+    source = tmp_path / "sample_tool.py"
+    source.write_text("def sample_tool():\n    return True\n", encoding="utf-8")
+    core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
+    core.data = {
+        "modules": {
+            "sample_tool": {
+                "source": str(source),
+                "verification": [
+                    {
+                        "command": {
+                            "argv": [sys.executable, "-m", "pytest", "-q"],
+                            "cwd": "project",
+                            "expect_exit": 0,
+                        }
+                    }
+                ],
+            }
+        }
+    }
+    captured = []
+
+    def fake_command(command, workspace, placeholders, step_index):
+        captured.append((workspace, placeholders["workspace"], step_index))
+        return {"step_index": step_index, "passed": True}
+
+    monkeypatch.setattr(core, "_run_verification_command", fake_command)
+
+    result = core.verify_implementation("sample_tool", str(source))
+
+    assert result["success"] is True
+    workspace, placeholder, step_index = captured[0]
+    assert step_index == 0
+    assert workspace == placeholder
+    assert workspace != str(tmp_path)
+    assert Path(workspace).parent == tmp_path
+    assert Path(workspace).name.startswith("adad_verify_work_")
+
+
 def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch):
     core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
     captured = {}
@@ -170,6 +250,42 @@ def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch
                 )
             return b"after", b"after-error"
 
+    class FakeWinApi:
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class FakeKernel32:
+        def __init__(self):
+            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
+            self.SetInformationJobObject = FakeWinApi(self._set_information)
+            self.OpenProcess = FakeWinApi(self._open_process)
+            self.AssignProcessToJobObject = FakeWinApi(self._assign)
+            self.TerminateJobObject = FakeWinApi(self._terminate)
+            self.CloseHandle = FakeWinApi(self._close)
+
+        def _set_information(self, handle, info_class, info, size):
+            captured["job_limit_flags"] = info._obj.BasicLimitInformation.LimitFlags
+            return 1
+
+        def _open_process(self, access, inherit, pid):
+            captured["open_process"] = (access, inherit, pid)
+            return 202
+
+        def _assign(self, job_handle, process_handle):
+            captured["assignment"] = (job_handle, process_handle)
+            return 1
+
+        def _terminate(self, job_handle, exit_code):
+            captured["termination"] = (job_handle, exit_code)
+            return 1
+
+        def _close(self, handle):
+            captured.setdefault("closed_handles", []).append(handle)
+            return 1
+
     process = TimedOutProcess()
 
     def fake_popen(argv, **kwargs):
@@ -177,20 +293,20 @@ def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch
         captured["kwargs"] = kwargs
         return process
 
-    def fake_run(argv, **kwargs):
-        captured["termination_run"] = (argv, kwargs)
-
     def fake_killpg(pgid, sig):
         captured["killpg"] = (pgid, sig)
 
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(_canonical_module.subprocess, "run", fake_run)
 
     import os
     if hasattr(os, "killpg"):
         monkeypatch.setattr(os, "killpg", fake_killpg)
     else:
         monkeypatch.setattr(_canonical_module.os, "killpg", fake_killpg, raising=False)
+
+    if os.name == "nt":
+        kernel32 = FakeKernel32()
+        monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32)
 
     result = core._run_verification_command(
         {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
@@ -206,12 +322,235 @@ def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch
 
     if os.name == "nt":
         assert captured["kwargs"]["creationflags"] == _canonical_module.subprocess.CREATE_NEW_PROCESS_GROUP
-        assert captured["termination_run"][0] == ["taskkill", "/PID", "4321", "/T", "/F"]
+        assert captured["job_limit_flags"] == 0x00002000
+        assert captured["open_process"] == (0x0100 | 0x0001, False, 4321)
+        assert captured["assignment"] == (101, 202)
+        assert captured["termination"] == (101, 1)
+        assert captured["closed_handles"] == [202, 101]
     else:
         assert captured["kwargs"]["start_new_session"] is True
         assert captured["killpg"] == (4321, _canonical_module.signal.SIGKILL)
-
     assert process.communicate_calls == 2
+
+
+def test_windows_job_assignment_failure_kills_and_drains_process(tmp_path, monkeypatch):
+    core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
+    captured = {"closed_handles": []}
+
+    class FakeWinApi:
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class FakeKernel32:
+        def __init__(self):
+            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
+            self.SetInformationJobObject = FakeWinApi(lambda *_: 1)
+            self.OpenProcess = FakeWinApi(lambda *_: 202)
+            self.AssignProcessToJobObject = FakeWinApi(lambda *_: 0)
+            self.TerminateJobObject = FakeWinApi(lambda *_: 1)
+            self.CloseHandle = FakeWinApi(self._close)
+
+        def _close(self, handle):
+            captured["closed_handles"].append(handle)
+            return 1
+
+    class Process:
+        pid = 4321
+        returncode = None
+
+        def kill(self):
+            captured["killed"] = True
+
+        def communicate(self, timeout):
+            captured.setdefault("communicate_timeouts", []).append(timeout)
+            return b"killed-output", b"killed-error"
+
+    monkeypatch.setattr(_canonical_module.os, "name", "nt")
+    monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
+
+    result = core._run_verification_command(
+        {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
+        str(tmp_path / "workspace"),
+        {"project": str(tmp_path)},
+        0,
+    )
+
+    assert result["passed"] is False
+    assert result["returncode"] is None
+    assert result["error"].startswith("Windows Job Object assignment failed:")
+    assert result["stdout"] == "killed-output"
+    assert result["stderr"] == "killed-error"
+    assert captured["killed"] is True
+    assert captured["communicate_timeouts"] == [5]
+    assert captured["closed_handles"] == [101, 202]
+
+
+def test_windows_job_normal_completion_closes_handles(tmp_path, monkeypatch):
+    core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
+    captured = {"closed_handles": []}
+
+    class FakeWinApi:
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class FakeKernel32:
+        def __init__(self):
+            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
+            self.SetInformationJobObject = FakeWinApi(lambda *_: 1)
+            self.OpenProcess = FakeWinApi(lambda *_: 202)
+            self.AssignProcessToJobObject = FakeWinApi(lambda *_: 1)
+            self.TerminateJobObject = FakeWinApi(lambda *_: 1)
+            self.CloseHandle = FakeWinApi(self._close)
+
+        def _close(self, handle):
+            captured["closed_handles"].append(handle)
+            return 1
+
+    class Process:
+        pid = 4321
+        returncode = 0
+
+        def communicate(self, timeout):
+            captured["communicate_timeout"] = timeout
+            return b"ok", b""
+
+    monkeypatch.setattr(_canonical_module.os, "name", "nt")
+    monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
+
+    result = core._run_verification_command(
+        {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
+        str(tmp_path / "workspace"),
+        {"project": str(tmp_path)},
+        0,
+    )
+
+    assert result["passed"] is True
+    assert captured["communicate_timeout"] == 1
+    assert captured["closed_handles"] == [202, 101]
+
+
+def test_windows_interrupt_before_job_assignment_kills_and_drains_process(tmp_path, monkeypatch):
+    core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
+    captured = {"closed_handles": []}
+
+    class FakeWinApi:
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class FakeKernel32:
+        def __init__(self):
+            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
+            self.SetInformationJobObject = FakeWinApi(lambda *_: 1)
+            self.OpenProcess = FakeWinApi(lambda *_: 202)
+            self.AssignProcessToJobObject = FakeWinApi(self._interrupt_assignment)
+            self.TerminateJobObject = FakeWinApi(lambda *_: 1)
+            self.CloseHandle = FakeWinApi(self._close)
+
+        @staticmethod
+        def _interrupt_assignment(*_args):
+            raise KeyboardInterrupt()
+
+        def _close(self, handle):
+            captured["closed_handles"].append(handle)
+            return 1
+
+    class Process:
+        pid = 4321
+        returncode = None
+
+        def kill(self):
+            captured["killed"] = True
+
+        def communicate(self, timeout):
+            captured.setdefault("communicate_timeouts", []).append(timeout)
+            return b"interrupted-output", b"interrupted-error"
+
+    monkeypatch.setattr(_canonical_module.os, "name", "nt")
+    monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
+
+    result = core._run_verification_command(
+        {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
+        str(tmp_path / "workspace"),
+        {"project": str(tmp_path)},
+        0,
+    )
+
+    assert result["passed"] is False
+    assert result["interrupted"] is True
+    assert result["returncode"] is None
+    assert result["stdout"] == "interrupted-output"
+    assert result["stderr"] == "interrupted-error"
+    assert captured["killed"] is True
+    assert captured["communicate_timeouts"] == [5]
+    assert captured["closed_handles"] == [101, 202]
+
+
+def test_windows_timeout_drain_timeout_preserves_output(tmp_path, monkeypatch):
+    core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
+
+    class FakeWinApi:
+        def __init__(self, callback):
+            self.callback = callback
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class FakeKernel32:
+        def __init__(self):
+            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
+            self.SetInformationJobObject = FakeWinApi(lambda *_: 1)
+            self.OpenProcess = FakeWinApi(lambda *_: 202)
+            self.AssignProcessToJobObject = FakeWinApi(lambda *_: 1)
+            self.TerminateJobObject = FakeWinApi(lambda *_: 1)
+            self.CloseHandle = FakeWinApi(lambda *_: 1)
+
+    class Process:
+        pid = 4321
+        returncode = None
+
+        def __init__(self):
+            self.calls = 0
+
+        def communicate(self, timeout):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired(
+                    ["verification-tool"], timeout, output=b"before", stderr=b"before-error"
+                )
+            raise subprocess.TimeoutExpired(
+                ["verification-tool"], timeout, output=b"drain", stderr=b"drain-error"
+            )
+
+    process = Process()
+    monkeypatch.setattr(_canonical_module.os, "name", "nt")
+    monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    result = core._run_verification_command(
+        {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
+        str(tmp_path / "workspace"),
+        {"project": str(tmp_path)},
+        0,
+    )
+
+    assert result["passed"] is False
+    assert result["returncode"] is None
+    assert result["stdout"] == "drain"
+    assert result["stderr"] == "drain-error"
+    assert result["termination_error"] == "command tree termination did not drain within 5 seconds."
+    assert process.calls == 2
 
 
 def test_locks_cli_audit_is_read_only_thin_adapter(monkeypatch, capsys):
@@ -1485,3 +1824,137 @@ def test_unknown_subcommand_errors(project_dir, base_modules):
     code, data, out, err = run_script("adad_task.py", ["frobnicate", "sample_tool"], cwd=project_dir)
     assert code == 1
     assert data["success"] is False
+
+
+def test_task_index_check_falls_back_for_corrupt_snapshot(project_dir, base_modules):
+    write_yaml(project_dir, base_modules)
+    core = CanonicalADADCore(project_dir / "system_map.yaml", check_validity=False)
+    task = {
+        "schema_version": 3,
+        "task_id": "sample_tool@v1@index01",
+        "node_name": "sample_tool",
+        "system_map_version": 1,
+        "source_hash": "source-hash",
+        "status": "assigned",
+    }
+    assert core._save_task("sample_tool", task)["index_sync"]["success"] is True
+    Path(core._task_path("sample_tool")).write_bytes(b"{broken")
+
+    result = core.check_task_index()
+
+    assert result["success"] is False
+    assert result["source"] == "snapshot_scan_fallback"
+    assert any(issue["type"] == "snapshot_scan_warning" for issue in result["issues"])
+
+
+def test_task_index_rebuild_restores_consistency(project_dir, base_modules):
+    write_yaml(project_dir, base_modules)
+    core = CanonicalADADCore(project_dir / "system_map.yaml", check_validity=False)
+    task = {
+        "schema_version": 3,
+        "task_id": "sample_tool@v1@index02",
+        "node_name": "sample_tool",
+        "system_map_version": 1,
+        "source_hash": "source-hash",
+        "status": "assigned",
+    }
+    core._save_task("sample_tool", task)
+    index_path = Path(core.task_dir) / "task_index.json"
+    index_path.write_text("{broken", encoding="utf-8")
+
+    rebuilt = core._rebuild_task_index()
+
+    assert rebuilt["success"] is True
+    assert core.check_task_index()["success"] is True
+
+
+def test_task_index_lock_does_not_reclaim_live_owner(project_dir, base_modules):
+    write_yaml(project_dir, base_modules)
+    core = CanonicalADADCore(project_dir / "system_map.yaml", check_validity=False)
+    Path(core.task_dir).mkdir(parents=True, exist_ok=True)
+    lock_path = Path(core._task_index_lock_path())
+    lock_path.write_text(
+        json.dumps({"token": "other", "owner": os.getpid(), "expires_at": 0}),
+        encoding="utf-8",
+    )
+
+    assert core._acquire_task_index_lock(timeout_seconds=0.05) is None
+    assert lock_path.exists()
+
+
+def test_task_index_lock_does_not_reclaim_live_owner_in_partial_json(
+    project_dir, base_modules
+):
+    write_yaml(project_dir, base_modules)
+    core = CanonicalADADCore(project_dir / "system_map.yaml", check_validity=False)
+    Path(core.task_dir).mkdir(parents=True, exist_ok=True)
+    lock_path = Path(core._task_index_lock_path())
+    lock_path.write_text(
+        '{"token":"other","owner":%d' % os.getpid(),
+        encoding="utf-8",
+    )
+
+    assert core._acquire_task_index_lock(timeout_seconds=0.05) is None
+    assert lock_path.exists()
+
+
+def test_task_index_cli_accepts_check_and_rebuild(monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location(
+        "canonical_adad_task_index_cli", CANONICAL_TASK_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class FakeCore:
+        def check_task_index(self):
+            return {"success": True, "source": "index"}
+
+        def _rebuild_task_index(self):
+            return {"success": True, "source": "snapshot_scan"}
+
+    monkeypatch.setattr(module, "ADADCore", FakeCore)
+    for flag, source in (("--check", "index"), ("--rebuild", "snapshot_scan")):
+        monkeypatch.setattr(module.sys, "argv", ["adad_task.py", "index", flag])
+        with pytest.raises(SystemExit) as exc:
+            module.main()
+        assert exc.value.code == 0
+        assert json.loads(capsys.readouterr().out)["source"] == source
+
+
+def test_task_index_cli_rejects_bad_arguments(monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location(
+        "canonical_adad_task_index_cli", CANONICAL_TASK_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    monkeypatch.setattr(module.sys, "argv", ["adad_task.py", "index"])
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert exc.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["success"] is False
+    assert "Usage: python adad_task.py index --check|--rebuild" in payload["error"]
+
+
+def test_submit_cli_catches_keyboard_interrupt(monkeypatch, capsys):
+    spec = importlib.util.spec_from_file_location(
+        "canonical_adad_task_submit_interrupt", CANONICAL_TASK_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class FakeCore:
+        def task_submit(self, *args, **kwargs):
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(module, "ADADCore", FakeCore)
+    monkeypatch.setattr(module.sys, "argv", ["adad_task.py", "submit", "sample_tool"])
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "success": False,
+        "error": "提交流程被使用者中斷（KeyboardInterrupt）",
+        "interrupted": True,
+    }
