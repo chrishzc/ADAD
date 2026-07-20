@@ -3495,7 +3495,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: dirty
+    state: validated
     fan_in_snapshot: 0
   windows_verification_interrupt_runbook:
     type: documentation
