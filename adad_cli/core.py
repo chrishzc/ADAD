@@ -180,9 +180,9 @@ def _ensure_claude_pretooluse_hook(settings_path: str = CLAUDE_SETTINGS_PATH) ->
     才知道要在哪個時機點呼叫它。合併時只新增／更新我們自己的這一條，
     使用者原本設定的其他 hooks（含同一個 matcher 下的其他指令）一律保留。
     """
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(settings_path))) or "."
-    python_path = _project_venv_python(project_root)
-    script_path = os.path.normpath(os.path.join(project_root, ".agents", "skills", "adad-workflow", "scripts", "adad_pretooluse_gate.py"))
+    # ponytail: 使用專案相對路徑，避免寫死絕對路徑導致跨機器/克隆路徑時靜默失效
+    python_path = _project_venv_python("")
+    script_path = os.path.normpath(os.path.join(".agents", "skills", "adad-workflow", "scripts", "adad_pretooluse_gate.py"))
 
     if os.name == "nt":
         platform_family = "windows"
