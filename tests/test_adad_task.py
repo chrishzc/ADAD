@@ -372,6 +372,9 @@ def test_windows_job_assignment_failure_kills_and_drains_process(tmp_path, monke
     monkeypatch.setattr(
         _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
     )
+    monkeypatch.setattr(
+        _canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False
+    )
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
 
     result = core._run_verification_command(
@@ -426,6 +429,9 @@ def test_windows_job_normal_completion_closes_handles(tmp_path, monkeypatch):
     monkeypatch.setattr(_canonical_module.os, "name", "nt")
     monkeypatch.setattr(
         _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
+    )
+    monkeypatch.setattr(
+        _canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False
     )
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
 
@@ -483,6 +489,9 @@ def test_windows_interrupt_before_job_assignment_kills_and_drains_process(tmp_pa
     monkeypatch.setattr(_canonical_module.os, "name", "nt")
     monkeypatch.setattr(
         _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
+    )
+    monkeypatch.setattr(
+        _canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False
     )
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
 
@@ -543,6 +552,9 @@ def test_windows_timeout_drain_timeout_preserves_output(tmp_path, monkeypatch):
     monkeypatch.setattr(_canonical_module.os, "name", "nt")
     monkeypatch.setattr(
         _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
+    )
+    monkeypatch.setattr(
+        _canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False
     )
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: process)
 
