@@ -369,7 +369,9 @@ def test_windows_job_assignment_failure_kills_and_drains_process(tmp_path, monke
             return b"killed-output", b"killed-error"
 
     monkeypatch.setattr(_canonical_module.os, "name", "nt")
-    monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(
+        _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
+    )
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
 
     result = core._run_verification_command(
@@ -422,7 +424,9 @@ def test_windows_job_normal_completion_closes_handles(tmp_path, monkeypatch):
             return b"ok", b""
 
     monkeypatch.setattr(_canonical_module.os, "name", "nt")
-    monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(
+        _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
+    )
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
 
     result = core._run_verification_command(
@@ -477,7 +481,9 @@ def test_windows_interrupt_before_job_assignment_kills_and_drains_process(tmp_pa
             return b"interrupted-output", b"interrupted-error"
 
     monkeypatch.setattr(_canonical_module.os, "name", "nt")
-    monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(
+        _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
+    )
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
 
     result = core._run_verification_command(
@@ -535,7 +541,9 @@ def test_windows_timeout_drain_timeout_preserves_output(tmp_path, monkeypatch):
 
     process = Process()
     monkeypatch.setattr(_canonical_module.os, "name", "nt")
-    monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(
+        _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
+    )
     monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: process)
 
     result = core._run_verification_command(
