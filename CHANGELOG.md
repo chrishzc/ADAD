@@ -4,6 +4,25 @@
 
 ## Unreleased
 
+## 1.6.3 — 2026-07-19
+
+### Added
+
+- Task index 提供 `adad_task.py index --check|--rebuild`：以 Task snapshot 掃描結果建立、比對與原子更新排程索引；Gate 仍只信任 snapshot 與 Source Lock。
+- Verification contract 強制每個 `command` 與 `integration_case.steps` 明確設定 1–300 秒的 `timeout`。
+- CLI package resources 納入 `blocked_report` MCP server、schema 與文字 fallback parser。
+
+### Changed
+
+- pytest Verification 每次使用獨立 disposable workspace 與 `--basetemp`，避免 Windows 暫存根目錄互鎖；非 pytest 的 project command 保持 project-root workspace 相容行為。
+- setuptools build 會在 `build_py` 前後清除 resources 的 stale bytecode，避免髒 `build/lib` 污染 wheel。
+
+### Fixed
+
+- Windows Verification runner 以 Job Object 終止逾時子程序樹，並對中斷與清理失敗回傳結構化 fail-closed receipt。
+- `adad_task` 對 `KeyboardInterrupt` 回傳結構化失敗結果，不再留下模糊的提交狀態。
+- standalone workflow 在缺少選用的 `adad_cli` validator 時回傳結構化 readiness blocker，不再崩潰。
+
 ## 1.6.2 — 2026-07-18
 
 ### Added

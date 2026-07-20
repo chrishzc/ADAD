@@ -69,6 +69,7 @@ def managed_assets(
     trees = [
         (agents / "skills" / "adad-workflow", target_root / ".agents" / "skills" / "adad-workflow"),
         (agents / "skills" / "adad-workflow", resources / "agents" / "skills" / "adad-workflow"),
+        (SOURCE_ROOT / "blocked_report", resources / "blocked_report"),
         (SOURCE_ROOT / "templates", resources / "templates"),
     ]
     return files, trees

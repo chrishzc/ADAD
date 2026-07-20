@@ -42,6 +42,25 @@
 
 ---
 
+## 🧪 Pytest 執行規範（Windows）
+
+所有 Agent 執行 pytest 時必須遵守下列規範：
+
+- 一律使用專案虛擬環境：`.venv\Scripts\python.exe -m pytest`；不得使用系統 `python` 或裸 `pytest`。
+- 必須指定全新、可寫的 pytest 暫存目錄：`--basetemp C:\tmp\pytest-<task>-<attempt>`；venv 不會隔離 Windows `%TEMP%`，不得依賴預設 `pytest-of-<user>` 目錄。
+- 對 focused pytest 加上 `-p no:cacheprovider`，避免 `.pytest_cache` 或使用者層 cache 的權限與殘留狀態干擾。
+- 每一次 pytest 工具呼叫都必須設定外層 timeout；逾時只可回報為未驗證，不得宣稱測試通過或任務完成。
+- 每個 Task 的 `verification.command` 必須明確設定內層 `timeout`；不得依賴 runner 預設值。pytest 工具呼叫的外層 timeout 必須至少比內層多 10 秒，保留終止子程序、清理暫存目錄與輸出結果的時間。
+- 失敗回報須包含完整命令、timeout 值、`--basetemp` 路徑與輸出摘要，供後續 Agent 重現。
+
+範例：
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/test_adad_task.py -q --basetemp C:\tmp\pytest-adad_task-1 -p no:cacheprovider
+```
+
+---
+
 ## 📋 Draft Debt Ledger
 
 當模組以 `draft` 狀態存在時（Leaf 模式生成的 demo 模組），系統會追蹤其 **fan-in**（有多少其他模組依賴它）。
@@ -143,3 +162,6 @@
 - 不得批准 Checkpoint、修改其他節點、提交或繞過 hook。
 - 規範衝突時：`system_map.yaml > Task Spec > 主代理指令`。
 - 任一子代理發現越權、規格衝突或跨節點需求，必須 Fail-Fast。
+# Task index policy
+
+`.agents/tasks/task_index.json` is only a discovery and scheduling aid. Task snapshots and Source Locks remain the sole authorization evidence for Gates; an index mismatch must fall back to scanning Task snapshots.

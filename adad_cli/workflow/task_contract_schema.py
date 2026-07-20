@@ -76,7 +76,45 @@ def validate_verification_conditions(verification_cases: list) -> list:
     if not isinstance(verification_cases, list):
         raise ValueError("verification_cases must be a list")
 
-    for i, case in enumerate(verification_cases):
+    def validate_command_timeout(command, label):
+        if not isinstance(command, dict):
+            raise ValueError(f"{label} must be an object (dict)")
+        if "timeout" not in command:
+            raise ValueError(f"{label} must explicitly specify 'timeout'")
+        timeout = command["timeout"]
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 300:
+            raise ValueError(f"timeout in {label} must be a number greater than 0 and no more than 300")
+
+    cases_to_validate = []
+    for i, item in enumerate(verification_cases):
+        if item == "must_have_assertions":
+            continue
+        if not isinstance(item, dict):
+            cases_to_validate.append(item)
+            continue
+
+        kinds = [kind for kind in ("case", "command", "integration_case") if kind in item]
+        if len(kinds) > 1:
+            raise ValueError(
+                f"verification item at index {i} must specify only one of 'case', 'command', or 'integration_case'"
+            )
+        if "case" in item:
+            cases_to_validate.append(item["case"])
+        elif "command" in item:
+            validate_command_timeout(item["command"], f"verification command at index {i}")
+        elif "integration_case" in item:
+            integration = item["integration_case"]
+            if not isinstance(integration, dict):
+                raise ValueError(f"integration_case at index {i} must be an object (dict)")
+            steps = integration.get("steps")
+            if not isinstance(steps, list):
+                raise ValueError(f"integration_case at index {i} must provide steps as a list")
+            for step_index, step in enumerate(steps):
+                validate_command_timeout(step, f"integration_case at index {i} step {step_index}")
+        else:
+            cases_to_validate.append(item)
+
+    for i, case in enumerate(cases_to_validate):
         if not isinstance(case, dict):
             raise ValueError(f"verification_cases item at index {i} must be an object (dict)")
 

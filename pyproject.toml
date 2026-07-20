@@ -46,7 +46,10 @@ markers = [
 adad = "adad_cli.cli:main"
 
 [tool.setuptools]
-packages = ["adad_cli"]
+packages = ["adad_cli", "adad_cli.workflow"]
+
+[tool.setuptools.cmdclass]
+build_py = "adad_cli.build_hooks.CleanResourceBuildPy"
 
 # 對應上面 [project] 的 dynamic = ["version"]：版本號的唯一事實來源是
 # adad_cli/__init__.py 的 __version__，這裡只是告訴 setuptools 去哪裡讀。

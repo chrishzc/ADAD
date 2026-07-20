@@ -12,6 +12,7 @@
 
 ### Domain: ADAD_Workflow
 - Description: ADAD (Architecture-Driven Agentic Development) 的架構與工作流核心管理工具集。
+- Allowed Dependencies: [ADAD_Roadmap]
 
 #### Subsystem: Core_Engine
 - Description: 負責架構地圖讀寫、狀態推進、DAG 依賴分析與 Invariants 校驗的核心模組。
@@ -33,7 +34,7 @@
   - deny_imports: [yaml]
 - Verification:
   - must_have_assertions
-  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_sync_assets.py", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "-q", "tests/test_sync_assets.py", "--basetemp", "{workspace}/pytest", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Algorithm:
   - 收集與比較檔案樹時，排除路徑任一層為 __pycache__ 的檔案及副檔名為 .pyc 的檔案。
   - --write 前先從受管理輸出樹移除上述快取，再只複製 canonical 的非快取檔案。
@@ -170,6 +171,7 @@
 - Preferred Pattern: none
 - Complexity: medium
 - Algorithm:
+  - Task Readiness 與 Task 契約門禁必須將完整 verification 項目交由 task_verification_conditions 驗證；不得先濾除 command，確保每個 command 的顯式 timeout 都受契約門禁約束。
   - 執行 Verification command 前複製目前環境。
   - 移除 GIT_DIR、GIT_WORK_TREE、GIT_INDEX_FILE、GIT_COMMON_DIR、GIT_OBJECT_DIRECTORY、GIT_ALTERNATE_OBJECT_DIRECTORIES、GIT_PREFIX 與 GIT_IMPLICIT_WORK_TREE。
   - 保留 PATH、認證與非 repo-routing 環境，並將清理後環境傳入 subprocess。
@@ -190,8 +192,9 @@
   - command result 的 argv 必須保存實際執行參數；測試同時驗證 project root 不產生或修改 `.pytest_cache`。
   - #77-R1 使用 token-aware helper 辨識分離、等號與 compact 的 cacheprovider-disabled 形式；僅在 pytest command 缺少等價 token 時，於執行前注入單一 `-p`、`no:cacheprovider`，且回報實際 argv。
   - #77-R1-CP3 integration verification 的 disposable workspace 必須建立於 project root，不得位於 `.agents/workspaces`；使 pytest 的明確或注入 `--basetemp` 與 Task／Source Lock artifact workspace 分離，並保留 TemporaryDirectory 成功後自動清理。
-  - #77-R2 對沒有 fixtures 的單一 command，若 cwd=project，直接以 project root 作 `{workspace}` placeholder，不建立 TemporaryDirectory；pytest 的明確或注入 basetemp 因此是 project-root child，不與 disposable workspace cleanup 競爭。
-  - #77-R2 只有 integration_case 或 cwd=workspace 的 command 建立 disposable workspace；command timeout 或 cleanup 不確定時保留該次 workspace 並回傳 structured preserved evidence，禁止在 error path 卡住或猜測遞迴刪除。
+  - #77-R3 對沒有 fixtures 且 cwd=project 的非 pytest 單一 command，直接以 project root 作 `{workspace}` placeholder，不建立 TemporaryDirectory。
+  - #77-R3 pytest command（即使 cwd=project 且沒有 fixtures）必須建立 project root 內、每次驗證隔離的 disposable workspace，並以該目錄作 `{workspace}` placeholder；明確或注入的 `--basetemp` 必須位於其中，避免固定 project-root basetemp 相互鎖定。
+  - #77-R3 integration_case、cwd=workspace 或 pytest command 可建立 disposable workspace；成功後清理，timeout 或 cleanup 不確定時保留該次 workspace 並回傳 structured preserved evidence，禁止在 error path 卡住或猜測遞迴刪除。
   - task_block 保留 Task Schema v2 必填的 source_lock metadata；先保存 blocked 與 history，再以 exact source_path/node_name/task_id 釋放實體鎖。釋放失敗時 blocked 狀態、metadata 與 physical lock 均保留並 fail-closed 回報。
   - _release_source_lock 回傳 structured released、already_absent、identity_mismatch、invalid 或 error；PermissionError/OSError 不得當作 missing，canonical lock 不得直接 remove。
   - _commit_checkpoint_decision 將 approve 的 lock release 納入同一交易：保存原 Task/map，寫入 tentative state、audit 與 history後，重新驗 exact lock identity，再以同目錄 unique quarantine rename 作 commit point。
@@ -226,9 +229,9 @@
 - Decisions: [隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份 dump root；owner 不明時禁止猜測；所有 gate 共用同一個實體 Source 路徑；pytest 暫存隔離由 Verification runner 提供且尊重明確 basetemp；cacheprovider 與 basetemp 是互補隔離，不讀寫 pytest config 或環境設定；canonical adad_source 是唯一可編輯來源；Source Lock lifecycle 同屬既有整檔 owner adad_core，不建立同檔重複 owner；_commit_checkpoint_decision 是 approve lock release 的必要交易邊界；task_approve 必須納入 allowed symbols 才能公開結構化 recovery；typed structured exception 是維持成功介面的最小變更；primary failure 與 rollback failure 分欄保存；recovery schema 固定且可直接 JSON serialize；quarantine rename 取代 check-then-remove；全域 enumeration/read uncertainty 阻斷所有 mutation；blocked/approved Task 保留 source_lock 作審計 metadata，釋放只代表 canonical physical lock 消失；mismatch 與 invalid 永遠 fail-closed；audit 不接 compile、resume、pre-commit；Task JSON 不納入清理；#80-A4 facade 只委派已核准 service，不重建或改寫 Source Lock 政策]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_generate_task.py", "-q", "--basetemp", "{workspace}/pytest-generate-task-json-workspace"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_generate_task.py", "tests/test_adad_task.py", "-q", "--basetemp", "{workspace}/pytest-generate-task-json-workspace"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Observability: not_required
-- Dependencies: [source_lock_repository, source_lock_audit_service]
+- Dependencies: [source_lock_repository, source_lock_audit_service, task_verification_conditions]
 - Input:
   - verification_command: object
   - inherited_environment: object
@@ -239,8 +242,8 @@
   - task_snapshots: .agents/tasks/*.task.json
   - source_lock_files: .agents/tasks/.source_locks/*.lock.json
   - project_root: path
-  - allowed_symbols: [ADADCore._task_path, ADADCore._save_task, ADADCore.generate_task, ADADCore._write_checkpoint_audit]
-  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/adad_core.py, tests/test_generate_task.py, tests/test_task_contract_schema.py]
+  - allowed_symbols: [ADADCore.check_task_readiness, ADADCore.validate_task_snapshot, ADADCore._task_path, ADADCore._save_task, ADADCore.generate_task, ADADCore._write_checkpoint_audit, ADADCore._run_verification_command]
+  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/adad_core.py, tests/test_generate_task.py, tests/test_task_contract_schema.py, tests/test_adad_task.py]
 - Output:
   - command_result: object
   - sanitized_environment: object
@@ -326,7 +329,7 @@
 - Decisions: [採 composition 與 dependency injection，不使用 mixin或繼承；A1 新 repository 與 core 暫時並存但以 direct parity tests 阻止政策漂移；production ADADCore 本 Task 不修改；不建立空骨架，直接以既有 #78 characterization baseline驗證完整 repository行為；exact parity不包含已證實違反#78 fail-closed與ownership保護的舊行為；本R1只補正兩個fingerprints，不得順便改寫其他policy；CP-3 將既有 internal non-overwrite restore 原樣提升為 restore_quarantine 公開邊界，讓 A3 不得直接 filesystem mutation]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_source_lock_repository.py", "tests/test_adad_task.py", "tests/test_generate_task.py", "-q", "--basetemp", "{workspace}/pytest-source-lock-repository-workspace"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_source_lock_repository.py", "tests/test_adad_task.py", "tests/test_generate_task.py", "-q", "--basetemp", "{workspace}/pytest-source-lock-repository-workspace"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: []
 - Input:
   - project_root: path
@@ -374,7 +377,7 @@
 - Decisions: [A2 只抽離唯讀 scan、classify、audit；repository 提供 artifact identity與strict read；Task validation與source owner解析採dependency injection避免循環相依；production adad_core與CLI在A6前維持既有實作；prune與reconcile分屬後續A3/A4；任何I/O uncertainty均全域fail-closed；audit report 不新增 scan_evidence，record evidence 是保留診斷證據的唯一輸出位置，以維持 #78 approved core direct parity]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_source_lock_audit_service.py", "tests/test_source_lock_repository.py", "tests/test_adad_task.py", "tests/test_generate_task.py", "-q", "--basetemp", "{workspace}/pytest-source-lock-audit-service-workspace"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_source_lock_audit_service.py", "tests/test_source_lock_repository.py", "tests/test_adad_task.py", "tests/test_generate_task.py", "-q", "--basetemp", "{workspace}/pytest-source-lock-audit-service-workspace"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: [source_lock_repository]
 - Input:
   - project_root: path
@@ -414,7 +417,7 @@
   - deny_imports: [adad_core]
   - deny_calls: [os.remove, os.unlink, shutil.rmtree]
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_source_lock_pruner.py", "tests/test_source_lock_audit_service.py", "tests/test_source_lock_repository.py", "-q", "--basetemp", "{workspace}/pytest-source-lock-pruner-workspace"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_source_lock_pruner.py", "tests/test_source_lock_audit_service.py", "tests/test_source_lock_repository.py", "-q", "--basetemp", "{workspace}/pytest-source-lock-pruner-workspace", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: [source_lock_repository, source_lock_audit_service]
 - Input:
   - project_root: path
@@ -434,31 +437,24 @@
 ##### Module: project_runtime_state_policy
 - Type: service
 - Observability: not_required
-- Description: #82 封存不屬於目前 SSOT 的本機 Task snapshot 與 Source Lock 藝術品；此節點只處理明確指定的測試／遺留候選，保留可驗證證據，不重發、不刪除、不接線 production core、CLI 或一般 Task lifecycle。
-- Source: adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py::TaskSnapshotArchiveRepository,ProjectRuntimeStatePolicy,archive_non_ssot_task_artifacts
-- Preferred Pattern: fail_closed_maintenance_service
-- Complexity: high
+- Description: #82-A4 整合 inspect 與 archive 各子模組的唯讀收據與整合報告節點；不包含 mutation 邏輯，不重發、不刪除、不接線 production core 或 Task lifecycle。
+- Source: adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py::ProjectRuntimeStatePolicy.__init__,ProjectRuntimeStatePolicy.archive_non_ssot_task_artifacts
+- Preferred Pattern: aggregator_service
+- Complexity: medium
 - Algorithm:
-  - 只接受非空、無重複、無 traversal 的 candidate_node_names；候選 Task snapshot、canonical lock 與 archive 目標均必須 canonicalize 後位於 project 的 task_dir／lock_dir 內，symlink、junction、非 regular file、permission 或 I/O uncertainty 一律零 mutation。
-  - 先取得 fresh SourceLockAuditService report；healthy=false 或 mutation_blocked=true 時整批零 mutation。每個候選都必須可重讀，且其 node_name 與 source_path 在目前 SSOT 均不存在 owner；仍有 SSOT owner、active claim、有效可重發 Task 或不確定分類一律拒絕封存。
-  - 每筆候選在 mutation 前重掃、重新分類並比對 Task snapshot 與 canonical lock 的 payload digest、lstat identity、node_name、source_path 與 task_id。Task／lock mismatch 可作為各自 foreign artifact 封存的證據，但不得把不相符項目當作同一 artifact pair。
-  - 所有候選 preflight 通過後才開始處理。canonical lock 只能經 SourceLockRepository.quarantine 封存；Task snapshot 只能經 TaskSnapshotArchiveRepository 的 non-overwrite、identity-checked archive 邊界封存。兩者都必須保留 exact bytes、來源 identity、payload digest、archive path 與 mutation evidence。
-  - 任一 archive、identity drift、restore、permission 或 post-mutation audit 失敗時，停止後續候選；能安全恢復時依原始 receipt 恢復，否則保留已封存證據並回 manual_action_required。不得覆寫現有 canonical lock、Task snapshot 或 archive。
-  - archive 後必須執行 fresh audit。重複執行對已封存或不存在的明確候選必須 idempotent；本節點不刪除 archive、不得重發 Task、不得變更 system map、不得修改其他 Task lifecycle 狀態。
-- Decisions: [非 SSOT 的測試遺留 Task 不得重發；Task snapshot archive 是獨立於 Source Lock repository 的 runtime-state 邊界；lock 仍只能透過已核准 repository quarantine；archive 是保留證據，不是 cleanup；全批 preflight 與 fresh audit 防止將測試遺留誤判為 active production claim；不為單一測試 artifact 建立全域 sweep 或自動清理機制]
+  - 整合 `inspect_non_ssot_runtime_artifacts`、`archive_non_ssot_source_locks` 與 `archive_non_ssot_task_snapshots` 三者的回傳收據，輸出整體整合報告。
+- Decisions: [整合節點不包含具體 mutation 邏輯以符合職責單一化]
 - Invariants:
   - deny_imports: [adad_core]
   - deny_calls: [os.remove, shutil.rmtree, os.replace]
 - Verification:
   - must_have_assertions
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_project_runtime_state_policy.py", "tests/test_source_lock_audit_service.py", "tests/test_source_lock_repository.py", "-q", "--basetemp", "{workspace}/pytest-runtime-state-policy", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0}
-- Dependencies: [source_lock_repository, source_lock_audit_service]
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_project_runtime_state_policy.py", "-q", "--basetemp", "{workspace}/pytest-runtime-state-policy", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+- Dependencies: [inspect_non_ssot_runtime_artifacts, archive_non_ssot_source_locks, archive_non_ssot_task_snapshots]
 - Input:
   - project_root: path
-  - audit_service: SourceLockAuditService
-  - repository: SourceLockRepository
   - candidate_node_names: array
-  - allowed_symbols: [TaskSnapshotArchiveRepository, ProjectRuntimeStatePolicy, archive_non_ssot_task_artifacts]
+  - allowed_symbols: [ProjectRuntimeStatePolicy, archive_non_ssot_task_artifacts]
   - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py, tests/test_project_runtime_state_policy.py]
   - forbidden_files: [adad_core.py, adad_task.py, source_lock_repository.py, source_lock_audit_service.py, system_map.yaml, system_map.md]
 - Output:
@@ -467,9 +463,113 @@
   - post_audit_report: object
 - Retry Budget: 2
 - TODO:
-  - [ ] #82：封存非 SSOT Task snapshot／Source Lock 測試遺留，保留 evidence
+  - [ ] #82-A4：封存不屬於目前 SSOT 的本機 Task artifacts 整合報告節點
 - Checkpoint:
   - [x] CP-1-082-RUNTIME-STATE-ARCHIVE (validated：2026-07-18 人工要求新增並核發)
+
+##### Module: inspect_non_ssot_runtime_artifacts
+- Type: service
+- Observability: not_required
+- Description: #82-A1 唯讀檢查候選名稱，確認其不在 SSOT、無 active claim，輸出 immutable preflight receipt，作為後續封存的前置檢查。
+- Source: adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py::inspect_non_ssot_runtime_artifacts
+- Preferred Pattern: read_only_validator
+- Complexity: medium
+- Algorithm:
+  - 只接受非空、無重複、無 traversal 的 candidate_node_names。
+  - 取得 fresh SourceLockAuditService report；當 healthy=false 或 mutation_blocked=true 時，回傳 preflight 失敗收據。
+  - 每個候選都必須可重讀，且其 node_name 與 source_path 在目前 SSOT 均不存在 owner；仍有 SSOT owner、active claim、有效可重發 Task 或不確定分類一律拒絕封存，標記為不通過。
+- Decisions: [A1 專注於唯讀安全性前置檢查，不含 any 狀態修改]
+- Invariants:
+  - deny_imports: [adad_core]
+  - deny_calls: [os.remove, shutil.rmtree, os.replace]
+- Verification:
+  - must_have_assertions
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_project_runtime_state_policy.py", "-q", "--basetemp", "{workspace}/pytest-runtime-state-policy", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+- Dependencies: [source_lock_audit_service]
+- Input:
+  - project_root: path
+  - audit_service: SourceLockAuditService
+  - candidate_node_names: array
+  - allowed_symbols: [inspect_non_ssot_runtime_artifacts]
+  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py, tests/test_project_runtime_state_policy.py]
+  - forbidden_files: [adad_core.py, adad_task.py, source_lock_repository.py, source_lock_audit_service.py, system_map.yaml, system_map.md]
+- Output:
+  - preflight_receipt: object
+  - healthy: boolean
+- Retry Budget: 2
+- TODO:
+  - [ ] #82-A1：實現非 SSOT 測試遺留 Task/Lock 的唯讀檢查與預檢收據
+- Checkpoint:
+  - [x] CP-1-082-A1-INSPECT-RUNTIME-ARTIFACTS (validated：2026-07-18 人工要求新增並核發)
+
+##### Module: archive_non_ssot_source_locks
+- Type: service
+- Observability: not_required
+- Description: #82-A2 只依據 repository 封存已通過 preflight 的精確 canonical locks，保留 quarantine 證據。
+- Source: adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py::archive_non_ssot_source_locks
+- Preferred Pattern: fail_closed_maintenance_service
+- Complexity: medium
+- Algorithm:
+  - 以 inspect 產生的 preflight_receipt 為輸入；若 preflight 不健康，拒絕封存。
+  - 調用 SourceLockRepository.quarantine 將候選 canonical locks 封存。
+  - 每個封存必須保留 exact bytes、來源 identity、payload digest、quarantine/archive path 與 mutation evidence。
+- Decisions: [A2 專注於 lock 的封存，與 task snapshot 封存解耦]
+- Invariants:
+  - deny_imports: [adad_core]
+  - deny_calls: [os.remove, shutil.rmtree, os.replace]
+- Verification:
+  - must_have_assertions
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_project_runtime_state_policy.py", "-q", "--basetemp", "{workspace}/pytest-runtime-state-policy", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+- Dependencies: [source_lock_repository]
+- Input:
+  - project_root: path
+  - repository: SourceLockRepository
+  - preflight_receipt: object
+  - allowed_symbols: [archive_non_ssot_source_locks]
+  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py, tests/test_project_runtime_state_policy.py]
+  - forbidden_files: [adad_core.py, adad_task.py, source_lock_repository.py, source_lock_audit_service.py, system_map.yaml, system_map.md]
+- Output:
+  - lock_archive_receipt: object
+  - mutation_evidence: array
+- Retry Budget: 2
+- TODO:
+  - [ ] #82-A2：封存非 SSOT Source Lock，保留 quarantine 證據
+- Checkpoint:
+  - [x] CP-1-082-A2-ARCHIVE-SOURCE-LOCKS (validated：2026-07-18 人工要求新增並核發)
+
+##### Module: archive_non_ssot_task_snapshots
+- Type: service
+- Observability: not_required
+- Description: #82-A3 唯讀或 non-overwrite 方式封存已通過 preflight 的 Task snapshots，保留 exact bytes 與封存收據。
+- Source: adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py::TaskSnapshotArchiveRepository.__init__,TaskSnapshotArchiveRepository.archive_path,TaskSnapshotArchiveRepository.archive,archive_non_ssot_task_snapshots
+- Preferred Pattern: fail_closed_maintenance_service
+- Complexity: medium
+- Algorithm:
+  - 以 inspect 產生的 preflight_receipt 為輸入；若 preflight 不健康，拒絕封存。
+  - 藉由 TaskSnapshotArchiveRepository 以 non-overwrite 且 identity-checked 方式封存 Task snapshots。
+  - 保留原樣的 bytes 內容、原始檔案路徑與封存收據資訊。
+- Decisions: [A3 專注於 task snapshot 封存，使用獨立的 TaskSnapshotArchiveRepository 封存庫]
+- Invariants:
+  - deny_imports: [adad_core]
+  - deny_calls: [os.remove, shutil.rmtree, os.replace]
+- Verification:
+  - must_have_assertions
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_project_runtime_state_policy.py", "-q", "--basetemp", "{workspace}/pytest-runtime-state-policy", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+- Dependencies: []
+- Input:
+  - project_root: path
+  - preflight_receipt: object
+  - allowed_symbols: [TaskSnapshotArchiveRepository, archive_non_ssot_task_snapshots]
+  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/project_runtime_state_policy.py, tests/test_project_runtime_state_policy.py]
+  - forbidden_files: [adad_core.py, adad_task.py, source_lock_repository.py, source_lock_audit_service.py, system_map.yaml, system_map.md]
+- Output:
+  - task_archive_receipt: object
+  - mutation_evidence: array
+- Retry Budget: 2
+- TODO:
+  - [ ] #82-A3：封存已通過預檢的 Task snapshots，保留 exact bytes
+- Checkpoint:
+  - [x] CP-1-082-A3-ARCHIVE-TASK-SNAPSHOTS (validated：2026-07-18 人工要求新增並核發)
 
 ##### Module: task_snapshot_schema
 - Type: schema
@@ -487,7 +587,7 @@
 - Decisions: [v2 與 v3 並存；summary 不得取代原始欄位；canonical template 是唯一可編輯來源；生成副本只能由 sync_assets 更新]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_generate_task.py", "tests/test_validate_schema.py", "-q"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_generate_task.py", "tests/test_validate_schema.py", "-q", "--basetemp", "{workspace}/pytest-task-snapshot-schema", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: [validate_schema]
 - Input:
   - task_snapshot: object
@@ -547,7 +647,7 @@
 - Decisions: [Markdown include 是來源拆檔；YAML sub_maps 是 IR ownership，兩者不可混為同一欄位；既有 owner 優先；新節點必須明示 root 或 scope]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_compile_sub_maps.py", "-q", "--basetemp", "{workspace}/pytest-compile-submaps-workspace"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_compile_sub_maps.py", "-q", "--basetemp", "{workspace}/pytest-compile-submaps-workspace", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
@@ -729,15 +829,15 @@
 - Invariants:
   - deny_calls: [shutil.rmtree, os.remove, os.unlink]
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_pytest_regression_lifecycle.py", "-q", "--basetemp", "{workspace}/pytest-regression-lifecycle-workspace", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0}
-  - command: {"argv": ["{project_python}", "-m", "pytest", "-m", "regression_backlog", "-q", "--basetemp", "{workspace}/pytest-regression-backlog-workspace", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_pytest_regression_lifecycle.py", "-q", "--basetemp", "{workspace}/pytest-regression-lifecycle-workspace", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "-m", "regression_backlog", "-q", "--basetemp", "{workspace}/pytest-regression-backlog-workspace", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: []
 - Input:
   - pytest_config: object
   - collected_items: array
   - exitstatus: integer
   - allowed_symbols: [pytest_configure, pytest_collection_modifyitems, pytest_runtest_makereport, pytest_sessionfinish, temporary_artifact_root]
-  - allowed_files: [tests/conftest.py, tests/test_pytest_regression_lifecycle.py, docs/specifications/AGENT_REGR_BACKLOG_NOTE.md, docs/specifications/05_task_backlog.md]
+  - allowed_files: [tests/conftest.py, tests/test_pytest_regression_lifecycle.py]
 - Output:
   - lifecycle_report: object
 - Retry Budget: 2
@@ -768,7 +868,7 @@
 - Decisions: [空字串不得視為合法 ref；workflow 已使用 fetch-depth 0，允許 HEAD~1；本 Task 不修改 Verification 或 Commit Gate]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_adad_pre_commit.py", "-q", "--basetemp", "{workspace}/pytest"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_adad_pre_commit.py", "-q", "--basetemp", "{workspace}/pytest", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
@@ -806,7 +906,7 @@
 ##### Module: adad_task
 - Type: tool
 - Observability: not_required
-- Description: Task 快照生命週期操作，並提供 #78 Source Lock audit／prune／reconcile 的完整 CLI 入口；CLI 僅負責精確參數解析、委派已核准 core API、原樣輸出結構化結果及映射 exit code，不複製或弱化 lock 政策。
+- Description: Task 快照生命週期操作，支援 #78 Source Lock CLI 與 index --check｜--rebuild；CLI 僅負責精確參數解析、委派已核准 core API、原樣輸出結構化結果及映射 exit code，不複製或弱化 lock 與 index 政策。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_task.py
 - Preferred Pattern: none
 - Complexity: low
@@ -814,19 +914,22 @@
   - `locks` 僅接受空參數，呼叫 `ADADCore.audit_source_locks()`，預設唯讀。
   - `locks --prune` 僅接受單一精確旗標，呼叫 `ADADCore.reconcile_source_locks("prune")`。
   - `locks --reconcile` 僅接受單一精確旗標，呼叫 `ADADCore.reconcile_source_locks("reconcile")`。
+  - `index --check` 僅委派 `ADADCore.check_task_index()`。
+  - `index --rebuild` 僅委派 `ADADCore._rebuild_task_index()`。
   - unknown、positional、重複、多餘或互斥參數一律在呼叫 core 前回 JSON usage error 與 exit 1。
-  - 合法呼叫的 core result 必須完整原樣 JSON 輸出；nested categories、mutation_blocked、preflight、mutations、partial_recovery 與 error 不得刪除、改寫或字串化。
+  - 合法呼叫的 core result 必須完整原樣 JSON 輸出（即 receipt）；nested categories、mutation_blocked、preflight、mutations、partial_recovery 與 error 不得刪除、改寫或字串化。
   - exit code 僅依 `res.get("success") is True` 映射為 0，否則為 1；CLI 不重新解釋 core 的 healthy 或分類政策。
 - Decisions: [CLI 是完整功能入口而非另一份政策實作；audit、prune、reconcile 的安全判定唯一來自已核准 adad_core API；mutation 必須由明確 opt-in flag 觸發；不新增 TTY gate、confirmation prompt、force、audit alias、positional alias或短旗標]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_adad_task.py", "-q", "--basetemp", "{workspace}/pytest-task-lock-cli-workspace"], "cwd": "project", "expect_exit": 0}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_adad_task.py", "-q", "--basetemp", "{workspace}/pytest-task-lock-cli-workspace"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
-  - command: string（submit｜approve｜reject｜isolate｜locks）
+  - command: string（submit｜approve｜reject｜isolate｜locks｜index）
   - locks_args: []|[--prune]|[--reconcile]
-  - allowed_symbols: [_require_human_tty, cmd_approve, cmd_locks, main]
+  - index_args: []|[--check]|[--rebuild]
+  - allowed_symbols: [_require_human_tty, cmd_approve, cmd_locks, cmd_index, main]
   - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/adad_task.py, tests/test_adad_task.py]
 - Output:
   - result: object（core structured result 原樣輸出）

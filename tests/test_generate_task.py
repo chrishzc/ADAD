@@ -2,6 +2,7 @@
 import json
 import importlib.util
 import sys
+import builtins
 from pathlib import Path
 
 from conftest import REPO_ROOT, run_script, write_yaml
@@ -194,6 +195,29 @@ def test_generate_task_blocks_incomplete_spec(project_dir, base_modules):
     assert any("source" in item for item in data["readiness_blockers"])
 
 
+def test_generate_task_returns_not_ready_when_optional_cli_validator_is_missing(
+    project_dir, base_modules, monkeypatch
+):
+    """Standalone workflow scripts must not crash when adad_cli is unavailable."""
+    write_yaml(project_dir, base_modules)
+    original_import = builtins.__import__
+
+    def missing_cli_validator(name, *args, **kwargs):
+        if name == "adad_cli.workflow.task_contract_schema":
+            raise ImportError("adad_cli is not installed")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing_cli_validator)
+
+    result = CanonicalADADCore(
+        project_dir / "system_map.yaml", check_validity=False
+    ).generate_task("sample_tool")
+
+    assert result["success"] is False
+    assert result["error"].startswith("[NOT READY]")
+    assert any("adad_cli is not installed" in blocker for blocker in result["readiness_blockers"])
+
+
 def test_generate_task_blocks_required_observability_without_signals(project_dir, base_modules):
     base_modules["modules"]["sample_tool"]["observability"] = {"mode": "required", "signals": []}
     write_yaml(project_dir, base_modules)
@@ -212,7 +236,7 @@ def test_generate_task_enforces_complexity_budget(project_dir, base_modules):
     assert any("Complexity: medium" in item for item in data["readiness_blockers"])
 
     base_modules["modules"]["sample_tool"]["algorithm"] = ["validate input"]
-    base_modules["modules"]["sample_tool"]["verification"] = [{"must_have_assertions": True}]
+    base_modules["modules"]["sample_tool"]["verification"] = ["must_have_assertions"]
     write_yaml(project_dir, base_modules)
     code, data, _, err = run_script("generate_task.py", ["sample_tool"], cwd=project_dir)
     assert code == 0, err

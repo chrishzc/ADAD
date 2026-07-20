@@ -40,3 +40,10 @@ def test_sync_twice_is_idempotent_in_isolated_target(tmp_path):
     assert res2["success"] is True
     assert res2["differences"] == []
     assert (tmp_path / ".agents" / "AGENTS.md").is_file()
+    assert (
+        tmp_path
+        / "adad_cli"
+        / "resources"
+        / "blocked_report"
+        / "report_blocked_mcp.py"
+    ).is_file()

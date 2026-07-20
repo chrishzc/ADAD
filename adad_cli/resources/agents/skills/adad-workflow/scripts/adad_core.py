@@ -18,6 +18,9 @@ import copy
 import subprocess
 import tempfile
 import signal
+import time
+import ctypes
+import re
 from collections import Counter
 from task_complexity import evaluate_task_complexity
 from source_lock_repository import SourceLockRepository
@@ -41,6 +44,9 @@ except ImportError:
 MAP_FILE = "system_map.yaml"
 TASK_DIR = os.path.join(".agents", "tasks")
 SOURCE_LOCK_DIR = os.path.join(TASK_DIR, ".source_locks")
+TASK_INDEX_FILE = os.path.join(TASK_DIR, "task_index.json")
+TASK_INDEX_LOCK_FILE = os.path.join(TASK_DIR, ".task_index.lock")
+TASK_INDEX_LOCK_LEASE_SECONDS = 30.0
 CHECKPOINT_DIR = "checkpoints"
 TASK_SCHEMA_VERSION = 3
 TASK_STATUSES = {"assigned", "in_progress", "submitted", "approved", "rejected", "blocked"}
@@ -1376,14 +1382,14 @@ class ADADCore:
             try:
                 from adad_cli.workflow.task_contract_schema import validate_semantic_contract
                 validate_semantic_contract(description)
-            except ValueError as exc:
+            except (ValueError, ImportError) as exc:
                 blockers.append(f"Semantic Contract validation failed: {exc}")
         non_goals = node.get("non_goals")
         if non_goals is not None:
             try:
                 from adad_cli.workflow.task_contract_schema import validate_non_goals
                 validate_non_goals(non_goals)
-            except ValueError as exc:
+            except (ValueError, ImportError) as exc:
                 blockers.append(f"Non-goals validation failed: {exc}")
         for field in ("input", "output"):
             if not isinstance(node.get(field), dict):
@@ -1393,13 +1399,11 @@ class ADADCore:
                 blockers.append(f"`{field}` 必須是 array（可為空，代表明確無額外約束）")
         verification_list = node.get("verification", [])
         if isinstance(verification_list, list):
-            cases = [v["case"] for v in verification_list if isinstance(v, dict) and "case" in v]
-            if cases:
-                try:
-                    from adad_cli.workflow.task_contract_schema import validate_verification_conditions
-                    validate_verification_conditions(cases)
-                except ValueError as exc:
-                    blockers.append(f"Verification conditions validation failed: {exc}")
+            try:
+                from adad_cli.workflow.task_contract_schema import validate_verification_conditions
+                validate_verification_conditions(verification_list)
+            except (ValueError, ImportError) as exc:
+                blockers.append(f"Verification conditions validation failed: {exc}")
 
         observability = node.get("observability")
         if not isinstance(observability, dict):
@@ -1595,35 +1599,350 @@ class ADADCore:
                 try:
                     from adad_cli.workflow.task_contract_schema import validate_semantic_contract
                     validate_semantic_contract(description)
-                except ValueError as exc:
+                except (ValueError, ImportError) as exc:
                     errors.append(f"Semantic Contract validation failed: {exc}")
 
             if "non_goals" in target:
                 try:
                     from adad_cli.workflow.task_contract_schema import validate_non_goals
                     validate_non_goals(target["non_goals"])
-                except ValueError as exc:
+                except (ValueError, ImportError) as exc:
                     errors.append(f"Non-goals validation failed: {exc}")
             elif task_data.get("schema_version") == 3:
                 errors.append("缺少必要欄位 `non_goals` (schema version 3)")
 
             verification_list = target.get("verification", [])
             if isinstance(verification_list, list):
-                cases = [v["case"] for v in verification_list if isinstance(v, dict) and "case" in v]
-                if cases:
-                    try:
-                        from adad_cli.workflow.task_contract_schema import validate_verification_conditions
-                        validate_verification_conditions(cases)
-                    except ValueError as exc:
-                        errors.append(f"Verification conditions validation failed: {exc}")
+                try:
+                    from adad_cli.workflow.task_contract_schema import validate_verification_conditions
+                    validate_verification_conditions(verification_list)
+                except (ValueError, ImportError) as exc:
+                    errors.append(f"Verification conditions validation failed: {exc}")
         return {"valid": not errors, "errors": errors}
 
     def _save_task(self, node_name, task_data):
-        os.makedirs(self.task_dir, exist_ok=True)
-        path = self._task_path(node_name)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(task_data, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+        result = self._persist_task_snapshot(node_name, task_data)
+        if not result.get("success"):
+            raise OSError(result.get("error") or "[TASK SNAPSHOT] Failed to save Task snapshot.")
+        return result
+
+    def _task_index_lock_path(self):
+        return os.path.join(self.task_dir, os.path.basename(TASK_INDEX_LOCK_FILE))
+
+    def _load_task_index(self):
+        path = os.path.join(self.task_dir, os.path.basename(TASK_INDEX_FILE))
+        if not os.path.exists(path):
+            return {
+                "version": 1,
+                "entries": {},
+                "updated_at": None,
+                "_load_error": None
+            }
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            return {
+                "version": 1,
+                "entries": {},
+                "updated_at": None,
+                "_load_error": f"Task index malformed: {exc}"
+            }
+        if not isinstance(payload, dict):
+            payload = {
+                "version": 1,
+                "entries": {},
+                "updated_at": None,
+                "_load_error": "Task index payload is not an object."
+            }
+        entries = payload.get("entries")
+        if not isinstance(entries, dict):
+            entries = {}
+        return {
+            "version": payload.get("version", 1),
+            "updated_at": payload.get("updated_at"),
+            "entries": entries,
+            "_load_error": payload.get("_load_error"),
+        }
+
+    def _write_task_index_payload(self, payload):
+        path = os.path.join(self.task_dir, os.path.basename(TASK_INDEX_FILE))
+        temp_path = None
+        try:
+            os.makedirs(self.task_dir, exist_ok=True)
+            descriptor, temp_path = tempfile.mkstemp(
+                prefix=".task_index.", suffix=".tmp", dir=self.task_dir
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path)
+            temp_path = None
+            return {"success": True}
+        except Exception as exc:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            return {"success": False, "error": f"[TASK INDEX] Failed to write index: {exc}"}
+
+    @staticmethod
+    def _task_index_owner_alive(owner):
+        if owner <= 0:
+            return False
+        try:
+            os.kill(owner, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+    def _acquire_task_index_lock(self, timeout_seconds=2.0):
+        lock_path = self._task_index_lock_path()
+        token = f"{os.getpid()}:{time.time_ns()}"
+        deadline = time.time() + timeout_seconds
+        while time.time() <= deadline:
+            try:
+                with open(lock_path, "x", encoding="utf-8") as f:
+                    json.dump({
+                        "token": token,
+                        "owner": os.getpid(),
+                        "expires_at": time.time() + TASK_INDEX_LOCK_LEASE_SECONDS,
+                    }, f)
+                    f.write("\n")
+                return token
+            except FileExistsError:
+                removed = False
+                try:
+                    with open(lock_path, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                    owner = int(existing.get("owner", 0))
+                    owner_alive = self._task_index_owner_alive(owner)
+                    if (
+                        not owner_alive and
+                        time.time() > float(existing.get("expires_at", 0))
+                    ):
+                        os.remove(lock_path)
+                        removed = True
+                except (json.JSONDecodeError, ValueError):
+                    owner_alive = False
+                    try:
+                        with open(lock_path, "r", encoding="utf-8") as f:
+                            raw_lock = f.read()
+                        match = re.search(r'"owner"\s*:\s*(\d+)', raw_lock)
+                        if match:
+                            owner_alive = self._task_index_owner_alive(int(match.group(1)))
+                    except (OSError, ValueError):
+                        pass
+                    try:
+                        stale = (
+                            not owner_alive and
+                            time.time() - os.path.getmtime(lock_path) > TASK_INDEX_LOCK_LEASE_SECONDS
+                        )
+                    except OSError:
+                        stale = False
+                    if stale:
+                        try:
+                            os.remove(lock_path)
+                            removed = True
+                        except OSError:
+                            removed = False
+                except OSError:
+                    removed = False
+                if not removed:
+                    time.sleep(0.05)
+        return None
+
+    def _release_task_index_lock(self, token):
+        lock_path = self._task_index_lock_path()
+        try:
+            with open(lock_path, "r", encoding="utf-8") as f:
+                current = json.load(f)
+            if current.get("token") == token:
+                os.remove(lock_path)
+        except OSError:
+            return
+        except json.JSONDecodeError:
+            return
+
+    def _task_index_entry(self, node_name, task_data, task_path):
+        source_lock = task_data.get("source_lock") or {}
+        return {
+            "node_name": node_name,
+            "task_id": task_data.get("task_id"),
+            "status": task_data.get("status"),
+            "system_map_version": task_data.get("system_map_version"),
+            "schema_version": task_data.get("schema_version"),
+            "source_hash": task_data.get("source_hash"),
+            "implementation_hash": task_data.get("implementation_hash"),
+            "source_path": source_lock.get("source_path"),
+            "task_id_in_lock": source_lock.get("task_id"),
+            "path": task_path.replace("\\", "/")
+        }
+
+    def _scan_task_snapshots(self):
+        tasks = {}
+        warnings = []
+        if not os.path.isdir(self.task_dir):
+            return tasks, warnings
+
+        for name in os.listdir(self.task_dir):
+            if not name.endswith(".task.json"):
+                continue
+            node_name = name[:-10]
+            task_path = os.path.join(self.task_dir, name)
+            try:
+                with open(task_path, "r", encoding="utf-8") as f:
+                    task_data = json.load(f)
+            except (json.JSONDecodeError, OSError) as exc:
+                warnings.append({"node_name": node_name, "task_path": task_path, "error": str(exc)})
+                continue
+            if not isinstance(task_data, dict) or task_data.get("node_name") != node_name:
+                warnings.append({
+                    "node_name": node_name,
+                    "task_path": task_path,
+                    "error": "Invalid task payload or node_name mismatch."
+                })
+                continue
+            tasks[node_name] = self._task_index_entry(node_name, task_data, task_path)
+        return tasks, warnings
+
+    def _rebuild_task_index(self):
+        lock = self._acquire_task_index_lock(timeout_seconds=2.0)
+        if lock is None:
+            return {"success": False, "error": "[TASK INDEX] Failed to acquire short lock."}
+        try:
+            scanned, warnings = self._scan_task_snapshots()
+            payload = self._load_task_index()
+            payload["version"] = 1
+            payload["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            payload["entries"] = scanned
+            payload["_load_error"] = None
+            payload["warnings"] = warnings
+            payload["counts"] = {
+                "total": len(scanned)
+            }
+            res = self._write_task_index_payload(payload)
+            if not res.get("success"):
+                return {
+                    "success": False,
+                    "error": res.get("error"),
+                    "warnings": warnings,
+                    "entries": scanned,
+                }
+            return {
+                "success": True,
+                "updated_at": payload["updated_at"],
+                "entries": scanned,
+                "counts": payload["counts"],
+                "warnings": warnings
+            }
+        finally:
+            self._release_task_index_lock(lock)
+
+    def _update_task_index_entry(self, node_name, task_data, task_path):
+        lock = self._acquire_task_index_lock(timeout_seconds=2.0)
+        if lock is None:
+            return {"success": False, "error": "[TASK INDEX] Failed to acquire short lock."}
+        try:
+            payload = self._load_task_index()
+            entries = payload.get("entries") if isinstance(payload.get("entries"), dict) else {}
+            if payload.get("_load_error"):
+                entries, _ = self._scan_task_snapshots()
+            entries[node_name] = self._task_index_entry(node_name, task_data, task_path)
+            payload["version"] = 1
+            payload["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            payload["entries"] = entries
+            payload["_load_error"] = None
+            return self._write_task_index_payload(payload)
+        finally:
+            self._release_task_index_lock(lock)
+
+    def check_task_index(self):
+        current = self._load_task_index()
+        index_entries = current.get("entries") if isinstance(current.get("entries"), dict) else {}
+        scanned, warnings = self._scan_task_snapshots()
+
+        issues = []
+        if current.get("_load_error"):
+            issues.append({"type": "index_load_error", "error": current["_load_error"]})
+        if warnings:
+            issues.append({"type": "snapshot_scan_warning", "warnings": warnings})
+
+        index_nodes = set(index_entries.keys())
+        scanned_nodes = set(scanned.keys())
+
+        for node_name in sorted(scanned_nodes - index_nodes):
+            issues.append({"type": "index_missing", "node_name": node_name})
+
+        for node_name in sorted(index_nodes - scanned_nodes):
+            issues.append({"type": "index_orphan", "node_name": node_name})
+
+        for node_name in sorted(scanned_nodes & index_nodes):
+            current_entry = index_entries.get(node_name, {})
+            scanned_entry = scanned[node_name]
+            for key in (
+                "node_name", "task_id", "status", "system_map_version", "schema_version",
+                "source_hash", "implementation_hash", "source_path", "task_id_in_lock", "path",
+            ):
+                if str(current_entry.get(key)) != str(scanned_entry.get(key)):
+                    issues.append({
+                        "type": "index_mismatch",
+                        "node_name": node_name,
+                        "field": key,
+                        "index_value": current_entry.get(key),
+                        "snapshot_value": scanned_entry.get(key),
+                    })
+
+        consistent = len(issues) == 0
+        payload_entries = index_entries if consistent else scanned
+        return {
+            "success": consistent,
+            "consistent": consistent,
+            "entries": payload_entries,
+            "counts": {
+                "index": len(index_entries),
+                "snapshot": len(scanned),
+            },
+            "warnings": warnings,
+            "issues": issues,
+            "source": "index" if consistent else "snapshot_scan_fallback",
+        }
+
+    def _persist_task_snapshot(self, node_name, task_data):
+        task_path = self._task_path(node_name)
+        temp_path = None
+        try:
+            serialized_task = json.dumps(task_data, ensure_ascii=False, indent=2)
+            os.makedirs(self.task_dir, exist_ok=True)
+            descriptor, temp_path = tempfile.mkstemp(prefix=f".{node_name}.", suffix=".tmp", dir=self.task_dir)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(serialized_task)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_path, task_path)
+            temp_path = None
+
+            index_result = self._update_task_index_entry(node_name, task_data, task_path)
+            return {
+                "success": True,
+                "path": task_path,
+                "index_sync": index_result,
+            }
+
+        except Exception as exc:
+            return {"success": False, "error": f"[TASK SNAPSHOT] Failed to persist Task snapshot: {exc}"}
+        finally:
+            if temp_path is not None and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     @staticmethod
     def _normalize_source_file_path(source):
@@ -2273,27 +2592,16 @@ class ADADCore:
         except (TypeError, ValueError) as exc:
             return fail_with_cleanup(f"[INVALID TASK] 無法序列化可解析的 Task 快照：{exc}")
 
-        task_path = self._task_path(node_name)
-        temp_path = None
         try:
-            os.makedirs(self.task_dir, exist_ok=True)
-            descriptor, temp_path = tempfile.mkstemp(
-                prefix=f".{node_name}.", suffix=".tmp", dir=self.task_dir
-            )
-            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-                handle.write(serialized_task)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, task_path)
+            save_result = self._save_task(node_name, task_data)
         except OSError as exc:
-            if temp_path:
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
             return fail_with_cleanup(f"[INVALID TASK] 無法原子寫入 Task 快照：{exc}")
-        return {"success": True, "task_id": task_id, "path": self._task_path(node_name)}
+        return {
+            "success": True,
+            "task_id": task_id,
+            "path": self._task_path(node_name),
+            "index_sync": save_result.get("index_sync"),
+        }
 
     def task_submit(self, node_name, file_path=None):
         """
@@ -3257,15 +3565,138 @@ class ADADCore:
         timeout = command.get("timeout", 30)
         cwd_name = command.get("cwd", "workspace")
         result["expected_exit"] = expected_exit
+        process = None
+        job_handle = None
+        kernel32 = None
+
+        def close_job_handle():
+            nonlocal job_handle
+            if job_handle:
+                kernel32.CloseHandle(job_handle)
+                job_handle = None
+
+        def create_windows_job(process_id):
+            class IO_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("ReadOperationCount", ctypes.c_uint64),
+                    ("WriteOperationCount", ctypes.c_uint64),
+                    ("OtherOperationCount", ctypes.c_uint64),
+                    ("ReadTransferCount", ctypes.c_uint64),
+                    ("WriteTransferCount", ctypes.c_uint64),
+                    ("OtherTransferCount", ctypes.c_uint64),
+                ]
+
+            class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("PerProcessUserTimeLimit", ctypes.c_int64),
+                    ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", ctypes.c_uint32),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", ctypes.c_uint32),
+                    ("Affinity", ctypes.c_size_t),
+                    ("PriorityClass", ctypes.c_uint32),
+                    ("SchedulingClass", ctypes.c_uint32),
+                ]
+
+            class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                    ("IoInfo", IO_COUNTERS),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t),
+                ]
+
+            local_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            local_kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+            local_kernel32.CreateJobObjectW.restype = ctypes.c_void_p
+            local_kernel32.SetInformationJobObject.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32
+            ]
+            local_kernel32.SetInformationJobObject.restype = ctypes.c_int
+            local_kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            local_kernel32.OpenProcess.restype = ctypes.c_void_p
+            local_kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            local_kernel32.AssignProcessToJobObject.restype = ctypes.c_int
+            local_kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            local_kernel32.CloseHandle.restype = ctypes.c_int
+            local_kernel32.TerminateJobObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            local_kernel32.TerminateJobObject.restype = ctypes.c_int
+
+            local_job_handle = local_kernel32.CreateJobObjectW(None, None)
+            if not local_job_handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            process_handle = None
+            try:
+                info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+                info.BasicLimitInformation.LimitFlags = 0x00002000
+                if not local_kernel32.SetInformationJobObject(
+                    local_job_handle, 9, ctypes.byref(info), ctypes.sizeof(info)
+                ):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                process_handle = local_kernel32.OpenProcess(0x0100 | 0x0001, False, process_id)
+                if not process_handle:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if not local_kernel32.AssignProcessToJobObject(local_job_handle, process_handle):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            except BaseException:
+                local_kernel32.CloseHandle(local_job_handle)
+                raise
+            finally:
+                if process_handle:
+                    local_kernel32.CloseHandle(process_handle)
+            return local_kernel32, local_job_handle
+
+        def terminate_command_tree():
+            if os.name == "nt":
+                if job_handle is None:
+                    process.kill()
+                    return
+                if not kernel32.TerminateJobObject(job_handle, 1):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+
         try:
             if expected_exit != "nonzero" and not isinstance(expected_exit, int):
                 raise ValueError("expect_exit 必須是整數或 'nonzero'。")
             if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 300:
                 raise ValueError("timeout 必須大於 0 且不超過 300 秒。")
             argv = self._expand_verification_argv(command.get("argv"), placeholders)
+            try:
+                basetemp_target = None
+                if "--basetemp" in argv:
+                    idx = argv.index("--basetemp")
+                    if idx + 1 < len(argv):
+                        basetemp_target = argv[idx + 1]
+                else:
+                    for arg in argv:
+                        if arg.startswith("--basetemp="):
+                            basetemp_target = arg.split("=", 1)[1]
+                            break
+                if basetemp_target:
+                    basetemp_path = os.path.realpath(os.path.abspath(basetemp_target))
+                    project_root_abs = os.path.realpath(os.path.abspath(self.project_root))
+                    if basetemp_path.startswith(project_root_abs) and os.path.exists(basetemp_path):
+                        import shutil
+                        import stat
+                        def _force_remove_readonly(func, path, excinfo):
+                            try:
+                                os.chmod(path, stat.S_IWRITE)
+                                func(path)
+                            except OSError:
+                                pass
+                        try:
+                            shutil.rmtree(basetemp_path, onerror=_force_remove_readonly)
+                        except OSError:
+                            pass
+            except Exception:
+                pass
             if self._is_pytest_command(argv):
                 if not self._has_pytest_basetemp(argv):
-                    basetemp_dir = workspace
+                    basetemp_dir = placeholders.get("project", self.project_root)
                     if ".agents" not in basetemp_dir:
                         basetemp_dir = os.path.join(basetemp_dir, ".agents", "workspaces")
                     argv.extend(
@@ -3291,6 +3722,42 @@ class ADADCore:
             else:
                 process_kwargs["start_new_session"] = True
             process = subprocess.Popen(argv, **process_kwargs)
+            if os.name == "nt" and getattr(process, "pid", None) is not None:
+                try:
+                    kernel32, job_handle = create_windows_job(process.pid)
+                except Exception as assignment_error:
+                    result["error"] = f"Windows Job Object assignment failed: {assignment_error}"
+                    output_encoding = command.get("output_encoding", "utf-8")
+                    stdout_bytes, stderr_bytes = b"", b""
+                    try:
+                        process.kill()
+                        stdout_bytes, stderr_bytes = process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired as drain_error:
+                        stdout_bytes = drain_error.stdout if drain_error.stdout is not None else stdout_bytes
+                        stderr_bytes = drain_error.stderr if drain_error.stderr is not None else stderr_bytes
+                        result["termination_error"] = (
+                            "unassigned verification process did not drain within 5 seconds."
+                        )
+                    except Exception as termination_error:
+                        result["termination_error"] = (
+                            f"unassigned verification process termination failed: {termination_error}"
+                        )
+                    stdout, stdout_valid, stdout_error = self._decode_verification_output(
+                        stdout_bytes, output_encoding
+                    )
+                    stderr, stderr_valid, stderr_error = self._decode_verification_output(
+                        stderr_bytes, output_encoding
+                    )
+                    result.update({
+                        "returncode": None,
+                        "stdout": stdout[-4000:],
+                        "stderr": stderr[-4000:],
+                        "encoding_valid": stdout_valid and stderr_valid,
+                        "encoding_error": "; ".join(
+                            detail for detail in (stdout_error, stderr_error) if detail
+                        ) or None,
+                    })
+                    return result
             stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
             completed = type("CompletedProcess", (), {
                 "returncode": process.returncode,
@@ -3324,16 +3791,7 @@ class ADADCore:
             output_encoding = command.get("output_encoding", "utf-8")
             stdout_bytes, stderr_bytes = e.stdout, e.stderr
             try:
-                if os.name == "nt":
-                    subprocess.run(
-                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                        check=False,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=5,
-                    )
-                else:
-                    os.killpg(process.pid, signal.SIGKILL)
+                terminate_command_tree()
                 stdout_bytes, stderr_bytes = process.communicate(timeout=5)
             except subprocess.TimeoutExpired as drain_error:
                 stdout_bytes = drain_error.stdout if drain_error.stdout is not None else stdout_bytes
@@ -3350,8 +3808,29 @@ class ADADCore:
                 "encoding_valid": stdout_valid and stderr_valid,
                 "encoding_error": "; ".join(detail for detail in (stdout_error, stderr_error) if detail) or None,
             })
+        except KeyboardInterrupt:
+            result["interrupted"] = True
+            result["error"] = "command 執行被使用者中斷"
+            output_encoding = command.get("output_encoding", "utf-8")
+            stdout_bytes, stderr_bytes = b"", b""
+            if process is not None:
+                try:
+                    terminate_command_tree()
+                    stdout_bytes, stderr_bytes = process.communicate(timeout=5)
+                except Exception as termination_error:
+                    result["termination_error"] = f"command tree termination failed: {termination_error}"
+            stdout, stdout_valid, stdout_error = self._decode_verification_output(stdout_bytes, output_encoding)
+            stderr, stderr_valid, stderr_error = self._decode_verification_output(stderr_bytes, output_encoding)
+            result.update({
+                "returncode": None,
+                "stdout": stdout[-4000:],
+                "stderr": stderr[-4000:],
+                "encoding_valid": stdout_valid and stderr_valid,
+                "encoding_error": "; ".join(detail for detail in (stdout_error, stderr_error) if detail) or None,
+            })
         except Exception as e:
             result["error"] = f"command 執行失敗：{e}"
+        close_job_handle()
         return result
 
     def _run_integration_verification(self, integration, real_file_path, integration_index):
@@ -3372,44 +3851,58 @@ class ADADCore:
         project_root = self.project_root
         source_path = os.path.realpath(os.path.abspath(real_file_path))
         workspace_root = project_root
+        workspace = None
         try:
             os.makedirs(workspace_root, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix="adad_verify_", dir=workspace_root) as workspace:
-                for fixture in integration.get("fixtures", []):
-                    if not isinstance(fixture, dict):
-                        raise ValueError("fixture 必須是 object。")
-                    fixture_source = self._safe_verification_path(
-                        project_root, fixture.get("source"), "fixture.source"
-                    )
-                    fixture_target = self._safe_verification_path(
-                        workspace, fixture.get("target"), "fixture.target"
-                    )
-                    if not os.path.exists(fixture_source):
-                        raise ValueError(f"fixture.source 不存在：{fixture.get('source')}")
-                    os.makedirs(os.path.dirname(fixture_target), exist_ok=True)
-                    if os.path.isdir(fixture_source):
-                        shutil.copytree(fixture_source, fixture_target)
-                    else:
-                        shutil.copy2(fixture_source, fixture_target)
+            workspace = tempfile.mkdtemp(prefix="adad_verify_", dir=workspace_root)
+            for fixture in integration.get("fixtures", []):
+                if not isinstance(fixture, dict):
+                    raise ValueError("fixture 必須是 object。")
+                fixture_source = self._safe_verification_path(
+                    project_root, fixture.get("source"), "fixture.source"
+                )
+                fixture_target = self._safe_verification_path(
+                    workspace, fixture.get("target"), "fixture.target"
+                )
+                if not os.path.exists(fixture_source):
+                    raise ValueError(f"fixture.source 不存在：{fixture.get('source')}")
+                os.makedirs(os.path.dirname(fixture_target), exist_ok=True)
+                if os.path.isdir(fixture_source):
+                    shutil.copytree(fixture_source, fixture_target)
+                else:
+                    shutil.copy2(fixture_source, fixture_target)
 
-                placeholders = {
-                    "python": sys.executable,
-                    "project_python": self._resolve_project_python(project_root),
-                    "source": source_path,
-                    "project": project_root,
-                    "workspace": workspace,
-                }
-                for step_index, step in enumerate(steps):
-                    step_result = self._run_verification_command(
-                        step, workspace, placeholders, step_index
-                    )
-                    integration_result["step_results"].append(step_result)
-                    if not step_result["passed"]:
-                        integration_result["error"] = f"第 {step_index + 1} 個 command 未通過。"
-                        return integration_result
-                integration_result["passed"] = True
+            placeholders = {
+                "python": sys.executable,
+                "project_python": self._resolve_project_python(project_root),
+                "source": source_path,
+                "project": project_root,
+                "workspace": workspace,
+            }
+            for step_index, step in enumerate(steps):
+                step_result = self._run_verification_command(
+                    step, workspace, placeholders, step_index
+                )
+                integration_result["step_results"].append(step_result)
+                if not step_result["passed"]:
+                    integration_result["error"] = f"第 {step_index + 1} 個 command 未通過。"
+                    return integration_result
+            integration_result["passed"] = True
         except Exception as e:
             integration_result["error"] = f"integration_case 執行失敗：{e}"
+        finally:
+            if workspace and os.path.exists(workspace):
+                import stat
+                def _remove_readonly(func, path, excinfo):
+                    try:
+                        os.chmod(path, stat.S_IWRITE)
+                        func(path)
+                    except OSError:
+                        pass
+                try:
+                    shutil.rmtree(workspace, onerror=_remove_readonly)
+                except OSError:
+                    pass
         return integration_result
 
     def verify_implementation(self, node_name, file_path=None):
@@ -3516,16 +4009,38 @@ class ADADCore:
         command_results = []
         for idx, command in enumerate(commands):
             if command.get("cwd", "workspace") == "project":
-                placeholders = {
+                project_placeholders = {
                     "python": sys.executable,
                     "project_python": self._resolve_project_python(self.project_root),
                     "source": os.path.realpath(os.path.abspath(real_file_path)),
                     "project": self.project_root,
                     "workspace": self.project_root,
                 }
-                step_result = self._run_verification_command(
-                    command, self.project_root, placeholders, idx
-                )
+                if self._is_pytest_command(command.get("argv") or []):
+                    temp_workspace = None
+                    try:
+                        temp_workspace = tempfile.mkdtemp(prefix="adad_verify_work_", dir=self.project_root)
+                        project_placeholders["workspace"] = temp_workspace
+                        step_result = self._run_verification_command(
+                            command, temp_workspace, project_placeholders, idx
+                        )
+                    finally:
+                        if temp_workspace and os.path.exists(temp_workspace):
+                            import stat
+                            def _remove_readonly(func, path, excinfo):
+                                try:
+                                    os.chmod(path, stat.S_IWRITE)
+                                    func(path)
+                                except OSError:
+                                    pass
+                            try:
+                                shutil.rmtree(temp_workspace, onerror=_remove_readonly)
+                            except OSError:
+                                pass
+                else:
+                    step_result = self._run_verification_command(
+                        command, self.project_root, project_placeholders, idx
+                    )
             else:
                 wrapped = self._run_integration_verification(
                     {"name": f"command_{idx}", "steps": [command]},

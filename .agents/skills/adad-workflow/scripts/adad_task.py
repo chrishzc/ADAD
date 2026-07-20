@@ -49,7 +49,15 @@ def cmd_submit(args):
     node_name = args[0]
     file_path = args[1] if len(args) > 1 else None
     core = ADADCore()
-    res = core.task_submit(node_name, file_path)
+    try:
+        res = core.task_submit(node_name, file_path)
+    except KeyboardInterrupt:
+        print(json.dumps({
+            "success": False,
+            "error": "提交流程被使用者中斷（KeyboardInterrupt）",
+            "interrupted": True,
+        }, ensure_ascii=False, indent=2))
+        sys.exit(1)
 
     if res.get("success"):
         # Task #53: 偵測 Schema 缺口並給出警告
@@ -134,11 +142,25 @@ def cmd_locks(args):
     sys.exit(0 if res.get("success") is True else 1)
 
 
-def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("submit", "approve", "reject", "isolate", "locks"):
+def cmd_index(args):
+    if len(args) != 1 or args[0] not in ("--check", "--rebuild"):
         print(json.dumps({
             "success": False,
-            "error": "用法: python adad_task.py <submit|approve|reject|isolate|locks> <node_name> [...]"
+            "error": "Usage: python adad_task.py index --check|--rebuild",
+        }, ensure_ascii=False, indent=2))
+        sys.exit(1)
+
+    core = ADADCore()
+    res = core.check_task_index() if args[0] == "--check" else core._rebuild_task_index()
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    sys.exit(0 if res.get("success") is True else 1)
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("submit", "approve", "reject", "isolate", "locks", "index"):
+        print(json.dumps({
+            "success": False,
+            "error": "用法: python adad_task.py <submit|approve|reject|isolate|locks|index> [...]"
         }, ensure_ascii=False))
         sys.exit(1)
 
@@ -153,7 +175,17 @@ def main():
         cmd_isolate(rest)
     elif sub == "locks":
         cmd_locks(rest)
+    elif sub == "index":
+        cmd_index(rest)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(json.dumps({
+            "success": False,
+            "error": "作業已被使用者中斷（KeyboardInterrupt）",
+            "interrupted": True,
+        }, ensure_ascii=False, indent=2))
+        sys.exit(1)

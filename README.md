@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2DD4BF">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.6.2-38BDF8">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.6.3-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
@@ -16,6 +16,13 @@
 本專案源自為 **Antigravity AI Agent** 開發的 Workspace Customization 擴充套件，旨在實行 **ADAD (架構驅動型智能體開發)** 開發模式；目前已擴展支援 **Claude Code**、**Codex CLI / 桌面 App** 等其他 Agent 平台，可依需求選擇要套用的一個或多個 Agent。
 
 ADAD 的核心理念是：**將「系統設計（架構）」與「程式碼實作（邏輯）」徹底解耦**。由人類把持高價值的架構與驗收 Checkpoint，並指派 Agent 在最小 Context 的約束下進行高精度的原子程式碼生成，以防範 AI 開發中的架構失控與 Context 膨脹問題。
+
+## ✨ 1.6.3 更新重點
+
+- **Task index**：新增 `adad_task.py index --check|--rebuild`，索引只作 discovery／scheduling；Task snapshot 與 Source Lock 仍是唯一 Gate 授權證據。
+- **Verification timeout 契約**：所有 command 與 integration step 必須明確設定 1–300 秒 timeout；Windows pytest 的外層 timeout 額外保留清理與回報時間。
+- **Windows runner 隔離**：pytest verification 使用一次性 workspace 與 `--basetemp`；timeout 與中斷會以 Job Object 清理子程序樹並 fail-closed 回報。
+- **CLI 封裝完整性**：wheel 內含 `blocked_report` 的 MCP server、schema 與文字 fallback；封裝流程會排除舊的資源 bytecode。
 
 ## ✨ 1.6.2 更新重點
 
@@ -92,11 +99,11 @@ CLI 或 migration 使用 `command`／`integration_case`：
 
 ```markdown
 - Verification:
-  - command: {"argv": ["{python}", "{source}", "--check"], "expect_exit": "nonzero"}
-  - integration_case: {"fixtures": [{"source": "tests/fixture.db", "target": "db/test.db"}], "steps": [{"argv": ["{python}", "{source}", "--apply", "--db", "{workspace}/db/test.db"]}]}
+  - command: {"argv": ["{python}", "{source}", "--check"], "expect_exit": "nonzero", "timeout": 30}
+  - integration_case: {"fixtures": [{"source": "tests/fixture.db", "target": "db/test.db"}], "steps": [{"argv": ["{python}", "{source}", "--apply", "--db", "{workspace}/db/test.db"], "timeout": 30}]}
 ```
 
-命令以 argv 與 `shell=False` 在隔離暫存工作區執行；任一步驟失敗即停止。所有規則皆由 AST／執行期驗證器機械檢查，失敗會阻擋 Task 提交。
+命令以 argv 與 `shell=False` 在隔離暫存工作區執行；每個 `command` 與 integration step 都必須明確設定 1–300 秒的 `timeout`，任一步驟失敗即停止。所有規則皆由 AST／執行期驗證器機械檢查，失敗會阻擋 Task 提交。
 
 ### 架構文件與 Task 快照的責任邊界
 
@@ -120,7 +127,7 @@ ADAD/                # ← repo 根目錄，pip install . 要在這裡執行
 │   ├── cli.py                     # 指令定義 (adad init / remove / global / pack)
 │   ├── core.py                    # 對應每個指令的實際邏輯
 │   ├── resources.py               # 定位套件內建範本檔（不依賴使用者執行指令當下的 cwd）
-│   └── resources/                 # 內建範本：agents/（.agents 內容）與 templates/（各種預設檔）
+│   └── resources/                 # 內建資產：agents/、templates/ 與 blocked_report MCP/文字 fallback
 ├── pyproject.toml                 # 套件設定：定義了 `adad` 這個可執行指令 (project.scripts)
 ├── install.py                     # [已棄用] 舊版進入點，轉發呼叫到 adad_cli，保留相容性
 ├── .agents/                       # 本 repo 自身開發時使用的 Workspace Customizations
