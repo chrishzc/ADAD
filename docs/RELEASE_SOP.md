@@ -17,8 +17,15 @@
    ```powershell
    git add -A
    .venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\adad_pre_commit.py
-   .venv\Scripts\python.exe -m pytest -q --basetemp .pytest-tmp-release
+   .venv\Scripts\python.exe -m pytest -q --color=no --basetemp C:\tmp\pytest-release-<VERSION>-<ATTEMPT> -p no:cacheprovider
    ```
+
+   Windows 的受控／內嵌 console 可能在 pytest 已印出成功摘要後，才向父程序送出
+   `KeyboardInterrupt`。此時沒有可確認的退出碼，**不得**把畫面上的 `N passed` 視為
+   release preflight 通過。改以保留 stdout、stderr 與 exit code 的隱藏
+   `python.exe` 程序重跑；若環境仍注入中斷，僅可使用會忽略父層 SIGINT、但保留子程序
+   標準輸出與退出碼的暫時 runner。不得改用 `pythonw.exe`：它沒有有效的標準控制代碼，
+   含巢狀 Git／subprocess 的測試可能改以 `WinError 6` 失敗。
 
    若本版涉及 `sub_maps`，另執行專項測試；必須證明 root／child 分開保存、`FinanceImport` 可由 root context 查得，且連續保存不會把 child 模組倒回 root：
 
@@ -76,7 +83,9 @@ if ($LASTEXITCODE -ne 0) { throw "release index 不等於 DEV_COMMIT tracked tre
 
 目前 `main` 與 `development` 已分歧，因此只有 ancestry 檢查成功時才能直接 fast-forward；分歧時禁止 force push，必須在已確認乾淨的 main worktree 以 `read-tree` 建立 snapshot，之後產生一個以 main 為 parent、tree 完全等於 `$devCommit` 的 release commit。
 
-這是完整 tracked-tree snapshot，不是 merge，也不是只取最後一個 commit。它涵蓋 development 累積的新增、修改與刪除，避免漏掉 `tests/conftest.py` 等較早 commit。驗證必須針對完整 cumulative diff 與 snapshot tree，不得使用 `git diff-tree -r <DEV_COMMIT>` 推導發布清單。
+這是完整 tracked-tree snapshot，不是 merge，也不是只取最後一個 commit。它涵蓋 development 累積的新增、修改與刪除，避免漏掉 `tests/conftest.py` 等較早 commit。驗證必須針對完整 cumulative diff 與 snapshot tree，不得使用 `git diff-tree -r <DEV_COMMIT>` 推導發布清單，也不得把最後一筆 staged patch 套用到 `origin/main`；分歧歷史會漏掉較早變更或產生不完整 release tree。
+
+即使規則是「不推送 development」，也必須先建立本機 `$devCommit` 作為可稽核的完整快照；禁止推送的是 development 分支，而不是省略本機 snapshot commit。
 
 先檢查範圍：
 
@@ -96,6 +105,10 @@ $adadRepo = 'C:\path\to\ADAD'
 New-Item -ItemType Junction -Path "$release\.venv" -Target "$adadRepo\.venv"
 ```
 
+release gate 如需 ADAD Task snapshot，僅可將已核准的 `.agents\tasks` 快照複製為
+release worktree 的本機驗證輸入；它們不是 release artifact，不能加入 commit。快照缺失
+或過期時先重新核發／核准，再跑 gate；不要以手改 Task status 或略過 gate 取代。
+
 linked worktree 的 commit hook 可能把 `GIT_INDEX_FILE`、`GIT_DIR`、`GIT_WORK_TREE` 等 repo-scoped `GIT_*` 傳給 Verification 子程序。Verification runner 必須清除這些變數，讓子程序依自己的 `cwd` 找 Git repo；不可直接繼承 release index。
 
 巢狀 pytest 建立臨時 Git repo 時，也不得預設繼承外層 job 的 `CI`、`GITHUB_ACTIONS`、`GITHUB_BASE_REF`、`GITHUB_HEAD_REF`、`GITHUB_EVENT_NAME`、`GITHUB_EVENT_PATH`、`GITHUB_REF`、`GITHUB_REF_NAME`、`GITHUB_SHA`。測試 harness 應保留一般環境，但預設移除上述 event context；只有測試明確傳入 override 時才能 opt-in。否則臨時 repo 可能誤走 CI diff，並在沒有 parent commit 時把 `HEAD~1` 當成有效 revision。
@@ -107,13 +120,17 @@ linked worktree 的 commit hook 可能把 `GIT_INDEX_FILE`、`GIT_DIR`、`GIT_WO
 ```powershell
 $adadRepo = 'C:\path\to\ADAD'
 Push-Location $release
-& "$adadRepo\.venv\Scripts\python.exe" -m pytest -q --basetemp .pytest-tmp-release
+& "$adadRepo\.venv\Scripts\python.exe" -m pytest -q --color=no --basetemp C:\tmp\pytest-release-worktree-<VERSION>-<ATTEMPT> -p no:cacheprovider
 & "$adadRepo\.venv\Scripts\python.exe" .agents\skills\adad-workflow\scripts\adad_pre_commit.py
 if ($snapshotNeedsCommit) {
     git commit -m "Release ADAD <VERSION>"
 }
 Pop-Location
 ```
+
+若宿主在正常 `git commit` 時注入中斷，先保留 hook 輸出與退出碼；只可用保留正常 hook
+（不可加 `--no-verify`）的受控 runner 重試。未取得 commit exit code 前，不得宣稱 snapshot
+已建立。
 
 測試前後都檢查 index，禁止出現 `sample_tool.py`、`second_tool.py` 或其他 fixture 假檔：
 
@@ -168,8 +185,13 @@ $adadRepo = 'C:\path\to\ADAD'
 Push-Location $release
 & "$adadRepo\.venv\Scripts\python.exe" -m pip install --upgrade .
 & "$adadRepo\.venv\Scripts\adad.exe" --version
+& "$adadRepo\.venv\Scripts\python.exe" -I -c "import adad_cli.workflow; print(adad_cli.workflow.__file__)"
 Pop-Location
 ```
+
+版本字串正確不足以證明封裝完整；wheel／sdist 必須包含
+`adad_cli/workflow/__init__.py`，並以 `-I` 匯入 `adad_cli.workflow` 驗證，避免
+顯式 package 清單漏掉子套件而僅在開發目錄中看似可用。
 
 同一個步驟也必須更新「使用者層級」的 `adad` 命令；它是外部專案未安裝
 `adad-cli` 時實際解析到的 CLI。不要使用外部專案的 `.venv\Scripts\python.exe`，
