@@ -55,6 +55,9 @@ htmlcov/
 # === ADAD 隔離工作區（每次 Task 的本機執行產物，不進版控） ===
 .agents/workspaces/
 
+# === ADAD 審核 Checkpoint（本機稽核紀錄，會隨使用無限成長，不進版控） ===
+checkpoints/
+
 # === 系統檔案 ===
 .DS_Store
 Thumbs.db
