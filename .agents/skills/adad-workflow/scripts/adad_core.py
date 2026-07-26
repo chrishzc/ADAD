@@ -3611,7 +3611,187 @@ class ADADCore:
         except OSError:
             return None
 
-    def _safe_cleanup_owned_root(self, target_path: str, initial_identity: dict):
+    @staticmethod
+    def _identity_matches(actual, expected):
+        if not actual or not expected:
+            return False
+        return (
+            actual.get("st_dev") == expected.get("st_dev")
+            and actual.get("st_ino") == expected.get("st_ino")
+            and actual.get("type") == expected.get("type")
+            and actual.get("is_reparse") == expected.get("is_reparse")
+        )
+
+    def _create_owned_verification_root(self):
+        import json
+        import os
+        import secrets
+        import stat
+        import tempfile
+
+        root = tempfile.mkdtemp(prefix="adad_verify_")
+        root_identity = self._get_path_identity(root)
+        if not root_identity or root_identity.get("is_reparse"):
+            raise RuntimeError("Failed to get stable identity for new root")
+
+        nonce = secrets.token_hex(32)
+        marker_path = os.path.join(root, ".adad-owned-root.json")
+        payload = json.dumps(
+            {"schema": 1, "nonce": nonce},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        fd = os.open(marker_path, flags, 0o600)
+        try:
+            with os.fdopen(fd, "wb", closefd=False) as marker:
+                marker.write(payload)
+                marker.flush()
+                os.fsync(marker.fileno())
+            marker_stat = os.fstat(fd)
+        finally:
+            os.close(fd)
+
+        if not stat.S_ISREG(marker_stat.st_mode):
+            raise RuntimeError("Owned-root credential is not a regular file")
+        marker_identity = self._get_path_identity(marker_path)
+        credential = {
+            "nonce": nonce,
+            "marker_name": os.path.basename(marker_path),
+            "marker_identity": marker_identity,
+            "root_identity": root_identity,
+        }
+        check = self._read_owned_root_credential(root, credential)
+        if not check.get("valid"):
+            raise RuntimeError(f"Owned-root credential read-back failed: {check.get('reason')}")
+        return root, root_identity, credential
+
+    def _read_owned_root_credential(self, root_path, credential):
+        import json
+        import os
+        import stat
+
+        result = {"valid": False, "reason": None, "marker_path": None}
+        try:
+            if not isinstance(credential, dict) or not credential.get("nonce"):
+                result["reason"] = "credential_unavailable"
+                return result
+            marker_name = credential.get("marker_name", ".adad-owned-root.json")
+            if marker_name != os.path.basename(marker_name):
+                result["reason"] = "credential_path_invalid"
+                return result
+            marker_path = os.path.join(root_path, marker_name)
+            result["marker_path"] = marker_path
+            marker_stat = os.lstat(marker_path)
+            reparse_const = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            if (
+                stat.S_ISLNK(marker_stat.st_mode)
+                or not stat.S_ISREG(marker_stat.st_mode)
+                or getattr(marker_stat, "st_reparse_tag", 0)
+                or (getattr(marker_stat, "st_file_attributes", 0) & reparse_const)
+            ):
+                result["reason"] = "credential_unsafe_type"
+                return result
+            marker_identity = self._get_path_identity(marker_path)
+            if not self._identity_matches(marker_identity, credential.get("marker_identity")):
+                result["reason"] = "credential_identity_mismatch"
+                return result
+
+            flags = os.O_RDONLY
+            if hasattr(os, "O_BINARY"):
+                flags |= os.O_BINARY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(marker_path, flags)
+            try:
+                opened = os.fstat(fd)
+                opened_identity = {
+                    "st_dev": getattr(opened, "st_dev", 0),
+                    "st_ino": getattr(opened, "st_ino", 0),
+                    "type": stat.S_IFMT(opened.st_mode),
+                    "is_reparse": False,
+                }
+                if not self._identity_matches(opened_identity, credential.get("marker_identity")):
+                    result["reason"] = "credential_open_identity_mismatch"
+                    return result
+                chunks = []
+                while True:
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    if sum(len(item) for item in chunks) > 4096:
+                        result["reason"] = "credential_too_large"
+                        return result
+            finally:
+                os.close(fd)
+            payload = json.loads(b"".join(chunks).decode("utf-8", errors="strict"))
+            if payload != {"schema": 1, "nonce": credential.get("nonce")}:
+                result["reason"] = "credential_content_mismatch"
+                return result
+            result["valid"] = True
+            return result
+        except FileNotFoundError:
+            result["reason"] = "credential_missing"
+            return result
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
+            result["reason"] = f"credential_read_failed:{type(exc).__name__}"
+            result["error"] = str(exc)
+            return result
+
+    def _quarantine_owned_root(self, target_path):
+        import os
+        import secrets
+
+        parent = os.path.dirname(target_path)
+        quarantine = os.path.join(
+            parent,
+            f".{os.path.basename(target_path)}.quarantine-{secrets.token_hex(16)}",
+        )
+        try:
+            os.lstat(quarantine)
+            return {"success": False, "reason": "quarantine_collision", "path": quarantine}
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            return {
+                "success": False,
+                "reason": "quarantine_preflight_failed",
+                "path": quarantine,
+                "error": str(exc),
+            }
+        try:
+            os.rename(target_path, quarantine)
+            return {"success": True, "path": quarantine}
+        except OSError as exc:
+            return {
+                "success": False,
+                "reason": "quarantine_rename_failed",
+                "path": quarantine,
+                "error": str(exc),
+            }
+
+    def _restore_quarantined_owned_root(self, quarantine_path, target_path):
+        import os
+
+        if os.name != "nt":
+            return {"status": "unsupported_non_overwrite", "restored": False}
+        try:
+            os.lstat(target_path)
+            return {"status": "canonical_occupied", "restored": False}
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            return {"status": "canonical_uncertain", "restored": False, "error": str(exc)}
+        try:
+            os.rename(quarantine_path, target_path)
+            return {"status": "restored", "restored": True}
+        except OSError as exc:
+            return {"status": "restore_failed", "restored": False, "error": str(exc)}
+
+    def _safe_cleanup_owned_root(self, target_path: str, initial_identity: dict, credential=None):
         import os
         import shutil
         import stat
@@ -3621,7 +3801,10 @@ class ADADCore:
             "allowed": False,
             "reason": None,
             "failed_component": None,
-            "identity_match": False
+            "identity_match": False,
+            "credential_valid": False,
+            "quarantine_path": None,
+            "restore_status": "not_needed",
         }
 
         def fail_preflight(reason, comp=None, match=False):
@@ -3634,7 +3817,6 @@ class ADADCore:
         try:
             if not initial_identity:
                 return fail_preflight("identity_unavailable", target_path)
-
             target_abs = os.path.normpath(os.path.abspath(target_path))
             project_root_abs = os.path.normpath(os.path.abspath(self.project_root))
 
@@ -3671,14 +3853,44 @@ class ADADCore:
             if not current_identity:
                 return fail_preflight("identity_unavailable", target_abs)
 
-            match = (
-                current_identity["st_dev"] == initial_identity.get("st_dev") and
-                current_identity["st_ino"] == initial_identity.get("st_ino") and
-                current_identity["type"] == initial_identity.get("type") and
-                current_identity.get("is_reparse") == initial_identity.get("is_reparse")
-            )
+            match = self._identity_matches(current_identity, initial_identity)
             if not match:
                 return fail_preflight("identity_mismatch", target_abs, match=False)
+            if not credential:
+                return fail_preflight("credential_unavailable", target_abs, match=True)
+
+            credential_check = self._read_owned_root_credential(target_abs, credential)
+            if not credential_check.get("valid"):
+                return fail_preflight(
+                    credential_check.get("reason", "credential_invalid"),
+                    credential_check.get("marker_path", target_abs),
+                    match=True,
+                )
+            preflight_result["credential_valid"] = True
+
+            quarantine_result = self._quarantine_owned_root(target_abs)
+            preflight_result["quarantine_path"] = quarantine_result.get("path")
+            if not quarantine_result.get("success"):
+                return fail_preflight(
+                    quarantine_result.get("reason", "quarantine_failed"),
+                    quarantine_result.get("path", target_abs),
+                    match=True,
+                )
+            cleanup_target = quarantine_result["path"]
+            quarantined_identity = self._get_path_identity(cleanup_target)
+            credential_check = self._read_owned_root_credential(cleanup_target, credential)
+            if (
+                not self._identity_matches(quarantined_identity, initial_identity)
+                or not credential_check.get("valid")
+            ):
+                restore = self._restore_quarantined_owned_root(cleanup_target, target_abs)
+                preflight_result["restore_status"] = restore.get("status")
+                reason = (
+                    "quarantine_identity_mismatch"
+                    if not self._identity_matches(quarantined_identity, initial_identity)
+                    else credential_check.get("reason", "quarantine_credential_invalid")
+                )
+                return fail_preflight(reason, cleanup_target, match=False)
 
             preflight_result["allowed"] = True
             preflight_result["identity_match"] = True
@@ -3695,21 +3907,23 @@ class ADADCore:
 
             removed = False
             for attempt in range(3):
-                current_identity = self._get_path_identity(target_abs)
+                current_identity = self._get_path_identity(cleanup_target)
                 if not current_identity:
-                    return fail_preflight("identity_unavailable_during_retry", target_abs, match=False)
-                match = (
-                    current_identity["st_dev"] == initial_identity.get("st_dev") and
-                    current_identity["st_ino"] == initial_identity.get("st_ino") and
-                    current_identity["type"] == initial_identity.get("type") and
-                    current_identity.get("is_reparse") == initial_identity.get("is_reparse")
-                )
+                    return fail_preflight("identity_unavailable_during_retry", cleanup_target, match=False)
+                match = self._identity_matches(current_identity, initial_identity)
                 if not match:
-                    return fail_preflight("identity_mismatch_during_retry", target_abs, match=False)
+                    return fail_preflight("identity_mismatch_during_retry", cleanup_target, match=False)
+                credential_check = self._read_owned_root_credential(cleanup_target, credential)
+                if not credential_check.get("valid"):
+                    return fail_preflight(
+                        credential_check.get("reason", "credential_invalid_during_retry"),
+                        cleanup_target,
+                        match=True,
+                    )
 
                 try:
                     cleanup_error = None
-                    shutil.rmtree(target_abs, onerror=_force_remove_readonly)
+                    shutil.rmtree(cleanup_target, onerror=_force_remove_readonly)
                     removed = True
                     break
                 except OSError as e:
@@ -3718,7 +3932,7 @@ class ADADCore:
                     time.sleep(0.05)
 
             try:
-                os.lstat(target_abs)
+                os.lstat(cleanup_target)
                 if not cleanup_error:
                     cleanup_error = {"stage": "postcondition", "error_type": "ExistsError", "message": "Target still exists after rmtree"}
                 return "preserved_cleanup_failed", cleanup_error, preflight_result
@@ -3800,9 +4014,16 @@ class ADADCore:
 
         return receipt
 
-    def _run_verification_command(self, command, workspace, placeholders, step_index, outer_owned_root=None):
+    def _run_verification_command(
+        self,
+        command,
+        workspace,
+        placeholders,
+        step_index,
+        outer_owned_root=None,
+        outer_owned_credential=None,
+    ):
         import subprocess
-        import tempfile
         import os
         result = {
             "step_index": step_index,
@@ -3847,16 +4068,27 @@ class ADADCore:
 
             my_owned_root = None
             my_owned_identity = None
+            my_owned_credential = None
             if needs_workspace and not outer_owned_root:
-                my_owned_root = tempfile.mkdtemp(prefix="adad_verify_")
-                my_owned_identity = self._get_path_identity(my_owned_root)
-                if not my_owned_identity:
+                try:
+                    (
+                        my_owned_root,
+                        my_owned_identity,
+                        my_owned_credential,
+                    ) = self._create_owned_verification_root()
+                except Exception as exc:
                     result["cleanup_status"] = "preserved_preflight_rejected"
                     result["workspace_preserved"] = True
-                    result["error"] = "Failed to get stable identity for new root"
+                    result["cleanup_error"] = {
+                        "stage": "owned_root_create",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc),
+                    }
+                    result["error"] = str(exc)
                     result["workspace_path"] = my_owned_root
                     return result
                 outer_owned_root = my_owned_root
+                outer_owned_credential = my_owned_credential
 
             result["workspace_path"] = outer_owned_root
             if outer_owned_root:
@@ -4012,7 +4244,11 @@ class ADADCore:
                     result["workspace_preserved"] = True
                 else:
                     if my_owned_root:
-                        status, error, preflight = self._safe_cleanup_owned_root(my_owned_root, my_owned_identity)
+                        status, error, preflight = self._safe_cleanup_owned_root(
+                            my_owned_root,
+                            my_owned_identity,
+                            my_owned_credential,
+                        )
                         result["cleanup_status"] = status
                         if error:
                             result["cleanup_error"] = error
@@ -4066,13 +4302,17 @@ class ADADCore:
             result["error"] = "integration_case.steps 必須是非空陣列。"
             return result
 
-        outer_owned_root = tempfile.mkdtemp(prefix="adad_verify_")
-        outer_owned_identity = self._get_path_identity(outer_owned_root)
-        if not outer_owned_identity:
+        try:
+            (
+                outer_owned_root,
+                outer_owned_identity,
+                outer_owned_credential,
+            ) = self._create_owned_verification_root()
+        except Exception as exc:
             result["aggregate_status"] = "preserved_preflight_rejected"
             result["workspace_preserved"] = True
-            result["error"] = "Failed to get stable identity for new root"
-            result["workspace_path"] = outer_owned_root
+            result["manual_action_required"] = True
+            result["error"] = str(exc)
             return result
 
         result["workspace_path"] = outer_owned_root
@@ -4117,7 +4357,12 @@ class ADADCore:
                     "workspace": outer_owned_root,
                 }
                 step_result = self._run_verification_command(
-                    command, outer_owned_root, project_placeholders, idx, outer_owned_root
+                    command,
+                    outer_owned_root,
+                    project_placeholders,
+                    idx,
+                    outer_owned_root,
+                    outer_owned_credential,
                 )
                 result["step_results"].append(step_result)
 
@@ -4135,7 +4380,11 @@ class ADADCore:
                     final_status = worst_step_status if worst_step_status != "cleaned" else "preserved_command_failed"
                     result["aggregate_status"] = final_status
                 else:
-                    status, error, preflight = self._safe_cleanup_owned_root(outer_owned_root, outer_owned_identity)
+                    status, error, preflight = self._safe_cleanup_owned_root(
+                        outer_owned_root,
+                        outer_owned_identity,
+                        outer_owned_credential,
+                    )
                     final_status = status
                     result["aggregate_status"] = final_status
                     if error:
@@ -4276,13 +4525,17 @@ class ADADCore:
         command_results = []
         outer_owned_root = None
         outer_owned_identity = None
+        outer_owned_credential = None
         if any(
             cmd.get("cwd", "workspace") == "workspace"
             or self._is_pytest_command(cmd.get("argv", []))
             for cmd in commands
         ):
-            outer_owned_root = tempfile.mkdtemp(prefix="adad_verify_")
-            outer_owned_identity = self._get_path_identity(outer_owned_root)
+            (
+                outer_owned_root,
+                outer_owned_identity,
+                outer_owned_credential,
+            ) = self._create_owned_verification_root()
 
         for idx, command in enumerate(commands):
             project_placeholders = {
@@ -4298,6 +4551,7 @@ class ADADCore:
                 project_placeholders,
                 idx,
                 outer_owned_root,
+                outer_owned_credential,
             )
             command_results.append(step_result)
 
@@ -4336,7 +4590,11 @@ class ADADCore:
                 error = None
                 preflight = None
             else:
-                status, error, preflight = self._safe_cleanup_owned_root(outer_owned_root, outer_owned_identity)
+                status, error, preflight = self._safe_cleanup_owned_root(
+                    outer_owned_root,
+                    outer_owned_identity,
+                    outer_owned_credential,
+                )
                 final_shared_root_status = status
 
             workspace_preserved = (final_shared_root_status != "cleaned")

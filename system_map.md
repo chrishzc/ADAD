@@ -166,7 +166,7 @@
 ##### Module: adad_core
 - Type: library
 - Observability: not_required
-- Description: #61 Verification 環境隔離；#66 context warning；#69 提供 YAML sub_maps 合成讀取、owner 追蹤與分圖安全儲存；#74 修正函式級 Source gate 與 Windows pytest 暫存目錄；#77 Verification runner 對 pytest command 停用 cacheprovider，避免在 project cwd 建立或修改 `.pytest_cache`；#78 修正 Source Lock 的 task_block 一致性，並提供唯讀 audit 與明確 opt-in、fail-closed 的 prune/reconcile；#80-A4 恢復已核准的 Source Lock compatibility facade，僅委派已抽離 repository 與唯讀 audit service。
+- Description: #61 Verification 環境隔離；#66 context warning；#69 提供 YAML sub_maps 合成讀取、owner 追蹤與分圖安全儲存；#74 修正函式級 Source gate 與 Windows pytest 暫存目錄；#77 Verification runner 對 pytest command 停用 cacheprovider，避免在 project cwd 建立或修改 `.pytest_cache`；#78 修正 Source Lock 的 task_block 一致性，並提供唯讀 audit 與明確 opt-in、fail-closed 的 prune/reconcile；#80-A4 恢復已核准的 Source Lock compatibility facade，僅委派已抽離 repository 與唯讀 audit service；#82-R3 以不可預測 ownership credential 與 same-parent quarantine transaction 防止 POSIX inode reuse／replacement race 誤刪。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_core.py
 - Preferred Pattern: none
 - Complexity: medium
@@ -191,6 +191,11 @@
   - #82-B1 所有權憑證 (identity)：runner 建立 owned root 後，必須立即取得其 `lstat` 憑證 (包含 POSIX 的 `st_dev`, `st_ino` 與 directory 判定，或 Windows 的 volume/file index 與 reparse attributes)。清理前必須重新 lstat 且 exact identity 相同時才可刪除。identity API 不可用時零刪除。
   - #82-B1 path-component-aware preflight：cleanup 前逐層檢查 owned root 的 ancestor。拒絕 repo 本身、所有 repo ancestor、symlink 與 Windows junction。任何路徑/權限判斷失敗時一律 fail-closed 零刪除並保留。
   - #82-B1 成功與清理狀態拆分：command 整體 success 必須是「command 成功且 owned cleanup 成功」或「workspace 為合法 unowned/not_applicable」。若 command 成功但 cleanup 失敗，不得宣稱整體成功。
+  - #82-R3 runner 以 exclusive creation 建立 owned root 後，必須在任何 command 啟動前於外層 root 寫入本次執行專屬、不可預測的 ownership credential；credential 必須以 exclusive regular file 建立、flush/fsync、strict UTF-8 read-back，並保存 path、nonce、檔案 identity 與 root identity。任何建立、持久化或 read-back 不確定時不得執行 command，且只能在確認 root／credential 仍為本次建立的 exact identity 時進入安全回收。
+  - #82-R3 cleanup preflight 必須同時驗證 root identity、credential regular-file identity、nonce 內容、non-symlink/non-reparse 與完整 ancestor/repo boundary；POSIX inode 即使被重用，只要 credential 缺失、被替換或內容不符即 fail-closed。
+  - #82-R3 在任何 recursive delete 前，必須將 canonical owned root 以 same-parent unique、non-overwrite rename 固定到 quarantine path；rename 前後都要驗證 exact root identity 與 credential，刪除只允許作用於驗證後的 quarantine，後續 retry 禁止再次依 canonical path 刪除。
+  - #82-R3 若 quarantine 後 identity／credential mismatch，或任何 lstat、open、decode、reparse、permission、rename 判斷不確定，必須零刪除。只有 canonical 明確 missing、quarantine exact credential/identity 仍可驗證且可保證 non-overwrite 時才可嘗試 restore；canonical occupied、restore conflict 或 restore uncertainty 時保留 quarantine，回傳 quarantine_path、restore_status、manual_action_required 與診斷 evidence。
+  - #82-R3 deterministic regression 不得假設刪除重建必然產生不同 inode；必須以精確 mock 或受控 credential drift 覆蓋 inode reuse、check-to-quarantine replacement、quarantine mismatch、restore conflict、credential symlink/reparse、strict decode/permission failure，以及 Windows/POSIX cleanup 路徑。
   - #82-R2 regression ownership：`tests/test_adad_task.py` 與 `tests/test_verify_implementation.py` 均屬本輪 runner 契約的必要測試輸入；candidate snapshot 缺少任一已修改測試檔時不得以 dirty worktree 的通過結果替代。
   - #82-R2 Windows termination regression 必須分別驗證 process-tree termination 成功、失敗、drain timeout、KeyboardInterrupt 與 handle/resource cleanup 的確切 structured fields；禁止以多結果 `or` assertion、只檢查欄位存在或刪除既有安全案例來降低 fail-closed 契約強度。
   - #82-R2 測試檔不得保留診斷用 `print()`；fixture 內刻意執行的輸出程式碼不在此限。既有 Windows lifecycle 案例若因實作介面變更而重寫，必須保留一對一風險矩陣與明確 assertion。
@@ -230,7 +235,7 @@
   - process-group termination 僅適用 timeout 路徑；正常完成時 argv、cwd、環境、輸出解碼與 exit 判定保持不變，終止或收集不確定時仍 fail-closed，不得無界等待。
   - #80 Task snapshot JSON atomicity：`ADADCore.generate_task` 是 snapshot 實際 owner；成功回傳前必須以標準 JSON parser 驗證候選內容。候選無法 parse 時不得覆寫既有有效 Task，且不得回傳 success=true。
   - #80-R1 regression evidence 必須分別直接模擬 JSON serialization TypeError、JSON parse failure 與 atomic replace failure；每條失敗路徑都驗證既有 Task bytes 未變且不遺留暫存檔。
-- Decisions: [隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份 dump root；owner 不明時禁止猜測；所有 gate 共用同一個實體 Source 路徑；pytest 暫存隔離由 Verification runner 提供且尊重明確 basetemp；cacheprovider 與 basetemp 是互補隔離，不讀寫 pytest config 或環境設定；canonical adad_source 是唯一可編輯來源；Source Lock lifecycle 同屬既有整檔 owner adad_core，不建立同檔重複 owner；_commit_checkpoint_decision 是 approve lock release 的必要交易邊界；task_approve 必須納入 allowed symbols 才能公開結構化 recovery；typed structured exception 是維持成功介面的最小變更；primary failure 與 rollback failure 分欄保存；recovery schema 固定且可直接 JSON serialize；quarantine rename 取代 check-then-remove；全域 enumeration/read uncertainty 阻斷所有 mutation；blocked/approved Task 保留 source_lock 作審計 metadata，釋放只代表 canonical physical lock 消失；mismatch 與 invalid 永遠 fail-closed；audit 不接 compile、resume、pre-commit；Task JSON 不納入清理；#80-A4 facade 只委派已核准 service，不重建或改寫 Source Lock 政策]
+- Decisions: [隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份 dump root；owner 不明時禁止猜測；所有 gate 共用同一個實體 Source 路徑；pytest 暫存隔離由 Verification runner 提供且尊重明確 basetemp；cacheprovider 與 basetemp 是互補隔離，不讀寫 pytest config 或環境設定；canonical adad_source 是唯一可編輯來源；Source Lock lifecycle 同屬既有整檔 owner adad_core，不建立同檔重複 owner；_commit_checkpoint_decision 是 approve lock release 的必要交易邊界；task_approve 必須納入 allowed symbols 才能公開結構化 recovery；typed structured exception 是維持成功介面的最小變更；primary failure 與 rollback failure 分欄保存；recovery schema 固定且可直接 JSON serialize；quarantine rename 取代 check-then-remove；全域 enumeration/read uncertainty 阻斷所有 mutation；blocked/approved Task 保留 source_lock 作審計 metadata，釋放只代表 canonical physical lock 消失；mismatch 與 invalid 永遠 fail-closed；audit 不接 compile、resume、pre-commit；Task JSON 不納入清理；#80-A4 facade 只委派已核准 service，不重建或改寫 Source Lock 政策；#82-R3 path identity 單獨不足以證明 ownership，owned-root cleanup 必須同時持有不可預測 credential 並經 same-parent quarantine 固定後才可刪除；既有 v1.6.4 tag 不移動，修復以後續 patch release 發布]
 - Invariants: []
 - Verification:
   - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_generate_task.py", "tests/test_adad_task.py", "-q", "--basetemp", "{workspace}/pytest-generate-task-json-workspace"], "cwd": "project", "expect_exit": 0, "timeout": 30}
@@ -247,7 +252,7 @@
   - task_snapshots: .agents/tasks/*.task.json
   - source_lock_files: .agents/tasks/.source_locks/*.lock.json
   - project_root: path
-  - allowed_symbols: [ADADCore.check_task_readiness, ADADCore.validate_task_snapshot, ADADCore._task_path, ADADCore._save_task, ADADCore.generate_task, ADADCore._write_checkpoint_audit, ADADCore._run_verification_command, ADADCore._get_path_identity, ADADCore._safe_cleanup_owned_root, ADADCore._terminate_command_tree, ADADCore._run_integration_verification, ADADCore._is_path_contained, ADADCore._resolve_cleanable_owned_target]
+  - allowed_symbols: [ADADCore.check_task_readiness, ADADCore.validate_task_snapshot, ADADCore._task_path, ADADCore._save_task, ADADCore.generate_task, ADADCore._write_checkpoint_audit, ADADCore._run_verification_command, ADADCore._get_path_identity, ADADCore._create_owned_verification_root, ADADCore._read_owned_root_credential, ADADCore._quarantine_owned_root, ADADCore._restore_quarantined_owned_root, ADADCore._safe_cleanup_owned_root, ADADCore._terminate_command_tree, ADADCore._run_integration_verification, ADADCore._is_path_contained, ADADCore._resolve_cleanable_owned_target]
   - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/adad_core.py, tests/test_generate_task.py, tests/test_task_contract_schema.py, tests/test_adad_task.py, tests/test_verify_implementation.py, tests/test_verification_basetemp_lifecycle.py]
 - Output:
   - command_result: object

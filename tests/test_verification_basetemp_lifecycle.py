@@ -25,6 +25,24 @@ _canonical_module = importlib.util.module_from_spec(_canonical_spec)
 _canonical_spec.loader.exec_module(_canonical_module)
 ADADCore = _canonical_module.ADADCore
 
+
+def _install_owned_root_credential(core, target):
+    import json
+
+    marker = target / ".adad-owned-root.json"
+    nonce = "test-owned-root-credential"
+    marker.write_text(
+        json.dumps({"schema": 1, "nonce": nonce}, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    return {
+        "nonce": nonce,
+        "marker_name": marker.name,
+        "marker_identity": core._get_path_identity(str(marker)),
+        "root_identity": core._get_path_identity(str(target)),
+    }
+
+
 class CanonicalADADCore(ADADCore):
     def __init__(self, map_path, check_validity=False, project_root=None):
         super().__init__(map_path, check_validity=check_validity, project_root=project_root)
@@ -232,9 +250,10 @@ def test_preflight_allows_similar_prefix_but_unrelated(mock_core, tmp_path, monk
     unrelated = tmp_path / "project-unrelated"
     unrelated.mkdir()
     identity = core._get_path_identity(str(unrelated))
-
-
-    status, error, preflight = core._safe_cleanup_owned_root(str(unrelated), identity)
+    credential = _install_owned_root_credential(core, unrelated)
+    status, error, preflight = core._safe_cleanup_owned_root(
+        str(unrelated), identity, credential
+    )
     assert status == "cleaned"
     assert preflight["allowed"] is True
 
@@ -285,37 +304,46 @@ def test_rmtree_postcondition_exists_fails(mock_core, tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
     initial_identity = core._get_path_identity(str(target))
+    credential = _install_owned_root_credential(core, target)
 
     def fake_rmtree(*args, **kwargs):
         pass # don't actually delete it
     monkeypatch.setattr(shutil, "rmtree", fake_rmtree)
 
-    status, error, preflight = core._safe_cleanup_owned_root(str(target), initial_identity)
+    status, error, preflight = core._safe_cleanup_owned_root(
+        str(target), initial_identity, credential
+    )
     assert status == "preserved_cleanup_failed"
     assert error["error_type"] == "ExistsError"
-    assert os.path.exists(str(target))
+    assert not target.exists()
+    assert os.path.isdir(preflight["quarantine_path"])
 
 def test_rmtree_exception_propagates(mock_core, tmp_path, monkeypatch):
     core, project_root, test_file = mock_core
     target = tmp_path / "target"
     target.mkdir()
     initial_identity = core._get_path_identity(str(target))
+    credential = _install_owned_root_credential(core, target)
 
     def fake_rmtree(*args, **kwargs):
         raise OSError("Permission denied from fake rmtree")
     monkeypatch.setattr(shutil, "rmtree", fake_rmtree)
 
-    status, error, preflight = core._safe_cleanup_owned_root(str(target), initial_identity)
+    status, error, preflight = core._safe_cleanup_owned_root(
+        str(target), initial_identity, credential
+    )
     assert status == "preserved_cleanup_failed"
     assert error["error_type"] == "OSError"
     assert error["stage"] == "rmtree"
-    assert os.path.exists(str(target))
+    assert not target.exists()
+    assert os.path.isdir(preflight["quarantine_path"])
 
 def test_rmtree_retries_transient_permission_error(mock_core, tmp_path, monkeypatch):
     core, project_root, test_file = mock_core
     target = tmp_path / "target"
     target.mkdir()
     initial_identity = core._get_path_identity(str(target))
+    credential = _install_owned_root_credential(core, target)
     original_rmtree = shutil.rmtree
     attempts = []
 
@@ -328,7 +356,9 @@ def test_rmtree_retries_transient_permission_error(mock_core, tmp_path, monkeypa
     monkeypatch.setattr(shutil, "rmtree", flaky_rmtree)
     monkeypatch.setattr("time.sleep", lambda _: None)
 
-    status, error, preflight = core._safe_cleanup_owned_root(str(target), initial_identity)
+    status, error, preflight = core._safe_cleanup_owned_root(
+        str(target), initial_identity, credential
+    )
 
     assert status == "cleaned"
     assert error is None
@@ -341,6 +371,7 @@ def test_rmtree_retry_failure_propagates(mock_core, tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
     initial_identity = core._get_path_identity(str(target))
+    credential = _install_owned_root_credential(core, target)
 
     def fake_rmtree(*args, **kwargs):
         onerror = kwargs.get("onerror")
@@ -351,7 +382,9 @@ def test_rmtree_retry_failure_propagates(mock_core, tmp_path, monkeypatch):
 
     monkeypatch.setattr(shutil, "rmtree", fake_rmtree)
 
-    status, error, preflight = core._safe_cleanup_owned_root(str(target), initial_identity)
+    status, error, preflight = core._safe_cleanup_owned_root(
+        str(target), initial_identity, credential
+    )
     assert status == "preserved_cleanup_failed"
     assert error["error_type"] == "OSError"
     assert error["stage"] == "rmtree_retry"
@@ -583,30 +616,43 @@ def test_deterministic_replacement_race(mock_core, tmp_path, monkeypatch):
     target = tmp_path / "target"
     target.mkdir()
     initial_identity = core._get_path_identity(str(target))
+    credential = _install_owned_root_credential(core, target)
 
     # Simulate first rmtree failing with PermissionError
     # and in between, the directory identity changes
     call_count = 0
+    replaced = False
     original_rmtree = shutil.rmtree
     def fake_rmtree(*args, **kwargs):
-        nonlocal call_count
+        nonlocal call_count, replaced
         call_count += 1
         if call_count == 1:
-            # Change identity
-            original_rmtree(str(target))
-            target.mkdir()
+            cleanup_target = args[0]
+            original_rmtree(cleanup_target)
+            os.mkdir(cleanup_target)
+            replaced = True
             raise PermissionError("transient")
         else:
             return original_rmtree(*args, **kwargs)
 
+    original_get_identity = core._get_path_identity
+    def reused_identity(path):
+        if replaced and ".quarantine-" in str(path) and os.path.isdir(path):
+            return initial_identity
+        return original_get_identity(path)
+
     monkeypatch.setattr(shutil, "rmtree", fake_rmtree)
+    monkeypatch.setattr(core, "_get_path_identity", reused_identity)
     monkeypatch.setattr("time.sleep", lambda _: None)
 
-    status, error, preflight = core._safe_cleanup_owned_root(str(target), initial_identity)
+    status, error, preflight = core._safe_cleanup_owned_root(
+        str(target), initial_identity, credential
+    )
 
-    # The second delete should NOT happen because identity changed
+    # Even if the filesystem identity is reused, the replacement lacks the
+    # in-memory ownership credential and must not be deleted.
     assert status == "preserved_preflight_rejected"
-    assert preflight["reason"] == "identity_mismatch_during_retry"
+    assert preflight["reason"] == "credential_missing"
     assert call_count == 1
 
 def test_windows_reparse_mocked(mock_core, tmp_path, monkeypatch):

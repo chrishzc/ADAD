@@ -175,7 +175,14 @@ def test_project_verification_command_avoids_disposable_workspace(tmp_path, monk
     }
     captured = []
 
-    def fake_command(command, workspace, placeholders, step_index, outer_owned_root=None):
+    def fake_command(
+        command,
+        workspace,
+        placeholders,
+        step_index,
+        outer_owned_root=None,
+        outer_owned_credential=None,
+    ):
         captured.append((workspace, placeholders["workspace"], step_index))
         return {"step_index": step_index, "passed": True}
 
@@ -214,7 +221,14 @@ def test_project_pytest_command_uses_isolated_workspace(tmp_path, monkeypatch):
     }
     captured = []
 
-    def fake_command(command, workspace, placeholders, step_index, outer_owned_root=None):
+    def fake_command(
+        command,
+        workspace,
+        placeholders,
+        step_index,
+        outer_owned_root=None,
+        outer_owned_credential=None,
+    ):
         captured.append((workspace, placeholders["workspace"], step_index))
         return {"step_index": step_index, "passed": True}
 
