@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260726T135429554361Z-release_preflight_runner
+  phase: 2
+  timestamp: '2026-07-26T13:54:29.554361+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: release_preflight_runner
+    task_id: release_preflight_runner@v18@e6644d
+    system_map_version: 18
+    source_hash: e6644d8b8553765c3d2b2bb60fa69fa0e698638d7fd9e5f663caca9a85c5ba1a
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

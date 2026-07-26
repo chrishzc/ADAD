@@ -112,7 +112,7 @@ def test_verify_implementation_command_accepts_expected_nonzero(project_dir, bas
     write_yaml(project_dir, base_modules)
 
     code, data, out, err = run_script("verify_implementation.py", ["sample_tool"], cwd=project_dir)
-    assert code == 0, err
+    assert code == 0, f"{err} \n {data}"
     assert data["success"] is True
     assert data["command_results"][0]["returncode"] == 3
 
@@ -154,7 +154,10 @@ def test_pytest_command_uses_project_local_basetemp_when_omitted(project_dir, ba
     assert code == 0, err
     argv = data["command_results"][0]["argv"]
     index = argv.index("--basetemp")
-    assert argv[index + 1].startswith(str(project_dir / ".agents" / "workspaces"))
+    basetemp = argv[index + 1]
+    import tempfile
+    assert basetemp.startswith(tempfile.gettempdir())
+    assert "pytest-basetemp" in basetemp
 
 
 def test_pytest_command_preserves_explicit_basetemp(project_dir, base_modules):

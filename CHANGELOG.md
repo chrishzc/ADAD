@@ -4,6 +4,17 @@
 
 ## Unreleased
 
+## 1.6.4 — 2026-07-26
+
+### Changed
+
+- pytest Verification runner 將隱式 `--basetemp` 放入 OS temp 的兩層 owned-root；外部明確指定的 basetemp 維持 unowned，runner 只清理本次建立且 identity 相符的 workspace。
+- command 與 integration verification 會聚合 structured cleanup 狀態，並在 timeout、command failure、termination uncertainty 或 cleanup failure 時保留診斷路徑，不再將清理失敗誤報為整體成功。
+
+### Fixed
+
+- Windows cleanup preflight 逐層檢查 repo 邊界、symlink、junction／reparse point 與 stable file identity；任何路徑、權限或 identity 判斷不確定時一律 fail-closed，拒絕刪除。
+
 ## 1.6.3 — 2026-07-19
 
 ### Added

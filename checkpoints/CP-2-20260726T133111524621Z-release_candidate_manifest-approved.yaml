@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260726T133111524621Z-release_candidate_manifest
+  phase: 2
+  timestamp: '2026-07-26T13:31:11.524621+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: release_candidate_manifest
+    task_id: release_candidate_manifest@v18@ef8c88
+    system_map_version: 18
+    source_hash: ef8c885a0d2f9e25f5b067d05662fcd62f6c103ec0d6329bc489cbc92c5d3b05
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

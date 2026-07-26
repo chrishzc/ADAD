@@ -122,8 +122,10 @@ INCLUDE_PATTERN = re.compile(r'<!--\s*include:?\s*(\S+?\.(?:md|yaml|txt))\s*-->'
   command 仍以 project root 作 `{workspace}`。
 - canonical `adad_core.py` 補上上述規則及受中斷時的 structured fail-closed receipt；
   `tests/test_adad_task.py` 增加 pytest workspace 隔離回歸。
-- canonical 驗證結果為 `70 passed`；Task 以不附著 console 的 `pythonw.exe` runner
-  成功提交並完成 CP-2 核准。不得以手動改寫 Task status 或略過 verification 取代此流程。
+- canonical 驗證結果為 `70 passed`；當時以不附著 console 的 `pythonw.exe` runner
+  成功提交並完成 CP-2 核准。後續 release 證實 `pythonw.exe` 不可作為通用解：它可能令
+  巢狀 Git／subprocess 取得無效的標準控制代碼（`WinError 6`）。不得以手動改寫 Task
+  status 或略過 verification 取代此流程。
 
 ### 預防與後續
 
@@ -134,7 +136,8 @@ INCLUDE_PATTERN = re.compile(r'<!--\s*include:?\s*(\S+?\.(?:md|yaml|txt))\s*-->'
   `adad_core` 單一 Task 而覆寫其他節點的未同步變更。
 - 遇到外部中斷時，只有已確認子行程 exit code 為成功才可視為成功；否則保留
   structured evidence 並拒絕提交。受 console control event 影響的 Windows 環境，
-  可使用 `pythonw.exe` 啟動已驗證的提交程序以避免附著 console。
+  使用 `python.exe` 的隱藏 `Start-Process`，保留 stdout、stderr 與 exit code；若仍遭
+  注入 SIGINT，暫時 runner 只能忽略父層 SIGINT，不得關閉子程序標準控制代碼。
 
 ### 6.1 操作 Runbook：pytest 顯示通過，但 Verification 被中斷
 
@@ -146,7 +149,10 @@ INCLUDE_PATTERN = re.compile(r'<!--\s*include:?\s*(\S+?\.(?:md|yaml|txt))\s*-->'
 
 這表示 pytest 摘要可作為診斷證據，**不能**取代預期 exit code；Verification 必須維持
 fail-closed。它不是 assertion failure，也不能僅憑 submit 的泛化錯誤訊息歸因為
-`.agents/tasks` ACL 或 snapshot 寫入問題。先在專案根目錄直接取得 structured receipt：
+`.agents/tasks` ACL 或 snapshot 寫入問題。權限 probe 必須在專案根目錄執行；若在
+`C:\WINDOWS\system32` 得到 `DirectoryNotFoundException`，那只表示 probe 路徑錯誤，
+不是 ACL 拒絕。若根目錄的 create/write/rename/delete probe 已通過，就先排除 ACL。
+先在專案根目錄直接取得 structured receipt：
 
 ```powershell
 .\.venv\Scripts\python.exe .\.agents\skills\adad-workflow\scripts\verify_implementation.py adad_core
@@ -161,7 +167,7 @@ $out = Join-Path $env:TEMP "adad-submit-adad_core.out"
 $err = Join-Path $env:TEMP "adad-submit-adad_core.err"
 
 $p = Start-Process `
-  -FilePath ".\.venv\Scripts\pythonw.exe" `
+  -FilePath ".\.venv\Scripts\python.exe" `
   -ArgumentList @($script, "submit", "adad_core") `
   -RedirectStandardOutput $out `
   -RedirectStandardError $err `
@@ -173,10 +179,24 @@ Get-Content -Raw $err
 ```
 
 只有 `exit_code=0` 且 stdout 的 JSON 為 `success: true`、`status: submitted` 時，才可
-進入人工 CP-2。不要手動改寫 Task status、略過 verification，或以移除 ACL deny 作為此
-症狀的預設修復；若 receipt 沒有中斷特徵，再另行檢查 `.agents/tasks` 及
-`.agents/tasks/.task_index.lock` 的 create/write/rename/delete 可寫性。
+進入人工 CP-2。畫面中的 `N passed` 不足以取代此退出碼證據。不要手動改寫 Task status、
+略過 verification，或以移除 ACL deny 作為此症狀的預設修復；若 receipt 沒有中斷特徵，
+再另行檢查 `.agents/tasks` 及 `.agents/tasks/.task_index.lock` 的
+create/write/rename/delete 可寫性。
 
+
+### 6.2 2026-07-20 發布後續：封裝、分歧 main 與 Linux CI
+
+- 本機 package 的版本字串可正確顯示，卻仍可能漏裝 `adad_cli.workflow`；原因是顯式
+  package 清單未包含子套件。修正後必須同時檢查 wheel／sdist 內容，並在隔離模式以
+  `python -I -c "import adad_cli.workflow"` 匯入驗證。
+- `main` 與 `development` 分歧是預期狀態。發布必須從本機 development 完整 snapshot
+  以 `read-tree --reset -u <DEV_COMMIT>` 產生 main parent 的 tracked-tree snapshot；不得
+  套用最後一筆 patch、force push，或推送 development。
+- Windows 本機的 API mock 可能遮蔽 Linux CI 的屬性缺失。CI 先後因
+  `ctypes.WinDLL` 與 `subprocess.CREATE_NEW_PROCESS_GROUP` 不存在而失敗；測試 mock 必須
+  建立缺失屬性，而不能假設 Windows API 在所有 runner 存在。Actions 成功前不得重新安裝
+  使用者層 CLI。
 
 ## 驗證方式
 

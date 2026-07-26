@@ -1691,15 +1691,32 @@ class ADADCore:
 
     @staticmethod
     def _task_index_owner_alive(owner):
+        import os
         if owner <= 0:
             return False
-        try:
-            os.kill(owner, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
+        if os.name == 'nt':
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            # 0x1000 is PROCESS_QUERY_LIMITED_INFORMATION
+            handle = kernel32.OpenProcess(0x1000, False, owner)
+            if not handle:
+                # 5 is ERROR_ACCESS_DENIED
+                if ctypes.GetLastError() == 5:
+                    return True
+                return False
+            exit_code = ctypes.c_uint()
+            kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            kernel32.CloseHandle(handle)
+            # 259 is STILL_ACTIVE
+            return exit_code.value == 259
+        else:
+            try:
+                os.kill(owner, 0)
+                return True
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                return True
 
     def _acquire_task_index_lock(self, timeout_seconds=2.0):
         lock_path = self._task_index_lock_path()
@@ -3556,367 +3573,619 @@ class ADADCore:
             environment.pop(name, None)
         return environment
 
-    def _run_verification_command(self, command, workspace, placeholders, step_index):
-        result = {"step_index": step_index, "passed": False}
+    @staticmethod
+    def _is_path_contained(parent_path, child_path):
+        import os
+        if not parent_path or not child_path:
+            return False
+        try:
+            parent_abs = os.path.normcase(os.path.abspath(parent_path))
+            child_abs = os.path.normcase(os.path.abspath(child_path))
+            common = os.path.commonpath([parent_abs, child_abs])
+            return common == parent_abs
+        except (ValueError, OSError):
+            return False
+
+    def _get_path_identity(self, path: str):
+        import os
+        import stat
+        if not path:
+            return None
+        try:
+            target_abs = os.path.normpath(os.path.abspath(path))
+            st = os.lstat(target_abs)
+            reparse_tag = getattr(st, "st_reparse_tag", 0)
+            file_attrs = getattr(st, "st_file_attributes", 0)
+            reparse_const = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            is_reparse = bool(reparse_tag != 0 or (file_attrs & reparse_const))
+            identity = {
+                "st_dev": getattr(st, "st_dev", 0),
+                "st_ino": getattr(st, "st_ino", 0),
+                "type": stat.S_IFMT(st.st_mode),
+                "reparse_tag": reparse_tag,
+                "is_reparse": is_reparse,
+            }
+            if identity["st_dev"] == 0 or identity["st_ino"] == 0:
+                return None
+            return identity
+        except OSError:
+            return None
+
+    def _safe_cleanup_owned_root(self, target_path: str, initial_identity: dict):
+        import os
+        import shutil
+        import stat
+        import time
+
+        preflight_result = {
+            "allowed": False,
+            "reason": None,
+            "failed_component": None,
+            "identity_match": False
+        }
+
+        def fail_preflight(reason, comp=None, match=False):
+            preflight_result["allowed"] = False
+            preflight_result["reason"] = reason
+            preflight_result["failed_component"] = comp
+            preflight_result["identity_match"] = match
+            return "preserved_preflight_rejected", {"stage": "preflight", "error_type": "PreflightError", "message": f"Preflight rejected: {reason}"}, preflight_result
+
+        try:
+            if not initial_identity:
+                return fail_preflight("identity_unavailable", target_path)
+
+            target_abs = os.path.normpath(os.path.abspath(target_path))
+            project_root_abs = os.path.normpath(os.path.abspath(self.project_root))
+
+            current = target_abs
+            while True:
+                try:
+                    st = os.lstat(current)
+                except PermissionError:
+                    return fail_preflight("ancestor_permission_denied", current)
+                except OSError as e:
+                    return fail_preflight(f"ancestor_lstat_failed: {e}", current)
+
+                reparse_tag = getattr(st, "st_reparse_tag", 0)
+                file_attrs = getattr(st, "st_file_attributes", 0)
+                reparse_const = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                if reparse_tag != 0 or (file_attrs & reparse_const):
+                    return fail_preflight("ancestor_reparse_point", current)
+                if stat.S_ISLNK(st.st_mode):
+                    return fail_preflight("ancestor_symlink", current)
+
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+
+            if target_abs == project_root_abs:
+                return fail_preflight("repo_target_equals_repo", target_abs)
+            if self._is_path_contained(target_abs, project_root_abs):
+                return fail_preflight("repo_target_is_ancestor", target_abs)
+            if self._is_path_contained(project_root_abs, target_abs):
+                return fail_preflight("repo_target_inside_repo", target_abs)
+
+            current_identity = self._get_path_identity(target_abs)
+            if not current_identity:
+                return fail_preflight("identity_unavailable", target_abs)
+
+            match = (
+                current_identity["st_dev"] == initial_identity.get("st_dev") and
+                current_identity["st_ino"] == initial_identity.get("st_ino") and
+                current_identity["type"] == initial_identity.get("type") and
+                current_identity.get("is_reparse") == initial_identity.get("is_reparse")
+            )
+            if not match:
+                return fail_preflight("identity_mismatch", target_abs, match=False)
+
+            preflight_result["allowed"] = True
+            preflight_result["identity_match"] = True
+
+            cleanup_error = None
+            def _force_remove_readonly(func, path, excinfo):
+                try:
+                    os.chmod(path, stat.S_IWRITE)
+                    func(path)
+                except OSError as e:
+                    nonlocal cleanup_error
+                    cleanup_error = {"stage": "rmtree_retry", "error_type": type(e).__name__, "message": str(e)}
+                    raise
+
+            removed = False
+            for attempt in range(3):
+                current_identity = self._get_path_identity(target_abs)
+                if not current_identity:
+                    return fail_preflight("identity_unavailable_during_retry", target_abs, match=False)
+                match = (
+                    current_identity["st_dev"] == initial_identity.get("st_dev") and
+                    current_identity["st_ino"] == initial_identity.get("st_ino") and
+                    current_identity["type"] == initial_identity.get("type") and
+                    current_identity.get("is_reparse") == initial_identity.get("is_reparse")
+                )
+                if not match:
+                    return fail_preflight("identity_mismatch_during_retry", target_abs, match=False)
+
+                try:
+                    cleanup_error = None
+                    shutil.rmtree(target_abs, onerror=_force_remove_readonly)
+                    removed = True
+                    break
+                except OSError as e:
+                    if not cleanup_error:
+                        cleanup_error = {"stage": "rmtree", "error_type": type(e).__name__, "message": str(e)}
+                    time.sleep(0.05)
+
+            try:
+                os.lstat(target_abs)
+                if not cleanup_error:
+                    cleanup_error = {"stage": "postcondition", "error_type": "ExistsError", "message": "Target still exists after rmtree"}
+                return "preserved_cleanup_failed", cleanup_error, preflight_result
+            except FileNotFoundError:
+                if cleanup_error and not removed:
+                    return "preserved_cleanup_failed", cleanup_error, preflight_result
+                return "cleaned", None, preflight_result
+            except OSError as e:
+                if not cleanup_error:
+                    cleanup_error = {"stage": "postcondition", "error_type": type(e).__name__, "message": str(e)}
+                return "preserved_cleanup_failed", cleanup_error, preflight_result
+
+        except Exception as e:
+            return "preserved_preflight_rejected", {"stage": "preflight_exception", "error_type": type(e).__name__, "message": str(e)}, preflight_result
+
+    @staticmethod
+    def _terminate_command_tree(process):
+        import os
+        import signal
+        import subprocess
+        receipt = {
+            "attempted": True,
+            "success": False,
+            "killed": False,
+            "drain_ok": False,
+            "error": None,
+            "stdout_drain": b"",
+            "stderr_drain": b""
+        }
+        if process is None:
+            receipt["attempted"] = False
+            receipt["success"] = True
+            return receipt
+
+        try:
+            if os.name == "nt":
+                cmd = ["taskkill", "/F", "/T", "/PID", str(process.pid)]
+                res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if res.returncode == 0:
+                    receipt["killed"] = True
+                else:
+                    try:
+                        process.kill()
+                        receipt["killed"] = True
+                    except OSError as e:
+                        receipt["error"] = f"taskkill returncode {res.returncode}: {res.stderr}; kill fallback failed: {e}"
+            else:
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    receipt["killed"] = True
+                except OSError:
+                    try:
+                        process.kill()
+                        receipt["killed"] = True
+                    except OSError as e:
+                        receipt["error"] = f"killpg failed; kill fallback failed: {e}"
+
+            try:
+                out, err = process.communicate(timeout=5)
+                receipt["stdout_drain"] = out or b""
+                receipt["stderr_drain"] = err or b""
+                receipt["drain_ok"] = True
+                if process.poll() is not None:
+                    receipt["success"] = True
+                else:
+                    receipt["success"] = False
+                    receipt["error"] = "process drain completed but process is still running"
+            except subprocess.TimeoutExpired:
+                receipt["drain_ok"] = False
+                receipt["error"] = "termination did not drain within 5 seconds"
+                receipt["success"] = False
+            except Exception as e:
+                receipt["error"] = f"Drain error: {e}"
+                receipt["success"] = False
+
+        except Exception as e:
+            receipt["error"] = str(e)
+            receipt["success"] = False
+
+        return receipt
+
+    def _run_verification_command(self, command, workspace, placeholders, step_index, outer_owned_root=None):
+        import subprocess
+        import tempfile
+        import os
+        result = {
+            "step_index": step_index,
+            "passed": False,
+            "argv": command.get("argv", []),
+            "returncode": None,
+            "encoding_valid": None,
+            "encoding_error": None,
+            "workspace_path": outer_owned_root,
+            "basetemp_path": None,
+            "basetemp_status": "not_applicable",
+            "workspace_preserved": False,
+            "cleanup_status": "not_applicable",
+            "cleanup_error": None,
+            "preflight_result": None,
+            "manual_action_required": False,
+            "stdout": "",
+            "stderr": "",
+            "diagnostics": {},
+            "termination_error": None,
+            "error": None
+        }
+
         if not isinstance(command, dict):
+            result["cleanup_error"] = {"stage": "validation", "error_type": "TypeError", "message": "command 必須是 object。"}
             result["error"] = "command 必須是 object。"
             return result
+
         expected_exit = command.get("expect_exit", 0)
         timeout = command.get("timeout", 30)
         cwd_name = command.get("cwd", "workspace")
         result["expected_exit"] = expected_exit
-        process = None
-        job_handle = None
-        kernel32 = None
-
-        def close_job_handle():
-            nonlocal job_handle
-            if job_handle:
-                kernel32.CloseHandle(job_handle)
-                job_handle = None
-
-        def create_windows_job(process_id):
-            class IO_COUNTERS(ctypes.Structure):
-                _fields_ = [
-                    ("ReadOperationCount", ctypes.c_uint64),
-                    ("WriteOperationCount", ctypes.c_uint64),
-                    ("OtherOperationCount", ctypes.c_uint64),
-                    ("ReadTransferCount", ctypes.c_uint64),
-                    ("WriteTransferCount", ctypes.c_uint64),
-                    ("OtherTransferCount", ctypes.c_uint64),
-                ]
-
-            class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
-                _fields_ = [
-                    ("PerProcessUserTimeLimit", ctypes.c_int64),
-                    ("PerJobUserTimeLimit", ctypes.c_int64),
-                    ("LimitFlags", ctypes.c_uint32),
-                    ("MinimumWorkingSetSize", ctypes.c_size_t),
-                    ("MaximumWorkingSetSize", ctypes.c_size_t),
-                    ("ActiveProcessLimit", ctypes.c_uint32),
-                    ("Affinity", ctypes.c_size_t),
-                    ("PriorityClass", ctypes.c_uint32),
-                    ("SchedulingClass", ctypes.c_uint32),
-                ]
-
-            class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
-                _fields_ = [
-                    ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
-                    ("IoInfo", IO_COUNTERS),
-                    ("ProcessMemoryLimit", ctypes.c_size_t),
-                    ("JobMemoryLimit", ctypes.c_size_t),
-                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                    ("PeakJobMemoryUsed", ctypes.c_size_t),
-                ]
-
-            local_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            local_kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
-            local_kernel32.CreateJobObjectW.restype = ctypes.c_void_p
-            local_kernel32.SetInformationJobObject.argtypes = [
-                ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32
-            ]
-            local_kernel32.SetInformationJobObject.restype = ctypes.c_int
-            local_kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-            local_kernel32.OpenProcess.restype = ctypes.c_void_p
-            local_kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            local_kernel32.AssignProcessToJobObject.restype = ctypes.c_int
-            local_kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-            local_kernel32.CloseHandle.restype = ctypes.c_int
-            local_kernel32.TerminateJobObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-            local_kernel32.TerminateJobObject.restype = ctypes.c_int
-
-            local_job_handle = local_kernel32.CreateJobObjectW(None, None)
-            if not local_job_handle:
-                raise ctypes.WinError(ctypes.get_last_error())
-            process_handle = None
-            try:
-                info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-                info.BasicLimitInformation.LimitFlags = 0x00002000
-                if not local_kernel32.SetInformationJobObject(
-                    local_job_handle, 9, ctypes.byref(info), ctypes.sizeof(info)
-                ):
-                    raise ctypes.WinError(ctypes.get_last_error())
-                process_handle = local_kernel32.OpenProcess(0x0100 | 0x0001, False, process_id)
-                if not process_handle:
-                    raise ctypes.WinError(ctypes.get_last_error())
-                if not local_kernel32.AssignProcessToJobObject(local_job_handle, process_handle):
-                    raise ctypes.WinError(ctypes.get_last_error())
-            except BaseException:
-                local_kernel32.CloseHandle(local_job_handle)
-                raise
-            finally:
-                if process_handle:
-                    local_kernel32.CloseHandle(process_handle)
-            return local_kernel32, local_job_handle
-
-        def terminate_command_tree():
-            if os.name == "nt":
-                if job_handle is None:
-                    process.kill()
-                    return
-                if not kernel32.TerminateJobObject(job_handle, 1):
-                    raise ctypes.WinError(ctypes.get_last_error())
-            else:
-                os.killpg(process.pid, signal.SIGKILL)
 
         try:
             if expected_exit != "nonzero" and not isinstance(expected_exit, int):
                 raise ValueError("expect_exit 必須是整數或 'nonzero'。")
             if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 300:
                 raise ValueError("timeout 必須大於 0 且不超過 300 秒。")
-            argv = self._expand_verification_argv(command.get("argv"), placeholders)
-            try:
-                basetemp_target = None
-                if "--basetemp" in argv:
-                    idx = argv.index("--basetemp")
-                    if idx + 1 < len(argv):
-                        basetemp_target = argv[idx + 1]
-                else:
-                    for arg in argv:
-                        if arg.startswith("--basetemp="):
-                            basetemp_target = arg.split("=", 1)[1]
-                            break
-                if basetemp_target:
-                    basetemp_path = os.path.realpath(os.path.abspath(basetemp_target))
-                    project_root_abs = os.path.realpath(os.path.abspath(self.project_root))
-                    if basetemp_path.startswith(project_root_abs) and os.path.exists(basetemp_path):
-                        import shutil
-                        import stat
-                        def _force_remove_readonly(func, path, excinfo):
-                            try:
-                                os.chmod(path, stat.S_IWRITE)
-                                func(path)
-                            except OSError:
-                                pass
-                        try:
-                            shutil.rmtree(basetemp_path, onerror=_force_remove_readonly)
-                        except OSError:
-                            pass
-            except Exception:
-                pass
-            if self._is_pytest_command(argv):
-                if not self._has_pytest_basetemp(argv):
-                    basetemp_dir = placeholders.get("project", self.project_root)
-                    if ".agents" not in basetemp_dir:
-                        basetemp_dir = os.path.join(basetemp_dir, ".agents", "workspaces")
-                    argv.extend(
-                        ["--basetemp", os.path.join(basetemp_dir, f"pytest-{step_index}")]
-                    )
-                if not self._has_pytest_cacheprovider_disabled(argv):
-                    argv.extend(["-p", "no:cacheprovider"])
-            execution_cwd, cwd_info = self._resolve_verification_cwd(
-                cwd_name, workspace, placeholders["project"], step_index
-            )
-            result["argv"] = argv
-            result["cwd"] = execution_cwd
-            result["cwd_diagnostics"] = cwd_info
-            process_kwargs = {
-                "cwd": execution_cwd,
-                "env": self._verification_subprocess_environment(),
-                "shell": False,
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-            }
-            if os.name == "nt":
-                process_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-            else:
-                process_kwargs["start_new_session"] = True
-            process = subprocess.Popen(argv, **process_kwargs)
-            if os.name == "nt" and getattr(process, "pid", None) is not None:
-                try:
-                    kernel32, job_handle = create_windows_job(process.pid)
-                except Exception as assignment_error:
-                    result["error"] = f"Windows Job Object assignment failed: {assignment_error}"
-                    output_encoding = command.get("output_encoding", "utf-8")
-                    stdout_bytes, stderr_bytes = b"", b""
-                    try:
-                        process.kill()
-                        stdout_bytes, stderr_bytes = process.communicate(timeout=5)
-                    except subprocess.TimeoutExpired as drain_error:
-                        stdout_bytes = drain_error.stdout if drain_error.stdout is not None else stdout_bytes
-                        stderr_bytes = drain_error.stderr if drain_error.stderr is not None else stderr_bytes
-                        result["termination_error"] = (
-                            "unassigned verification process did not drain within 5 seconds."
-                        )
-                    except Exception as termination_error:
-                        result["termination_error"] = (
-                            f"unassigned verification process termination failed: {termination_error}"
-                        )
-                    stdout, stdout_valid, stdout_error = self._decode_verification_output(
-                        stdout_bytes, output_encoding
-                    )
-                    stderr, stderr_valid, stderr_error = self._decode_verification_output(
-                        stderr_bytes, output_encoding
-                    )
-                    result.update({
-                        "returncode": None,
-                        "stdout": stdout[-4000:],
-                        "stderr": stderr[-4000:],
-                        "encoding_valid": stdout_valid and stderr_valid,
-                        "encoding_error": "; ".join(
-                            detail for detail in (stdout_error, stderr_error) if detail
-                        ) or None,
-                    })
+
+            is_pytest = self._is_pytest_command(command.get("argv", []))
+            needs_workspace = (cwd_name == "workspace" or is_pytest)
+
+            my_owned_root = None
+            my_owned_identity = None
+            if needs_workspace and not outer_owned_root:
+                my_owned_root = tempfile.mkdtemp(prefix="adad_verify_")
+                my_owned_identity = self._get_path_identity(my_owned_root)
+                if not my_owned_identity:
+                    result["cleanup_status"] = "preserved_preflight_rejected"
+                    result["workspace_preserved"] = True
+                    result["error"] = "Failed to get stable identity for new root"
+                    result["workspace_path"] = my_owned_root
                     return result
-            stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
-            completed = type("CompletedProcess", (), {
-                "returncode": process.returncode,
-                "stdout": stdout_bytes,
-                "stderr": stderr_bytes,
-            })()
-            output_encoding = command.get("output_encoding", "utf-8")
-            stdout, stdout_valid, stdout_error = self._decode_verification_output(completed.stdout, output_encoding)
-            stderr, stderr_valid, stderr_error = self._decode_verification_output(completed.stderr, output_encoding)
-            stdout = stdout[-4000:]
-            stderr = stderr[-4000:]
-            encoding_valid = stdout_valid and stderr_valid
-            encoding_error = "; ".join(detail for detail in (stdout_error, stderr_error) if detail) or None
-            exit_ok = completed.returncode != 0 if expected_exit == "nonzero" else completed.returncode == expected_exit
-            stdout_expected = command.get("expect_stdout_contains")
-            stderr_expected = command.get("expect_stderr_contains")
-            stdout_ok = encoding_valid and (stdout_expected is None or stdout_expected in stdout)
-            stderr_ok = encoding_valid and (stderr_expected is None or stderr_expected in stderr)
-            result.update({
-                "returncode": completed.returncode,
-                "stdout": stdout,
-                "stderr": stderr,
-                "encoding_valid": encoding_valid,
-                "encoding_error": encoding_error,
-                "passed": exit_ok and stdout_ok and stderr_ok,
-            })
-            if not result["passed"]:
-                result["error"] = "command 結果不符合預期。"
-        except subprocess.TimeoutExpired as e:
-            result["error"] = f"command 執行逾時（{timeout} 秒）。"
-            output_encoding = command.get("output_encoding", "utf-8")
-            stdout_bytes, stderr_bytes = e.stdout, e.stderr
+                outer_owned_root = my_owned_root
+
+            result["workspace_path"] = outer_owned_root
+            if outer_owned_root:
+                placeholders["workspace"] = outer_owned_root
+
+            argv = self._expand_verification_argv(command.get("argv"), placeholders)
+
+            explicit_basetemp = False
+            basetemp_target = None
+            if "--basetemp" in argv:
+                idx = argv.index("--basetemp")
+                if idx + 1 < len(argv):
+                    basetemp_target = argv[idx + 1]
+                    explicit_basetemp = True
+            else:
+                for arg in argv:
+                    if arg.startswith("--basetemp="):
+                        basetemp_target = arg.split("=", 1)[1]
+                        explicit_basetemp = True
+                        break
+
+            if is_pytest and not explicit_basetemp and outer_owned_root:
+                default_bt = os.path.join(outer_owned_root, "pytest-basetemp")
+                argv.extend(["--basetemp", default_bt])
+                basetemp_target = default_bt
+                explicit_basetemp = True
+
+            if is_pytest and not self._has_pytest_cacheprovider_disabled(argv):
+                argv.extend(["-p", "no:cacheprovider"])
+
+            result["argv"] = argv
+
+            execution_cwd, cwd_diag = self._resolve_verification_cwd(
+                cwd_name, outer_owned_root or workspace, self.project_root, step_index
+            )
+            result["cwd"] = execution_cwd
+            result["cwd_diagnostics"] = cwd_diag
+
+            basetemp_owned = False
+            if basetemp_target:
+                result["basetemp_path"] = basetemp_target
+                bt_abs = os.path.normpath(os.path.abspath(os.path.join(execution_cwd, basetemp_target)))
+                if outer_owned_root:
+                    basetemp_owned = self._is_path_contained(outer_owned_root, bt_abs)
+
+            if explicit_basetemp:
+                result["basetemp_status"] = "owned" if basetemp_owned else "unowned"
+
+            env = self._verification_subprocess_environment()
+            if command.get("env") and isinstance(command.get("env"), dict):
+                for k, v in command.get("env").items():
+                    if isinstance(v, str):
+                        for name, val in placeholders.items():
+                            v = v.replace("{" + name + "}", val)
+                    env[k] = v
+
+            raw_stdout = b""
+            raw_stderr = b""
+            returncode = None
+            command_status = "ok"
+            termination_receipt = None
+
+            creationflags = (
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            ) if os.name == "nt" else 0
+            start_new_session = (os.name != "nt")
+
             try:
-                terminate_command_tree()
-                stdout_bytes, stderr_bytes = process.communicate(timeout=5)
-            except subprocess.TimeoutExpired as drain_error:
-                stdout_bytes = drain_error.stdout if drain_error.stdout is not None else stdout_bytes
-                stderr_bytes = drain_error.stderr if drain_error.stderr is not None else stderr_bytes
-                result["termination_error"] = "command tree termination did not drain within 5 seconds."
-            except Exception as termination_error:
-                result["termination_error"] = f"command tree termination failed: {termination_error}"
-            stdout, stdout_valid, stdout_error = self._decode_verification_output(stdout_bytes, output_encoding)
-            stderr, stderr_valid, stderr_error = self._decode_verification_output(stderr_bytes, output_encoding)
-            result.update({
-                "returncode": None,
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-4000:],
-                "encoding_valid": stdout_valid and stderr_valid,
-                "encoding_error": "; ".join(detail for detail in (stdout_error, stderr_error) if detail) or None,
-            })
-        except KeyboardInterrupt:
-            result["interrupted"] = True
-            result["error"] = "command 執行被使用者中斷"
-            output_encoding = command.get("output_encoding", "utf-8")
-            stdout_bytes, stderr_bytes = b"", b""
-            if process is not None:
+                proc = subprocess.Popen(
+                    argv,
+                    cwd=execution_cwd,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    creationflags=creationflags,
+                    start_new_session=start_new_session,
+                )
                 try:
-                    terminate_command_tree()
-                    stdout_bytes, stderr_bytes = process.communicate(timeout=5)
-                except Exception as termination_error:
-                    result["termination_error"] = f"command tree termination failed: {termination_error}"
-            stdout, stdout_valid, stdout_error = self._decode_verification_output(stdout_bytes, output_encoding)
-            stderr, stderr_valid, stderr_error = self._decode_verification_output(stderr_bytes, output_encoding)
-            result.update({
-                "returncode": None,
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-4000:],
-                "encoding_valid": stdout_valid and stderr_valid,
-                "encoding_error": "; ".join(detail for detail in (stdout_error, stderr_error) if detail) or None,
-            })
+                    out, err = proc.communicate(timeout=timeout)
+                    raw_stdout = out or b""
+                    raw_stderr = err or b""
+                    returncode = proc.returncode
+                except subprocess.TimeoutExpired as te:
+                    command_status = "timeout"
+                    raw_stdout = te.output or b""
+                    raw_stderr = te.stderr or b""
+                    termination_receipt = self._terminate_command_tree(proc)
+                    if termination_receipt and termination_receipt.get("stdout_drain"):
+                        raw_stdout = termination_receipt["stdout_drain"]
+                    if termination_receipt and termination_receipt.get("stderr_drain"):
+                        raw_stderr = termination_receipt["stderr_drain"]
+                    result["error"] = f"command 執行逾時（{timeout} 秒）。"
+                    if termination_receipt and not termination_receipt.get("success"):
+                        result["termination_error"] = termination_receipt.get("error") or "termination failed"
+            except KeyboardInterrupt:
+                command_status = "keyboard_interrupt"
+                termination_receipt = self._terminate_command_tree(proc if 'proc' in locals() else None)
+                result["interrupted"] = True
+                result["manual_action_required"] = True
+                result["error"] = "使用者中斷執行 (KeyboardInterrupt)"
+                if termination_receipt and not termination_receipt.get("success"):
+                    result["termination_error"] = termination_receipt.get("error") or "termination failed"
+            except Exception as pe:
+                command_status = "launch_failed"
+                result["cleanup_error"] = {"stage": "popen", "error_type": type(pe).__name__, "message": str(pe)}
+                result["error"] = f"無法啟動 subprocess: {pe}"
+                returncode = -1
+
+            stdout_str, stdout_ok, stdout_err = self._decode_verification_output(raw_stdout, command.get("output_encoding"))
+            stderr_str, stderr_ok, stderr_err = self._decode_verification_output(raw_stderr, command.get("output_encoding"))
+
+            result["stdout"] = stdout_str
+            result["stderr"] = stderr_str
+
+            if command_status == "ok":
+                if expected_exit == "nonzero":
+                    exit_ok = (returncode != 0)
+                else:
+                    exit_ok = (returncode == expected_exit)
+            else:
+                exit_ok = False
+
+            diagnostics = {
+                "exit_ok": exit_ok,
+                "stdout_ok": stdout_ok,
+                "stderr_ok": stderr_ok,
+                "encoding_valid": stdout_ok and stderr_ok,
+                "returncode": returncode,
+            }
+            result["diagnostics"] = diagnostics
+            result["returncode"] = returncode
+            result["encoding_valid"] = stdout_ok and stderr_ok
+            result["encoding_error"] = stdout_err or stderr_err or None
+
+            command_passed = exit_ok and stdout_ok and stderr_ok
+
+            if outer_owned_root:
+                if command_status == "keyboard_interrupt":
+                    result["cleanup_status"] = "preserved_termination_uncertain"
+                    result["workspace_preserved"] = True
+                elif command_status == "timeout":
+                    if termination_receipt and not termination_receipt.get("success"):
+                        result["cleanup_status"] = "preserved_termination_uncertain"
+                    else:
+                        result["cleanup_status"] = "preserved_timeout"
+                    result["workspace_preserved"] = True
+                elif command_status == "launch_failed":
+                    result["cleanup_status"] = "preserved_termination_uncertain"
+                    result["workspace_preserved"] = True
+                elif not command_passed:
+                    result["cleanup_status"] = "preserved_command_failed"
+                    result["workspace_preserved"] = True
+                else:
+                    if my_owned_root:
+                        status, error, preflight = self._safe_cleanup_owned_root(my_owned_root, my_owned_identity)
+                        result["cleanup_status"] = status
+                        if error:
+                            result["cleanup_error"] = error
+                        if preflight:
+                            result["preflight_result"] = preflight
+                        if status != "cleaned":
+                            result["workspace_preserved"] = True
+                    else:
+                        result["cleanup_status"] = "cleaned"
+            else:
+                result["cleanup_status"] = "not_applicable"
+
+            result["passed"] = command_passed and (result["cleanup_status"] in ("not_applicable", "unowned", "cleaned"))
+            if not result["passed"] and result["cleanup_status"].startswith("preserved_"):
+                result["manual_action_required"] = True
+
+            if not command_passed and not result.get("error"):
+                result["error"] = "command 結果不符合預期。"
+
+            return result
+
         except Exception as e:
-            result["error"] = f"command 執行失敗：{e}"
-        close_job_handle()
-        return result
+            result["cleanup_error"] = {"stage": "execution_exception", "error_type": type(e).__name__, "message": str(e)}
+            result["error"] = str(e)
+            result["passed"] = False
+            return result
 
     def _run_integration_verification(self, integration, real_file_path, integration_index):
-        integration_result = {
+        import tempfile
+        import shutil
+        import os
+        result = {
             "integration_index": integration_index,
-            "name": integration.get("name") if isinstance(integration, dict) else None,
             "passed": False,
+            "workspace_path": None,
+            "workspace_preserved": False,
+            "aggregate_status": "not_applicable",
+            "cleanup_error": None,
+            "preflight_result": None,
+            "manual_action_required": False,
             "step_results": [],
+            "error": None
         }
+
         if not isinstance(integration, dict):
-            integration_result["error"] = "integration_case 必須是 object。"
-            return integration_result
-        steps = integration.get("steps")
-        if not isinstance(steps, list) or not steps:
-            integration_result["error"] = "integration_case.steps 必須是非空陣列。"
-            return integration_result
+            result["error"] = "integration_case 必須是 object。"
+            return result
 
-        project_root = self.project_root
-        source_path = os.path.realpath(os.path.abspath(real_file_path))
-        workspace_root = project_root
-        workspace = None
+        commands = integration.get("steps", [])
+        if not isinstance(commands, list) or not commands:
+            result["error"] = "integration_case.steps 必須是非空陣列。"
+            return result
+
+        outer_owned_root = tempfile.mkdtemp(prefix="adad_verify_")
+        outer_owned_identity = self._get_path_identity(outer_owned_root)
+        if not outer_owned_identity:
+            result["aggregate_status"] = "preserved_preflight_rejected"
+            result["workspace_preserved"] = True
+            result["error"] = "Failed to get stable identity for new root"
+            result["workspace_path"] = outer_owned_root
+            return result
+
+        result["workspace_path"] = outer_owned_root
+        SEVERITY = {
+            "preserved_termination_uncertain": 60,
+            "preserved_preflight_rejected": 50,
+            "preserved_cleanup_failed": 40,
+            "preserved_timeout": 30,
+            "preserved_command_failed": 20,
+            "cleaned": 10,
+            "not_applicable": 0
+        }
+
         try:
-            os.makedirs(workspace_root, exist_ok=True)
-            workspace = tempfile.mkdtemp(prefix="adad_verify_", dir=workspace_root)
-            for fixture in integration.get("fixtures", []):
-                if not isinstance(fixture, dict):
-                    raise ValueError("fixture 必須是 object。")
-                fixture_source = self._safe_verification_path(
-                    project_root, fixture.get("source"), "fixture.source"
-                )
-                fixture_target = self._safe_verification_path(
-                    workspace, fixture.get("target"), "fixture.target"
-                )
-                if not os.path.exists(fixture_source):
-                    raise ValueError(f"fixture.source 不存在：{fixture.get('source')}")
-                os.makedirs(os.path.dirname(fixture_target), exist_ok=True)
-                if os.path.isdir(fixture_source):
-                    shutil.copytree(fixture_source, fixture_target)
-                else:
-                    shutil.copy2(fixture_source, fixture_target)
+            if outer_owned_root and integration.get("fixtures"):
+                project_root = self.project_root
+                for fixture in integration.get("fixtures", []):
+                    if not isinstance(fixture, dict):
+                        raise ValueError("fixture 必須是 object。")
+                    fixture_source = self._safe_verification_path(
+                        project_root, fixture.get("source"), "fixture.source"
+                    )
+                    fixture_target = self._safe_verification_path(
+                        outer_owned_root, fixture.get("target"), "fixture.target"
+                    )
+                    if not os.path.exists(fixture_source):
+                        raise ValueError(f"fixture.source 不存在：{fixture.get('source')}")
+                    os.makedirs(os.path.dirname(fixture_target), exist_ok=True)
+                    if os.path.isdir(fixture_source):
+                        shutil.copytree(fixture_source, fixture_target, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(fixture_source, fixture_target)
 
-            placeholders = {
-                "python": sys.executable,
-                "project_python": self._resolve_project_python(project_root),
-                "source": source_path,
-                "project": project_root,
-                "workspace": workspace,
-            }
-            for step_index, step in enumerate(steps):
+            all_passed = True
+            worst_step_status = "cleaned"
+            for idx, command in enumerate(commands):
+                project_placeholders = {
+                    "python": sys.executable,
+                    "project_python": self._resolve_project_python(self.project_root),
+                    "source": os.path.realpath(os.path.abspath(real_file_path)),
+                    "project": self.project_root,
+                    "workspace": outer_owned_root,
+                }
                 step_result = self._run_verification_command(
-                    step, workspace, placeholders, step_index
+                    command, outer_owned_root, project_placeholders, idx, outer_owned_root
                 )
-                integration_result["step_results"].append(step_result)
-                if not step_result["passed"]:
-                    integration_result["error"] = f"第 {step_index + 1} 個 command 未通過。"
-                    return integration_result
-            integration_result["passed"] = True
+                result["step_results"].append(step_result)
+
+                step_status = step_result.get("cleanup_status", "cleaned")
+                if SEVERITY.get(step_status, 0) > SEVERITY.get(worst_step_status, 0):
+                    worst_step_status = step_status
+
+                if not step_result.get("passed", False):
+                    if worst_step_status == "cleaned":
+                        worst_step_status = "preserved_command_failed"
+                    all_passed = False
+
+            if outer_owned_root:
+                if not all_passed:
+                    final_status = worst_step_status if worst_step_status != "cleaned" else "preserved_command_failed"
+                    result["aggregate_status"] = final_status
+                else:
+                    status, error, preflight = self._safe_cleanup_owned_root(outer_owned_root, outer_owned_identity)
+                    final_status = status
+                    result["aggregate_status"] = final_status
+                    if error:
+                        result["cleanup_error"] = error
+                    if preflight:
+                        result["preflight_result"] = preflight
+
+                workspace_preserved = (final_status != "cleaned")
+                manual_action_required = result.get("aggregate_status", "").startswith("preserved_")
+
+                result["workspace_preserved"] = workspace_preserved
+                result["manual_action_required"] = manual_action_required
+                if workspace_preserved:
+                    all_passed = False
+
+                for item in result["step_results"]:
+                    item["cleanup_status"] = final_status
+                    item["workspace_preserved"] = workspace_preserved
+                    item["manual_action_required"] = manual_action_required
+                    if "cleanup_error" in result:
+                        item["cleanup_error"] = result["cleanup_error"]
+                    if "preflight_result" in result:
+                        item["preflight_result"] = result["preflight_result"]
+                    if workspace_preserved:
+                        item["passed"] = False
+
+            result["passed"] = all_passed
+            return result
+
+        except KeyboardInterrupt:
+            result["aggregate_status"] = "preserved_termination_uncertain"
+            result["workspace_preserved"] = True
+            result["error"] = "使用者中斷執行 (KeyboardInterrupt)"
+            result["interrupted"] = True
+            result["manual_action_required"] = True
+            result["passed"] = False
+            return result
         except Exception as e:
-            integration_result["error"] = f"integration_case 執行失敗：{e}"
-        finally:
-            if workspace and os.path.exists(workspace):
-                import stat
-                def _remove_readonly(func, path, excinfo):
-                    try:
-                        os.chmod(path, stat.S_IWRITE)
-                        func(path)
-                    except OSError:
-                        pass
-                try:
-                    shutil.rmtree(workspace, onerror=_remove_readonly)
-                except OSError:
-                    pass
-        return integration_result
+            result["aggregate_status"] = "preserved_termination_uncertain"
+            result["workspace_preserved"] = True
+            result["error"] = str(e)
+            result["manual_action_required"] = True
+            result["passed"] = False
+            return result
 
     def verify_implementation(self, node_name, file_path=None):
-        """
-        驗證指定節點的實作代碼是否符合 Verification 約束。
-
-        支援四種規則，可以在同一個節點混用：
-          - `must_have_assertions`：原有的靜態 AST 掃描，檢查檔案裡至少有一個
-            assert 語句。只證明「有自檢」，不證明「自檢的內容是對的」。
-          - `case`：動態執行驗證。實際 import 該節點對應的函式，用
-            `case.input` 當作 kwargs 呼叫它，比對回傳值是否等於 `case.expect`。
-          - `command`：在隔離暫存目錄執行單一步驟 CLI 驗證。
-          - `integration_case`：複製 fixtures 後依序執行多個 CLI 步驟。
-        """
+        import ast
+        import tempfile
+        import shutil
+        import os
         node = self.get_node(node_name)
         if not node:
             return {"success": False, "error": f"找不到節點: {node_name}"}
@@ -3932,7 +4201,6 @@ class ADADCore:
 
         static_error = None
 
-        # --- 靜態規則：must_have_assertions（原有行為不變）---
         if "must_have_assertions" in verification:
             try:
                 with open(real_file_path, "r", encoding="utf-8") as f:
@@ -3944,8 +4212,9 @@ class ADADCore:
                 def __init__(self):
                     self.has_assert = False
 
-                def visit_Assert(self, node_visitor):
+                def visit_Assert(self, node):
                     self.has_assert = True
+                    self.generic_visit(node)
 
             visitor = AssertVisitor()
             visitor.visit(tree)
@@ -3955,7 +4224,6 @@ class ADADCore:
                     f"必須包含至少一個 assert 語句作為自檢斷言。"
                 )
 
-        # --- 動態規則：case（實際執行函式，比對 Input → Expected Output）---
         cases = [v["case"] for v in verification if isinstance(v, dict) and "case" in v]
         case_results = []
         if cases:
@@ -4004,52 +4272,33 @@ class ADADCore:
 
         all_cases_passed = all(c["passed"] for c in case_results)
 
-        # --- CLI 規則：command 是單一步驟 integration_case 的簡寫 ---
         commands = [v["command"] for v in verification if isinstance(v, dict) and "command" in v]
         command_results = []
+        outer_owned_root = None
+        outer_owned_identity = None
+        if any(
+            cmd.get("cwd", "workspace") == "workspace"
+            or self._is_pytest_command(cmd.get("argv", []))
+            for cmd in commands
+        ):
+            outer_owned_root = tempfile.mkdtemp(prefix="adad_verify_")
+            outer_owned_identity = self._get_path_identity(outer_owned_root)
+
         for idx, command in enumerate(commands):
-            if command.get("cwd", "workspace") == "project":
-                project_placeholders = {
-                    "python": sys.executable,
-                    "project_python": self._resolve_project_python(self.project_root),
-                    "source": os.path.realpath(os.path.abspath(real_file_path)),
-                    "project": self.project_root,
-                    "workspace": self.project_root,
-                }
-                if self._is_pytest_command(command.get("argv") or []):
-                    temp_workspace = None
-                    try:
-                        temp_workspace = tempfile.mkdtemp(prefix="adad_verify_work_", dir=self.project_root)
-                        project_placeholders["workspace"] = temp_workspace
-                        step_result = self._run_verification_command(
-                            command, temp_workspace, project_placeholders, idx
-                        )
-                    finally:
-                        if temp_workspace and os.path.exists(temp_workspace):
-                            import stat
-                            def _remove_readonly(func, path, excinfo):
-                                try:
-                                    os.chmod(path, stat.S_IWRITE)
-                                    func(path)
-                                except OSError:
-                                    pass
-                            try:
-                                shutil.rmtree(temp_workspace, onerror=_remove_readonly)
-                            except OSError:
-                                pass
-                else:
-                    step_result = self._run_verification_command(
-                        command, self.project_root, project_placeholders, idx
-                    )
-            else:
-                wrapped = self._run_integration_verification(
-                    {"name": f"command_{idx}", "steps": [command]},
-                    real_file_path,
-                    idx,
-                )
-                step_result = wrapped["step_results"][0] if wrapped["step_results"] else {
-                    "step_index": 0, "passed": False, "error": wrapped.get("error")
-                }
+            project_placeholders = {
+                "python": sys.executable,
+                "project_python": self._resolve_project_python(self.project_root),
+                "source": os.path.realpath(os.path.abspath(real_file_path)),
+                "project": self.project_root,
+                "workspace": outer_owned_root or self.project_root,
+            }
+            step_result = self._run_verification_command(
+                command,
+                outer_owned_root or self.project_root,
+                project_placeholders,
+                idx,
+                outer_owned_root,
+            )
             command_results.append(step_result)
 
         integrations = [
@@ -4063,6 +4312,49 @@ class ADADCore:
         ]
         all_commands_passed = all(item["passed"] for item in command_results)
         all_integrations_passed = all(item["passed"] for item in integration_results)
+
+        SEVERITY = {
+            "cleaned": 0,
+            "not_applicable": 1,
+            "unowned": 1,
+            "preserved_preflight_rejected": 2,
+            "preserved_timeout": 3,
+            "preserved_command_failed": 4,
+            "preserved_cleanup_failed": 5,
+            "preserved_termination_uncertain": 6,
+        }
+
+        if outer_owned_root:
+            worst_command_status = "cleaned"
+            for item in command_results:
+                st = item.get("cleanup_status", "cleaned")
+                if SEVERITY.get(st, 0) > SEVERITY.get(worst_command_status, 0):
+                    worst_command_status = st
+
+            if not all_commands_passed:
+                final_shared_root_status = worst_command_status if worst_command_status != "cleaned" else "preserved_command_failed"
+                error = None
+                preflight = None
+            else:
+                status, error, preflight = self._safe_cleanup_owned_root(outer_owned_root, outer_owned_identity)
+                final_shared_root_status = status
+
+            workspace_preserved = (final_shared_root_status != "cleaned")
+            manual_action_required = final_shared_root_status.startswith("preserved_")
+
+            for item in command_results:
+                item["cleanup_status"] = final_shared_root_status
+                item["workspace_preserved"] = workspace_preserved
+                item["manual_action_required"] = manual_action_required
+                if error:
+                    item["cleanup_error"] = error
+                if preflight:
+                    item["preflight_result"] = preflight
+                if workspace_preserved:
+                    item["passed"] = False
+
+            if workspace_preserved:
+                all_commands_passed = False
 
         if static_error or not all_cases_passed or not all_commands_passed or not all_integrations_passed:
             failed_count = (
@@ -4090,6 +4382,7 @@ class ADADCore:
         if integration_results:
             result["integration_results"] = integration_results
         return result
+
 
 
 # ================= 自我單元測試 =================

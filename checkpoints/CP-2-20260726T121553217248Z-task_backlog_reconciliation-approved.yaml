@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260726T121553217248Z-task_backlog_reconciliation
+  phase: 2
+  timestamp: '2026-07-26T12:15:53.217248+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: task_backlog_reconciliation
+    task_id: task_backlog_reconciliation@v18@144f04
+    system_map_version: 18
+    source_hash: 144f040b4becdef322c14ddcbedc1230d2008c2701fcf1cdabd2d61647f99c7f
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

@@ -561,17 +561,17 @@
 - Source: adad_cli/__init__.py
 - Preferred Pattern: single_source_of_truth
 - Complexity: low
-- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.3]
+- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.4；不得從 dirty tree 產生正式 release artifact]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.3'"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.4'"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: []
 - Input:
   - release_version: string
 - Output:
   - package_version: string
 - TODO:
-  - [ ] 發布 1.6.3：Task index、Verification timeout 契約與 Windows pytest runner 強化
+  - [ ] 發布 1.6.4：pytest 外層 basetemp owned-root 生命週期與 fail-closed cleanup
 - Checkpoint:
   - [x] CP-1-075-PATCH-RELEASE (validated：2026-07-16 人工要求更新 1.6.1 並安裝本機版本)
 
@@ -581,9 +581,10 @@
 - Description: 對齊 README 的 CLI 工具表與 Phase/Checkpoint 文件，使其反映 Task 快照工作流（#1-2）。
 - Source: README.md
 - Preferred Pattern: documentation_as_contract
-- Decisions: []
+- Decisions: [1.6.4 README 必須同步更新版本徽章與版本重點；不得宣稱尚未完成的 prepare_isolation 或未通過 release preflight 的功能已發布]
 - Invariants: []
-- Verification: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-c", "from pathlib import Path; text=Path('README.md').read_text(encoding='utf-8'); head='\\n'.join(text.splitlines()[:20]); assert '1.6.4' in head; assert '1.6.3' not in head"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: [generate_task, adad_task, check_domain_boundary]
 - Input: {}
 - Output:
@@ -618,9 +619,10 @@
 - Description: 以 CHANGELOG 維護版本化改善紀錄，取代 README 尾端長篇變更文字（#7）。
 - Source: CHANGELOG.md
 - Preferred Pattern: keep_a_changelog
-- Decisions: []
+- Decisions: [1.6.4 必須建立獨立版本段落並記錄 #82 pytest basetemp owned-root、structured cleanup aggregation 與 Windows fail-closed preflight；不得把 assigned 或未通過 CP-2 的工作列為已發布]
 - Invariants: []
-- Verification: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-c", "from pathlib import Path; text=Path('CHANGELOG.md').read_text(encoding='utf-8'); assert '## 1.6.4' in text; section=text.split('## 1.6.4',1)[1].split('\\n## ',1)[0]; assert 'basetemp' in section.lower(); assert 'cleanup' in section.lower()"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: []
 - Input:
   - release_changes: array
@@ -680,6 +682,112 @@
   - [x] CP-1-065-SOP (validated：2026-07-15 人工核准納入巢狀 CI 經驗)
   - [x] CP-1-072-SUBMAP-RELEASE (validated：2026-07-15 人工要求更新本機版本)
   - [x] CP-1-073-FULL-SNAPSHOT (validated：2026-07-16 人工要求修正發布 SOP)
+
+##### Module: release_candidate_manifest
+- Type: tool
+- Observability: not_required
+- Description: 將指定 commit 或 staged index 解析為不可變 candidate tree，並產生可機械驗證的 release manifest，避免 dirty development 工作樹遮蔽漏帶檔案。
+- Source: adad_source/agents/skills/adad-workflow/scripts/release_candidate_manifest.py
+- Preferred Pattern: fail_closed_manifest
+- Complexity: medium
+- Algorithm:
+  - CLI 固定為 `release_candidate_manifest.py --candidate-mode commit|staged_index [--candidate-revision REV] --version VERSION --task-snapshot PATH... --expected-file PATH... --required-test-file PATH... --replica-group PATH,PATH,...`；後五種 option 支援重複傳入
+  - candidate_mode=commit 時 candidate_revision 必填；candidate_mode=staged_index 時 candidate_revision 必須省略。其他組合、解析失敗、unmerged index 或 tree identity 不確定時立即失敗
+  - 以 Git object database 解析 candidate tree hash；manifest 的所有檔案內容與 hash 均從 candidate tree 讀取，不讀取 working-tree bytes 作為發布證據
+  - expected_release_files、required_test_files 與 source_replica_groups 均由呼叫端明確提供；工具不得由 working tree、檔名慣例或模糊 dependency 自行推導
+  - approved_task_snapshots 是本機外部 authorization evidence，不是 release artifact；strict-read JSON 後驗證 status=approved、approved implementation hash 與 checkpoint metadata，並只在 manifest 保存 snapshot digest 與核准證據
+  - 列出 candidate tree 內版本檔、expected files、required tests、canonical source 與同步副本的存在性與 blob hash；Task snapshot path 或 bytes 不得加入 candidate tracked-file 清單
+  - 比對每組 canonical source 與 replica blob；required test 不在 candidate tree、expected file 缺失、Task approval 無效或版本契約不一致時 fail-closed
+  - 特別涵蓋「source 已 staged、配套測試只存在 dirty worktree」案例，必須回報 manifest_valid=false
+  - stdout 固定輸出單一 JSON object。manifest_valid=true 時 exit 0；任何契約 blocker 或輸入錯誤時輸出 manifest_valid=false 並 exit 1；未預期內部錯誤輸出 fixed-shape diagnostics 並 exit 2
+  - 只輸出 manifest evidence，不建立 worktree、不執行測試、不建立 commit/tag 或 push
+- Decisions: [candidate manifest 的證據來源固定為 Git tree object，不允許以 working tree 測試通過取代 snapshot 完整性]
+- Invariants:
+  - fail_closed: true
+  - candidate_tree_immutable: true
+  - no_worktree_content_evidence: true
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_release_candidate_manifest.py", "-q", "-p", "no:cacheprovider"], "cwd": "project", "timeout": 60}
+- Dependencies: [release_sop, sync_adad_assets, package_version]
+- Input:
+  - candidate_mode: commit|staged_index
+  - candidate_revision: string|null
+  - version: string
+  - approved_task_snapshots: array[path]
+  - expected_release_files: array[path]
+  - required_test_files: array[path]
+  - source_replica_groups: array[array[path]]
+  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/release_candidate_manifest.py, tests/test_release_candidate_manifest.py]
+- Output:
+  - manifest_valid: boolean
+  - candidate_tree_hash: string
+  - release_manifest: object
+  - blockers: array
+  - manual_action_required: boolean
+- Retry Budget: 2
+- Non Goals: [建立 release worktree, 執行 pytest, 建立 commit, 建立 tag, push, 公開發布, 自動納入 dirty worktree 檔案]
+- TODO:
+  - [ ] #87-A：實作 candidate tree 與 release manifest 完整性檢查
+- Checkpoint:
+  - [x] CP-1-087-A-RELEASE-MANIFEST (validated：2026-07-26 人工核准拆分)
+  - [x] CP-3-087-A-R1-EXPLICIT-INPUTS (validated：2026-07-26 人工要求直接修正契約)
+
+##### Module: release_preflight_runner
+- Type: tool
+- Observability: not_required
+- Description: 消費已驗證的 release manifest，在 OS temp 的乾淨 worktree 執行完整 release Gate，並輸出綁定 candidate tree hash 的 structured evidence。
+- Source: adad_source/agents/skills/adad-workflow/scripts/release_preflight.py
+- Preferred Pattern: fail_closed_pipeline
+- Complexity: medium
+- Algorithm:
+  - CLI 固定為 `release_preflight.py --manifest PATH --project-root PATH --project-python PATH --base-revision REV --pytest-timeout N --gate-timeout N --build-timeout N --outer-timeout N --task-snapshot PATH...`；task-snapshot 可重複
+  - strict-read manifest JSON，只接受 manifest_valid=true、blockers=[]、candidate_tree_hash 為可由 project_root Git object database 重新解析的 tree；任何 identity drift 立即停止
+  - 每個外部 Task snapshot 必須 strict-read、status=approved，且 SHA-256 與 manifest.task_authorization_evidence 的 task_id/snapshot_sha256 精確相符；只複製至 release worktree 的 `.agents/tasks` 作本機 Gate 輸入，不加入 index
+  - outer_timeout 必須至少為 pytest_timeout + 2*gate_timeout + build_timeout + 30 秒；不成立時拒絕啟動。每一步 subprocess 只使用自己的 timeout，整體另以 monotonic deadline 限制
+  - 在 OS temp 以 exclusive creation 建立 `adad_release_<nonce>` owned root並保存 lstat identity；以 `git worktree add --detach WORKTREE BASE_REVISION` 建立基底，再執行 `git read-tree --reset -u CANDIDATE_TREE`，禁止建立 branch 或 commit
+  - Windows 在 WORKTREE/.venv 建立指向 project_python 所屬 venv root 的 Junction；POSIX 建立 symlink。建立後必須驗證 link/reparse identity，且 link 永遠視為 runner-owned link、target 永遠 unowned
+  - 固定依序執行：`git diff --cached --check`；`PROJECT_PYTHON -m pytest -q --color=no --basetemp OWNED_ROOT/pytest-basetemp -p no:cacheprovider`；`PROJECT_PYTHON .agents/skills/adad-workflow/scripts/adad_pre_commit.py`；`PROJECT_PYTHON -m adad_cli.sync_assets --check`；以 PROJECT_PYTHON 從 candidate worktree import `adad_cli.__version__` 並精確比對 manifest.version；`PROJECT_PYTHON -m build --outdir OWNED_ROOT/dist`
+  - build 成功後必須確認 OWNED_ROOT/dist 恰有至少一個含 manifest.version 的 wheel 與一個 sdist，並保存檔名、size、SHA-256；artifact 只屬暫存驗證證據，不上傳
+  - 保存每一步 name、argv、cwd、exit code、timeout、duration、stdout/stderr 摘要與 candidate tree hash；任何 nonzero、timeout、KeyboardInterrupt 或 outer deadline 到期都停止後續步驟
+  - cleanup 先驗證並移除 runner-owned venv link本身，再執行 `git worktree remove --force WORKTREE`；只有 Git worktree 已解除且 owned root identity 通過 adad_core fail-closed preflight 時才可刪除 owned root
+  - command/Gate 失敗時保留 owned root；成功時才嘗試 cleanup。cleanup 不確定時 release_ready=false、manual_action_required=true 並回報診斷路徑
+  - stdout 固定輸出單一 JSON object；release_ready=true 時 exit 0，任何 Gate/cleanup/輸入 blocker 時 exit 1，未預期內部錯誤時以 fixed-shape diagnostics exit 2
+  - 成功時只輸出 release_ready=true evidence；不得建立 commit、tag、push、核准 Actions 或上傳套件
+- Decisions: [runner 只消費已驗證 manifest；SOP 保留人類發布決策，重複且安全關鍵的 Gate 改由工具執行]
+- Invariants:
+  - fail_closed: true
+  - no_global_git_config_write: true
+  - no_commit_tag_push_publish: true
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_release_preflight.py", "-q", "-p", "no:cacheprovider"], "cwd": "project", "timeout": 120}
+- Dependencies: [release_candidate_manifest, release_sop, adad_core, adad_pre_commit, sync_adad_assets, automated_test_suite]
+- Input:
+  - manifest_path: path
+  - project_root: path
+  - project_python: path
+  - base_revision: string
+  - approved_task_snapshots: array[path]
+  - pytest_timeout: integer
+  - gate_timeout: integer
+  - build_timeout: integer
+  - outer_timeout: integer
+  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/release_preflight.py, tests/test_release_preflight.py]
+- Output:
+  - release_ready: boolean
+  - candidate_tree_hash: string
+  - step_results: array
+  - artifact_evidence: array
+  - cleanup_status: enum(cleaned, preserved_command_failed, preserved_timeout, preserved_termination_uncertain, preserved_preflight_rejected, preserved_cleanup_failed)
+  - cleanup_error: object|null
+  - preserved_paths: array
+  - manual_action_required: boolean
+- Retry Budget: 2
+- Non Goals: [建立 commit, 建立 tag, push development, push main, 觸發或核准 Actions, 上傳或公開發布套件]
+- TODO:
+  - [ ] #87-B：實作乾淨 worktree release Gate runner
+- Checkpoint:
+  - [x] CP-1-087-B-RELEASE-RUNNER (validated：2026-07-26 人工核准拆分)
+  - [x] CP-3-087-B-R1-EXECUTION-CONTRACT (validated：2026-07-26 人工要求直接補齊 runner 契約)
 
 ##### Module: windows_verification_interrupt_runbook
 - Type: documentation

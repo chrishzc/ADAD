@@ -175,7 +175,7 @@ def test_project_verification_command_avoids_disposable_workspace(tmp_path, monk
     }
     captured = []
 
-    def fake_command(command, workspace, placeholders, step_index):
+    def fake_command(command, workspace, placeholders, step_index, outer_owned_root=None):
         captured.append((workspace, placeholders["workspace"], step_index))
         return {"step_index": step_index, "passed": True}
 
@@ -214,7 +214,7 @@ def test_project_pytest_command_uses_isolated_workspace(tmp_path, monkeypatch):
     }
     captured = []
 
-    def fake_command(command, workspace, placeholders, step_index):
+    def fake_command(command, workspace, placeholders, step_index, outer_owned_root=None):
         captured.append((workspace, placeholders["workspace"], step_index))
         return {"step_index": step_index, "passed": True}
 
@@ -227,17 +227,19 @@ def test_project_pytest_command_uses_isolated_workspace(tmp_path, monkeypatch):
     assert step_index == 0
     assert workspace == placeholder
     assert workspace != str(tmp_path)
-    assert Path(workspace).parent == tmp_path
-    assert Path(workspace).name.startswith("adad_verify_work_")
+    assert not Path(workspace).is_relative_to(tmp_path)
+    assert Path(workspace).name.startswith("adad_verify_")
 
 
 def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch):
     core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
+    (tmp_path / "project").mkdir(exist_ok=True)
     captured = {}
 
     class TimedOutProcess:
         pid = 4321
         returncode = None
+        killed = False
 
         def __init__(self):
             self.communicate_calls = 0
@@ -250,327 +252,106 @@ def test_verification_timeout_terminates_the_process_group(tmp_path, monkeypatch
                 )
             return b"after", b"after-error"
 
-    class FakeWinApi:
-        def __init__(self, callback):
-            self.callback = callback
+        def kill(self):
+            self.killed = True
 
-        def __call__(self, *args):
-            return self.callback(*args)
-
-    class FakeKernel32:
-        def __init__(self):
-            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
-            self.SetInformationJobObject = FakeWinApi(self._set_information)
-            self.OpenProcess = FakeWinApi(self._open_process)
-            self.AssignProcessToJobObject = FakeWinApi(self._assign)
-            self.TerminateJobObject = FakeWinApi(self._terminate)
-            self.CloseHandle = FakeWinApi(self._close)
-
-        def _set_information(self, handle, info_class, info, size):
-            captured["job_limit_flags"] = info._obj.BasicLimitInformation.LimitFlags
-            return 1
-
-        def _open_process(self, access, inherit, pid):
-            captured["open_process"] = (access, inherit, pid)
-            return 202
-
-        def _assign(self, job_handle, process_handle):
-            captured["assignment"] = (job_handle, process_handle)
-            return 1
-
-        def _terminate(self, job_handle, exit_code):
-            captured["termination"] = (job_handle, exit_code)
-            return 1
-
-        def _close(self, handle):
-            captured.setdefault("closed_handles", []).append(handle)
+        def poll(self):
             return 1
 
     process = TimedOutProcess()
 
-    def fake_popen(argv, **kwargs):
-        captured["argv"] = argv
-        captured["kwargs"] = kwargs
+    def mock_popen(argv, **kwargs):
+        captured["start_new_session"] = kwargs.get("start_new_session")
+        captured["creationflags"] = kwargs.get("creationflags")
         return process
 
-    def fake_killpg(pgid, sig):
-        captured["killpg"] = (pgid, sig)
+    monkeypatch.setattr(_canonical_module.subprocess, "Popen", mock_popen)
 
-    monkeypatch.setattr(_canonical_module.subprocess, "Popen", fake_popen)
+    def mock_run(args, **kwargs):
+        if args and args[0] == "taskkill":
+            captured["taskkill_argv"] = args
+            process.killed = True
+            return type("MockRun", (), {"returncode": 0})()
+        return _canonical_module.subprocess.run(args, **kwargs)
 
-    import os
-    if hasattr(os, "killpg"):
-        monkeypatch.setattr(os, "killpg", fake_killpg)
-    else:
-        monkeypatch.setattr(_canonical_module.os, "killpg", fake_killpg, raising=False)
+    monkeypatch.setattr(_canonical_module.subprocess, "run", mock_run)
 
-    if os.name == "nt":
-        kernel32 = FakeKernel32()
-        monkeypatch.setattr(_canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32)
-
+    monkeypatch.setattr(_canonical_module.os, "name", "nt")
     result = core._run_verification_command(
         {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
-        str(tmp_path / "workspace"),
-        {"project": str(tmp_path)},
-        0,
+        str(tmp_path), {"project": str(tmp_path)}, 0
     )
 
     assert result["passed"] is False
     assert result["returncode"] is None
+    assert result["error"] == "command 執行逾時（1 秒）。"
+    assert result["cleanup_status"] == "not_applicable"
+    assert result["workspace_preserved"] is False
+    assert result["termination_error"] is None
     assert result["stdout"] == "after"
     assert result["stderr"] == "after-error"
-
-    if os.name == "nt":
-        assert captured["kwargs"]["creationflags"] == _canonical_module.subprocess.CREATE_NEW_PROCESS_GROUP
-        assert captured["job_limit_flags"] == 0x00002000
-        assert captured["open_process"] == (0x0100 | 0x0001, False, 4321)
-        assert captured["assignment"] == (101, 202)
-        assert captured["termination"] == (101, 1)
-        assert captured["closed_handles"] == [202, 101]
-    else:
-        assert captured["kwargs"]["start_new_session"] is True
-        assert captured["killpg"] == (4321, _canonical_module.signal.SIGKILL)
+    expected_flags = (
+        getattr(_canonical_module.subprocess, "CREATE_NO_WINDOW", 0)
+        | getattr(_canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    )
+    assert captured["creationflags"] == expected_flags
+    assert captured["taskkill_argv"] == ["taskkill", "/F", "/T", "/PID", "4321"]
+    assert process.killed is True
     assert process.communicate_calls == 2
-
-
-def test_windows_job_assignment_failure_kills_and_drains_process(tmp_path, monkeypatch):
-    core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
-    captured = {"closed_handles": []}
-
-    class FakeWinApi:
-        def __init__(self, callback):
-            self.callback = callback
-
-        def __call__(self, *args):
-            return self.callback(*args)
-
-    class FakeKernel32:
-        def __init__(self):
-            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
-            self.SetInformationJobObject = FakeWinApi(lambda *_: 1)
-            self.OpenProcess = FakeWinApi(lambda *_: 202)
-            self.AssignProcessToJobObject = FakeWinApi(lambda *_: 0)
-            self.TerminateJobObject = FakeWinApi(lambda *_: 1)
-            self.CloseHandle = FakeWinApi(self._close)
-
-        def _close(self, handle):
-            captured["closed_handles"].append(handle)
-            return 1
-
-    class Process:
-        pid = 4321
-        returncode = None
-
-        def kill(self):
-            captured["killed"] = True
-
-        def communicate(self, timeout):
-            captured.setdefault("communicate_timeouts", []).append(timeout)
-            return b"killed-output", b"killed-error"
-
-    monkeypatch.setattr(_canonical_module.os, "name", "nt")
-    monkeypatch.setattr(
-        _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
-    )
-    monkeypatch.setattr(
-        _canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False
-    )
-    monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
-
-    result = core._run_verification_command(
-        {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
-        str(tmp_path / "workspace"),
-        {"project": str(tmp_path)},
-        0,
-    )
-
-    assert result["passed"] is False
-    assert result["returncode"] is None
-    assert result["error"].startswith("Windows Job Object assignment failed:")
-    assert result["stdout"] == "killed-output"
-    assert result["stderr"] == "killed-error"
-    assert captured["killed"] is True
-    assert captured["communicate_timeouts"] == [5]
-    assert captured["closed_handles"] == [101, 202]
-
-
-def test_windows_job_normal_completion_closes_handles(tmp_path, monkeypatch):
-    core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
-    captured = {"closed_handles": []}
-
-    class FakeWinApi:
-        def __init__(self, callback):
-            self.callback = callback
-
-        def __call__(self, *args):
-            return self.callback(*args)
-
-    class FakeKernel32:
-        def __init__(self):
-            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
-            self.SetInformationJobObject = FakeWinApi(lambda *_: 1)
-            self.OpenProcess = FakeWinApi(lambda *_: 202)
-            self.AssignProcessToJobObject = FakeWinApi(lambda *_: 1)
-            self.TerminateJobObject = FakeWinApi(lambda *_: 1)
-            self.CloseHandle = FakeWinApi(self._close)
-
-        def _close(self, handle):
-            captured["closed_handles"].append(handle)
-            return 1
-
-    class Process:
-        pid = 4321
-        returncode = 0
-
-        def communicate(self, timeout):
-            captured["communicate_timeout"] = timeout
-            return b"ok", b""
-
-    monkeypatch.setattr(_canonical_module.os, "name", "nt")
-    monkeypatch.setattr(
-        _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
-    )
-    monkeypatch.setattr(
-        _canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False
-    )
-    monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
-
-    result = core._run_verification_command(
-        {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
-        str(tmp_path / "workspace"),
-        {"project": str(tmp_path)},
-        0,
-    )
-
-    assert result["passed"] is True
-    assert captured["communicate_timeout"] == 1
-    assert captured["closed_handles"] == [202, 101]
-
-
-def test_windows_interrupt_before_job_assignment_kills_and_drains_process(tmp_path, monkeypatch):
-    core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
-    captured = {"closed_handles": []}
-
-    class FakeWinApi:
-        def __init__(self, callback):
-            self.callback = callback
-
-        def __call__(self, *args):
-            return self.callback(*args)
-
-    class FakeKernel32:
-        def __init__(self):
-            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
-            self.SetInformationJobObject = FakeWinApi(lambda *_: 1)
-            self.OpenProcess = FakeWinApi(lambda *_: 202)
-            self.AssignProcessToJobObject = FakeWinApi(self._interrupt_assignment)
-            self.TerminateJobObject = FakeWinApi(lambda *_: 1)
-            self.CloseHandle = FakeWinApi(self._close)
-
-        @staticmethod
-        def _interrupt_assignment(*_args):
-            raise KeyboardInterrupt()
-
-        def _close(self, handle):
-            captured["closed_handles"].append(handle)
-            return 1
-
-    class Process:
-        pid = 4321
-        returncode = None
-
-        def kill(self):
-            captured["killed"] = True
-
-        def communicate(self, timeout):
-            captured.setdefault("communicate_timeouts", []).append(timeout)
-            return b"interrupted-output", b"interrupted-error"
-
-    monkeypatch.setattr(_canonical_module.os, "name", "nt")
-    monkeypatch.setattr(
-        _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
-    )
-    monkeypatch.setattr(
-        _canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False
-    )
-    monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: Process())
-
-    result = core._run_verification_command(
-        {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
-        str(tmp_path / "workspace"),
-        {"project": str(tmp_path)},
-        0,
-    )
-
-    assert result["passed"] is False
-    assert result["interrupted"] is True
-    assert result["returncode"] is None
-    assert result["stdout"] == "interrupted-output"
-    assert result["stderr"] == "interrupted-error"
-    assert captured["killed"] is True
-    assert captured["communicate_timeouts"] == [5]
-    assert captured["closed_handles"] == [101, 202]
 
 
 def test_windows_timeout_drain_timeout_preserves_output(tmp_path, monkeypatch):
     core = CanonicalADADCore(tmp_path / "system_map.yaml", check_validity=False)
-
-    class FakeWinApi:
-        def __init__(self, callback):
-            self.callback = callback
-
-        def __call__(self, *args):
-            return self.callback(*args)
-
-    class FakeKernel32:
-        def __init__(self):
-            self.CreateJobObjectW = FakeWinApi(lambda *_: 101)
-            self.SetInformationJobObject = FakeWinApi(lambda *_: 1)
-            self.OpenProcess = FakeWinApi(lambda *_: 202)
-            self.AssignProcessToJobObject = FakeWinApi(lambda *_: 1)
-            self.TerminateJobObject = FakeWinApi(lambda *_: 1)
-            self.CloseHandle = FakeWinApi(lambda *_: 1)
+    (tmp_path / "project").mkdir(exist_ok=True)
 
     class Process:
-        pid = 4321
+        pid = 1234
         returncode = None
+        killed = False
 
         def __init__(self):
-            self.calls = 0
+            self.communicate_calls = 0
 
         def communicate(self, timeout):
-            self.calls += 1
-            if self.calls == 1:
-                raise subprocess.TimeoutExpired(
-                    ["verification-tool"], timeout, output=b"before", stderr=b"before-error"
-                )
+            self.communicate_calls += 1
             raise subprocess.TimeoutExpired(
-                ["verification-tool"], timeout, output=b"drain", stderr=b"drain-error"
+                ["tool"], timeout, output=b"stdout_part", stderr=b"stderr_part"
             )
+
+        def kill(self):
+            self.killed = True
 
     process = Process()
     monkeypatch.setattr(_canonical_module.os, "name", "nt")
     monkeypatch.setattr(
-        _canonical_module.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False
-    )
-    monkeypatch.setattr(
         _canonical_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False
     )
-    monkeypatch.setattr(_canonical_module.subprocess, "Popen", lambda *_args, **_kwargs: process)
+
+    def mock_run(args, **kwargs):
+        if args and args[0] == "taskkill":
+            process.killed = True
+            return type("MockRun", (), {"returncode": 0})()
+        return _canonical_module.subprocess.run(args, **kwargs)
+    monkeypatch.setattr(_canonical_module.subprocess, "run", mock_run)
+
+    monkeypatch.setattr(
+        _canonical_module.subprocess, "Popen", lambda *args, **kwargs: process
+    )
 
     result = core._run_verification_command(
-        {"argv": ["verification-tool"], "cwd": "project", "expect_exit": 0, "timeout": 1},
-        str(tmp_path / "workspace"),
-        {"project": str(tmp_path)},
-        0,
+        {"argv": ["tool"], "cwd": "project", "timeout": 1}, str(tmp_path), {"project": str(tmp_path)}, 0
     )
 
     assert result["passed"] is False
     assert result["returncode"] is None
-    assert result["stdout"] == "drain"
-    assert result["stderr"] == "drain-error"
-    assert result["termination_error"] == "command tree termination did not drain within 5 seconds."
-    assert process.calls == 2
+    assert result["error"] == "command 執行逾時（1 秒）。"
+    assert result["cleanup_status"] == "not_applicable"
+    assert result["workspace_preserved"] is False
+    assert result["stdout"] == "stdout_part"
+    assert result["stderr"] == "stderr_part"
+    assert result["termination_error"] == "termination did not drain within 5 seconds"
+    assert process.killed is True
+    assert process.communicate_calls == 2
 
 
 def test_locks_cli_audit_is_read_only_thin_adapter(monkeypatch, capsys):

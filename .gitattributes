@@ -24,7 +24,6 @@
 
 # Binary files (Do not apply line ending conversion)
 *.png binary
-*.webp binary
 *.jpg binary
 *.jpeg binary
 *.gif binary

@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260726T103654852101Z-release_changelog
+  phase: 2
+  timestamp: '2026-07-26T10:36:54.852101+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: release_changelog
+    task_id: release_changelog@v18@9fdf79
+    system_map_version: 18
+    source_hash: 9fdf79ea9e0022679767ff827df622c7c740b341308d518c3358ff26fa29f418
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

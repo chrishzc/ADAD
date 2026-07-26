@@ -186,15 +186,19 @@
   - 載入既有 YAML 時，若 module 宣告 sub_map，必須等於實際 shard owner（root 或對應 scope）；ghost scope 或 owner 不一致立即拒絕。未宣告 sub_map 的舊 IR 保持相容。
   - check_invariants、verify_implementation 與 implementation hash 對 Source 進行檔案操作前，必須先將 `file.py::function` 拆成實體檔案路徑；明確傳入的 file_path 優先，但仍套用相同正規化。
   - task_submit 必須將同一個已解析實體檔案路徑傳給 invariant、verification 與 implementation hash，禁止任一階段重新退回含 `::function` 的 Source。
-  - Verification command 若為 pytest 且未提供 `--basetemp` 或 `--basetemp=...`，自動注入位於 `{workspace}` 下且依步驟隔離的 basetemp；既有明確設定不得覆寫。
+  - #82-B1 若 Task 顯式傳入 `--basetemp` 或 `--basetemp=...`，runner 必須尊重原值。若該顯式路徑落在 runner-owned workspace (例如透過 `{workspace}` placeholder 產生) 之內，則視為 owned，隨 owned root 一併清理；若落在 owned root 之外，則視為 unowned，runner 絕對禁止清理該獨立顯式目錄。
+  - #82-B1 若未提供 basetemp 且 command 是 pytest，runner 必須採用兩層 owned-root 模型：在 OS temp 建立 exclusive creation 的外層 `adad_verify_<nonce>/` 作為 owned root，並將其內的 `pytest-basetemp/` 傳給 pytest。最後清理時**只刪除外層 owned root**，容許 pytest 在內層自行重建。
+  - #82-B1 所有權憑證 (identity)：runner 建立 owned root 後，必須立即取得其 `lstat` 憑證 (包含 POSIX 的 `st_dev`, `st_ino` 與 directory 判定，或 Windows 的 volume/file index 與 reparse attributes)。清理前必須重新 lstat 且 exact identity 相同時才可刪除。identity API 不可用時零刪除。
+  - #82-B1 path-component-aware preflight：cleanup 前逐層檢查 owned root 的 ancestor。拒絕 repo 本身、所有 repo ancestor、symlink 與 Windows junction。任何路徑/權限判斷失敗時一律 fail-closed 零刪除並保留。
+  - #82-B1 成功與清理狀態拆分：command 整體 success 必須是「command 成功且 owned cleanup 成功」或「workspace 為合法 unowned/not_applicable」。若 command 成功但 cleanup 失敗，不得宣稱整體成功。
+  - #82-R2 regression ownership：`tests/test_adad_task.py` 與 `tests/test_verify_implementation.py` 均屬本輪 runner 契約的必要測試輸入；candidate snapshot 缺少任一已修改測試檔時不得以 dirty worktree 的通過結果替代。
+  - #82-R2 Windows termination regression 必須分別驗證 process-tree termination 成功、失敗、drain timeout、KeyboardInterrupt 與 handle/resource cleanup 的確切 structured fields；禁止以多結果 `or` assertion、只檢查欄位存在或刪除既有安全案例來降低 fail-closed 契約強度。
+  - #82-R2 測試檔不得保留診斷用 `print()`；fixture 內刻意執行的輸出程式碼不在此限。既有 Windows lifecycle 案例若因實作介面變更而重寫，必須保留一對一風險矩陣與明確 assertion。
   - 展開 argv 後，以 pytest command 判斷與 token-aware helper 辨識顯式 `-p no:cacheprovider`、`-p=no:cacheprovider` 或 compact 等價形式。
   - pytest command 缺少停用設定時，只注入一組 `-p no:cacheprovider`；既有設定不得重複，非 pytest command 的 argv 完全不變。
   - command result 的 argv 必須保存實際執行參數；測試同時驗證 project root 不產生或修改 `.pytest_cache`。
   - #77-R1 使用 token-aware helper 辨識分離、等號與 compact 的 cacheprovider-disabled 形式；僅在 pytest command 缺少等價 token 時，於執行前注入單一 `-p`、`no:cacheprovider`，且回報實際 argv。
-  - #77-R1-CP3 integration verification 的 disposable workspace 必須建立於 project root，不得位於 `.agents/workspaces`；使 pytest 的明確或注入 `--basetemp` 與 Task／Source Lock artifact workspace 分離，並保留 TemporaryDirectory 成功後自動清理。
-  - #77-R3 對沒有 fixtures 且 cwd=project 的非 pytest 單一 command，直接以 project root 作 `{workspace}` placeholder，不建立 TemporaryDirectory。
-  - #77-R3 pytest command（即使 cwd=project 且沒有 fixtures）必須建立 project root 內、每次驗證隔離的 disposable workspace，並以該目錄作 `{workspace}` placeholder；明確或注入的 `--basetemp` 必須位於其中，避免固定 project-root basetemp 相互鎖定。
-  - #77-R3 integration_case、cwd=workspace 或 pytest command 可建立 disposable workspace；成功後清理，timeout 或 cleanup 不確定時保留該次 workspace 並回傳 structured preserved evidence，禁止在 error path 卡住或猜測遞迴刪除。
+  - #77-R3 對沒有 fixtures 且 cwd=project 的非 pytest 單一 command，不建立 disposable workspace。對 integration_case 或 cwd=workspace 則建立 OS temp disposable workspace 並遵循 #82 兩層模型與安全清理政策。
   - task_block 保留 Task Schema v2 必填的 source_lock metadata；先保存 blocked 與 history，再以 exact source_path/node_name/task_id 釋放實體鎖。釋放失敗時 blocked 狀態、metadata 與 physical lock 均保留並 fail-closed 回報。
   - _release_source_lock 回傳 structured released、already_absent、identity_mismatch、invalid 或 error；PermissionError/OSError 不得當作 missing，canonical lock 不得直接 remove。
   - _commit_checkpoint_decision 將 approve 的 lock release 納入同一交易：保存原 Task/map，寫入 tentative state、audit 與 history後，重新驗 exact lock identity，再以同目錄 unique quarantine rename 作 commit point。
@@ -230,6 +234,7 @@
 - Invariants: []
 - Verification:
   - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_generate_task.py", "tests/test_adad_task.py", "-q", "--basetemp", "{workspace}/pytest-generate-task-json-workspace"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_verification_basetemp_lifecycle.py", "tests/test_verify_implementation.py", "-q", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 60}
 - Observability: not_required
 - Dependencies: [source_lock_repository, source_lock_audit_service, task_verification_conditions]
 - Input:
@@ -242,12 +247,20 @@
   - task_snapshots: .agents/tasks/*.task.json
   - source_lock_files: .agents/tasks/.source_locks/*.lock.json
   - project_root: path
-  - allowed_symbols: [ADADCore.check_task_readiness, ADADCore.validate_task_snapshot, ADADCore._task_path, ADADCore._save_task, ADADCore.generate_task, ADADCore._write_checkpoint_audit, ADADCore._run_verification_command]
-  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/adad_core.py, tests/test_generate_task.py, tests/test_task_contract_schema.py, tests/test_adad_task.py]
+  - allowed_symbols: [ADADCore.check_task_readiness, ADADCore.validate_task_snapshot, ADADCore._task_path, ADADCore._save_task, ADADCore.generate_task, ADADCore._write_checkpoint_audit, ADADCore._run_verification_command, ADADCore._get_path_identity, ADADCore._safe_cleanup_owned_root, ADADCore._terminate_command_tree, ADADCore._run_integration_verification, ADADCore._is_path_contained, ADADCore._resolve_cleanable_owned_target]
+  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/adad_core.py, tests/test_generate_task.py, tests/test_task_contract_schema.py, tests/test_adad_task.py, tests/test_verify_implementation.py, tests/test_verification_basetemp_lifecycle.py]
 - Output:
   - command_result: object
+  - basetemp_status: enum(not_applicable, owned, unowned)
   - sanitized_environment: object
   - context: object
+  - workspace_path: string|null
+  - basetemp_path: string|null
+  - workspace_preserved: boolean
+  - cleanup_status: enum(not_applicable, unowned, cleaned, preserved_command_failed, preserved_timeout, preserved_termination_uncertain, preserved_preflight_rejected, preserved_cleanup_failed)
+  - cleanup_error: object|null
+  - preflight_result: object|null
+  - manual_action_required: boolean
   - context_warnings: array
   - composite_modules: object
   - module_owners: object
@@ -941,6 +954,42 @@
   - [ ] CP-1-013 (planned)
   - [x] CP-1-078-TASK-LOCK-CLI (validated：2026-07-16 人工指示完成 #78 CLI；low Task 自動推進)
   - [x] CP-1-080-TEST-ADAD-TASK-COLLECTION-REPAIR (validated：2026-07-17 人工核准)
+
+##### Module: prepare_isolation
+- Type: tool
+- Observability: not_required
+- Description: 為已核發的單一 Task 建立可重建的白名單 isolation workspace；workspace 僅能位於 `.agents/workspaces/<node_name>`，既有未標記或 identity 不符的目錄一律保留並回報，禁止藉由 node 名稱或 reparse point 清理 Task snapshots、Source Locks 或其他專案檔案。
+- Source: adad_source/agents/skills/adad-workflow/scripts/prepare_isolation.py
+- Preferred Pattern: none
+- Complexity: medium
+- Algorithm:
+  - 僅接受 `^[A-Za-z][A-Za-z0-9_]*$` 的 node_name 與既有 artifact type；其他值在建立或刪除任何路徑前 fail-closed。
+  - 以 project root 的 `.agents/tasks/<node_name>.task.json` 作為唯一 Task 證據；Task 不存在、非 regular file、無法解析 JSON 或 status 非 `assigned`／`in_progress` 時，零寫入、零清理。
+  - 將 workspace root 與 node workspace 以 absolute／realpath／lstat 檢查；所有 reparse point、root 外路徑、identity 缺失或 workspace name 不完全相等時，零刪除。
+  - 先在 workspace root 下以 exclusive creation 建立 node-specific staging directory，取得 identity，然後執行 context 讀取並複製白名單檔案；任何前置或複製失敗保留既有 workspace 並只回報 staging 路徑。
+  - 成功 staging 後，既有 workspace 必須含有 node_name 與 staging identity 可驗證的 owner marker；無 marker 或 marker／identity 不符時保留既有 workspace 並回報 manual_action_required。
+  - 以同目錄 quarantine rename 交換已驗證的舊 workspace 與 staging；交換失敗時恢復舊 workspace，成功後才清理仍可驗證的 quarantine。任何清理失敗保留 quarantine 並回報，不得刪除 canonical Task、Source Lock 或未標記目錄。
+  - 回傳 canonical workspace、staging／quarantine receipt、copied_files 與 structured cleanup status；`adad_task isolate` 僅轉發這個結果與 exit code，不得自行清理。
+- Decisions: [workspace ownership 必須以 marker 加 lstat identity 證明；安全重建優先於自動回收舊的未知目錄；Task snapshots 與 Source Locks 永遠不在 isolate 的可清理範圍]
+- Invariants:
+  - deny_calls: [os.chdir]
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_prepare_isolation.py", "-q", "--basetemp", "{workspace}/pytest", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+- Dependencies: []
+- Input:
+  - node_name: string（`^[A-Za-z][A-Za-z0-9_]*$`）
+  - artifact_type: string（目前僅 `coding`）
+  - task_snapshot: file（`.agents/tasks/<node_name>.task.json`）
+  - allowed_files: [adad_source/agents/skills/adad-workflow/scripts/prepare_isolation.py, tests/test_prepare_isolation.py]
+- Output:
+  - success: boolean
+  - workspace: string|null
+  - copied_files: array
+  - cleanup_status: string
+  - manual_action_required: boolean
+  - receipt: object
+- Checkpoint:
+  - [x] CP-1-20260726-PREPARE-ISOLATION-SAFETY (validated：2026-07-26 人工核准安全修補)
 
 ##### Module: check_source_binding
 - Type: tool

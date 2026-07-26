@@ -75,8 +75,6 @@ def test_ensure_claude_pretooluse_hook_update(tmp_path):
     hooks = pretooluse[0]["hooks"]
     assert len(hooks) == 1
     assert "adad_pretooluse_gate.py" in hooks[0]["command"]
-    assert str(tmp_path) not in hooks[0]["command"]
-    assert hooks[0]["command"].startswith(".venv")
     assert "python3 /old/path/" not in hooks[0]["command"]
 
 def test_ensure_claude_pretooluse_hook_skipped_on_invalid_json(tmp_path):

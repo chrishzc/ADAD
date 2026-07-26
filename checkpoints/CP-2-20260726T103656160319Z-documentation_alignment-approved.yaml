@@ -1,0 +1,15 @@
+checkpoint_payload:
+  id: CP-2-20260726T103656160319Z-documentation_alignment
+  phase: 2
+  timestamp: '2026-07-26T10:36:56.160319+00:00'
+  triggered_by: human
+  status: approved
+  target:
+    node_name: documentation_alignment
+    task_id: documentation_alignment@v18@10aaeb
+    system_map_version: 18
+    source_hash: 10aaebacceae38b66a1154a0ecafeefbe5868fbbdcd255d5b7c9be39e52542d1
+  decision:
+    action: approved
+    reviewer: chris
+    comment: ''

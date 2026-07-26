@@ -65,7 +65,7 @@ modules:
     context_priority: {}
     non_goals: []
     state: validated
-    fan_in_snapshot: 2
+    fan_in_snapshot: 4
     known_symbols:
     - _compare_file
     - _compare_tree
@@ -274,13 +274,26 @@ modules:
       project_root: path
       allowed_symbols: '[ADADCore.check_task_readiness, ADADCore.validate_task_snapshot,
         ADADCore._task_path, ADADCore._save_task, ADADCore.generate_task, ADADCore._write_checkpoint_audit,
-        ADADCore._run_verification_command]'
+        ADADCore._run_verification_command, ADADCore._get_path_identity, ADADCore._safe_cleanup_owned_root,
+        ADADCore._terminate_command_tree, ADADCore._run_integration_verification,
+        ADADCore._is_path_contained, ADADCore._resolve_cleanable_owned_target]'
       allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/adad_core.py,
-        tests/test_generate_task.py, tests/test_task_contract_schema.py, tests/test_adad_task.py]'
+        tests/test_generate_task.py, tests/test_task_contract_schema.py, tests/test_adad_task.py,
+        tests/test_verify_implementation.py, tests/test_verification_basetemp_lifecycle.py]'
     output:
       command_result: object
+      basetemp_status: enum(not_applicable, owned, unowned)
       sanitized_environment: object
       context: object
+      workspace_path: string|null
+      basetemp_path: string|null
+      workspace_preserved: boolean
+      cleanup_status: enum(not_applicable, unowned, cleaned, preserved_command_failed,
+        preserved_timeout, preserved_termination_uncertain, preserved_preflight_rejected,
+        preserved_cleanup_failed)
+      cleanup_error: object|null
+      preflight_result: object|null
+      manual_action_required: boolean
       context_warnings: array
       composite_modules: object
       module_owners: object
@@ -306,6 +319,19 @@ modules:
         cwd: project
         expect_exit: 0
         timeout: 30
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_verification_basetemp_lifecycle.py
+        - tests/test_verify_implementation.py
+        - -q
+        - -p
+        - no:cacheprovider
+        cwd: project
+        expect_exit: 0
+        timeout: 60
     decisions:
     - 隔離責任放在通用 Verification runner；缺少參考文件是規劃端 warning；sub_maps 讀取與儲存必須成對實作；禁止只合併讀取後整份
       dump root；owner 不明時禁止猜測；所有 gate 共用同一個實體 Source 路徑；pytest 暫存隔離由 Verification
@@ -401,8 +427,27 @@ modules:
       `file.py::function` 拆成實體檔案路徑；明確傳入的 file_path 優先，但仍套用相同正規化。
     - task_submit 必須將同一個已解析實體檔案路徑傳給 invariant、verification 與 implementation hash，禁止任一階段重新退回含
       `::function` 的 Source。
-    - Verification command 若為 pytest 且未提供 `--basetemp` 或 `--basetemp=...`，自動注入位於 `{workspace}`
-      下且依步驟隔離的 basetemp；既有明確設定不得覆寫。
+    - '#82-B1 若 Task 顯式傳入 `--basetemp` 或 `--basetemp=...`，runner 必須尊重原值。若該顯式路徑落在 runner-owned
+      workspace (例如透過 `{workspace}` placeholder 產生) 之內，則視為 owned，隨 owned root 一併清理；若落在
+      owned root 之外，則視為 unowned，runner 絕對禁止清理該獨立顯式目錄。'
+    - '#82-B1 若未提供 basetemp 且 command 是 pytest，runner 必須採用兩層 owned-root 模型：在 OS temp
+      建立 exclusive creation 的外層 `adad_verify_<nonce>/` 作為 owned root，並將其內的 `pytest-basetemp/`
+      傳給 pytest。最後清理時**只刪除外層 owned root**，容許 pytest 在內層自行重建。'
+    - '#82-B1 所有權憑證 (identity)：runner 建立 owned root 後，必須立即取得其 `lstat` 憑證 (包含 POSIX
+      的 `st_dev`, `st_ino` 與 directory 判定，或 Windows 的 volume/file index 與 reparse
+      attributes)。清理前必須重新 lstat 且 exact identity 相同時才可刪除。identity API 不可用時零刪除。'
+    - '#82-B1 path-component-aware preflight：cleanup 前逐層檢查 owned root 的 ancestor。拒絕
+      repo 本身、所有 repo ancestor、symlink 與 Windows junction。任何路徑/權限判斷失敗時一律 fail-closed
+      零刪除並保留。'
+    - '#82-B1 成功與清理狀態拆分：command 整體 success 必須是「command 成功且 owned cleanup 成功」或「workspace
+      為合法 unowned/not_applicable」。若 command 成功但 cleanup 失敗，不得宣稱整體成功。'
+    - '#82-R2 regression ownership：`tests/test_adad_task.py` 與 `tests/test_verify_implementation.py`
+      均屬本輪 runner 契約的必要測試輸入；candidate snapshot 缺少任一已修改測試檔時不得以 dirty worktree 的通過結果替代。'
+    - '#82-R2 Windows termination regression 必須分別驗證 process-tree termination 成功、失敗、drain
+      timeout、KeyboardInterrupt 與 handle/resource cleanup 的確切 structured fields；禁止以多結果
+      `or` assertion、只檢查欄位存在或刪除既有安全案例來降低 fail-closed 契約強度。'
+    - '#82-R2 測試檔不得保留診斷用 `print()`；fixture 內刻意執行的輸出程式碼不在此限。既有 Windows lifecycle 案例若因實作介面變更而重寫，必須保留一對一風險矩陣與明確
+      assertion。'
     - 展開 argv 後，以 pytest command 判斷與 token-aware helper 辨識顯式 `-p no:cacheprovider`、`-p=no:cacheprovider`
       或 compact 等價形式。
     - pytest command 缺少停用設定時，只注入一組 `-p no:cacheprovider`；既有設定不得重複，非 pytest command
@@ -410,17 +455,8 @@ modules:
     - command result 的 argv 必須保存實際執行參數；測試同時驗證 project root 不產生或修改 `.pytest_cache`。
     - '#77-R1 使用 token-aware helper 辨識分離、等號與 compact 的 cacheprovider-disabled 形式；僅在
       pytest command 缺少等價 token 時，於執行前注入單一 `-p`、`no:cacheprovider`，且回報實際 argv。'
-    - '#77-R1-CP3 integration verification 的 disposable workspace 必須建立於 project root，不得位於
-      `.agents/workspaces`；使 pytest 的明確或注入 `--basetemp` 與 Task／Source Lock artifact
-      workspace 分離，並保留 TemporaryDirectory 成功後自動清理。'
-    - '#77-R3 對沒有 fixtures 且 cwd=project 的非 pytest 單一 command，直接以 project root 作 `{workspace}`
-      placeholder，不建立 TemporaryDirectory。'
-    - '#77-R3 pytest command（即使 cwd=project 且沒有 fixtures）必須建立 project root 內、每次驗證隔離的
-      disposable workspace，並以該目錄作 `{workspace}` placeholder；明確或注入的 `--basetemp` 必須位於其中，避免固定
-      project-root basetemp 相互鎖定。'
-    - '#77-R3 integration_case、cwd=workspace 或 pytest command 可建立 disposable workspace；成功後清理，timeout
-      或 cleanup 不確定時保留該次 workspace 並回傳 structured preserved evidence，禁止在 error path
-      卡住或猜測遞迴刪除。'
+    - '#77-R3 對沒有 fixtures 且 cwd=project 的非 pytest 單一 command，不建立 disposable workspace。對
+      integration_case 或 cwd=workspace 則建立 OS temp disposable workspace 並遵循 #82 兩層模型與安全清理政策。'
     - task_block 保留 Task Schema v2 必填的 source_lock metadata；先保存 blocked 與 history，再以
       exact source_path/node_name/task_id 釋放實體鎖。釋放失敗時 blocked 狀態、metadata 與 physical
       lock 均保留並 fail-closed 回報。
@@ -500,7 +536,7 @@ modules:
     context_priority: {}
     non_goals: []
     state: validated
-    fan_in_snapshot: 15
+    fan_in_snapshot: 16
     known_symbols:
     - ADADCore.__init__
     - ADADCore._acquire_source_lock
@@ -514,9 +550,11 @@ modules:
     - ADADCore._extract_adr_summary
     - ADADCore._extract_pattern_summary
     - ADADCore._file_hash
+    - ADADCore._get_path_identity
     - ADADCore._has_pytest_basetemp
     - ADADCore._has_pytest_cacheprovider_disabled
     - ADADCore._implementation_hash
+    - ADADCore._is_path_contained
     - ADADCore._is_pytest_command
     - ADADCore._load_function_from_file
     - ADADCore._load_map
@@ -537,6 +575,7 @@ modules:
     - ADADCore._rollback_metadata
     - ADADCore._run_integration_verification
     - ADADCore._run_verification_command
+    - ADADCore._safe_cleanup_owned_root
     - ADADCore._safe_verification_path
     - ADADCore._save_task
     - ADADCore._scan_source_lock_state
@@ -548,6 +587,7 @@ modules:
     - ADADCore._task_index_lock_path
     - ADADCore._task_index_owner_alive
     - ADADCore._task_path
+    - ADADCore._terminate_command_tree
     - ADADCore._update_task_index_entry
     - ADADCore._verification_subprocess_environment
     - ADADCore._write_checkpoint_audit
@@ -1362,7 +1402,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: validated
+    state: dirty
     fan_in_snapshot: 4
     known_symbols:
     - _assign_module_owners
@@ -1413,7 +1453,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: validated
+    state: dirty
     fan_in_snapshot: 5
     known_symbols:
     - main
@@ -1790,8 +1830,8 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: validated
-    fan_in_snapshot: 3
+    state: dirty
+    fan_in_snapshot: 4
     known_symbols:
     - _bounded_verification_diagnostics
     - _get_diff_target
@@ -1926,7 +1966,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: validated
+    state: dirty
     fan_in_snapshot: 4
     known_symbols:
     - _require_human_tty
@@ -1937,6 +1977,97 @@ modules:
     - cmd_reject
     - cmd_submit
     - main
+  prepare_isolation:
+    type: tool
+    description: 為已核發的單一 Task 建立可重建的白名單 isolation workspace；workspace 僅能位於 `.agents/workspaces/<node_name>`，既有未標記或
+      identity 不符的目錄一律保留並回報，禁止藉由 node 名稱或 reparse point 清理 Task snapshots、Source Locks
+      或其他專案檔案。
+    source: adad_source/agents/skills/adad-workflow/scripts/prepare_isolation.py
+    domain: ADAD_Workflow
+    subsystem: Enforcement_Gates
+    map_file: system_map.md
+    dependencies: []
+    input:
+      node_name: string（`^[A-Za-z][A-Za-z0-9_]*$`）
+      artifact_type: string（目前僅 `coding`）
+      task_snapshot: file（`.agents/tasks/<node_name>.task.json`）
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/prepare_isolation.py,
+        tests/test_prepare_isolation.py]'
+    output:
+      success: boolean
+      workspace: string|null
+      copied_files: array
+      cleanup_status: string
+      manual_action_required: boolean
+      receipt: object
+    exceptions: []
+    invariants:
+    - 'deny_calls: [os.chdir]'
+    preferred_pattern: none
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_prepare_isolation.py
+        - -q
+        - --basetemp
+        - '{workspace}/pytest'
+        - -p
+        - no:cacheprovider
+        cwd: project
+        expect_exit: 0
+        timeout: 30
+    decisions:
+    - workspace ownership 必須以 marker 加 lstat identity 證明；安全重建優先於自動回收舊的未知目錄；Task snapshots
+      與 Source Locks 永遠不在 isolate 的可清理範圍
+    todo: []
+    checkpoint:
+    - '[x] CP-1-20260726-PREPARE-ISOLATION-SAFETY (validated：2026-07-26 人工核准安全修補)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - 僅接受 `^[A-Za-z][A-Za-z0-9_]*$` 的 node_name 與既有 artifact type；其他值在建立或刪除任何路徑前 fail-closed。
+    - 以 project root 的 `.agents/tasks/<node_name>.task.json` 作為唯一 Task 證據；Task 不存在、非
+      regular file、無法解析 JSON 或 status 非 `assigned`／`in_progress` 時，零寫入、零清理。
+    - 將 workspace root 與 node workspace 以 absolute／realpath／lstat 檢查；所有 reparse point、root
+      外路徑、identity 缺失或 workspace name 不完全相等時，零刪除。
+    - 先在 workspace root 下以 exclusive creation 建立 node-specific staging directory，取得
+      identity，然後執行 context 讀取並複製白名單檔案；任何前置或複製失敗保留既有 workspace 並只回報 staging 路徑。
+    - 成功 staging 後，既有 workspace 必須含有 node_name 與 staging identity 可驗證的 owner marker；無
+      marker 或 marker／identity 不符時保留既有 workspace 並回報 manual_action_required。
+    - 以同目錄 quarantine rename 交換已驗證的舊 workspace 與 staging；交換失敗時恢復舊 workspace，成功後才清理仍可驗證的
+      quarantine。任何清理失敗保留 quarantine 並回報，不得刪除 canonical Task、Source Lock 或未標記目錄。
+    - 回傳 canonical workspace、staging／quarantine receipt、copied_files 與 structured
+      cleanup status；`adad_task isolate` 僅轉發這個結果與 exit code，不得自行清理。
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 0
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals: []
+    state: planned
+    fan_in_snapshot: 0
+    known_symbols:
+    - _copy_project_file
+    - _direct_child
+    - _failure
+    - _identity
+    - _inside
+    - _is_reparse_point
+    - _publish_staging
+    - _read_owned_marker
+    - _receipt
+    - _safe_project_file
+    - _safe_regular_file
+    - _safe_tree_for_removal
+    - main
+    - prepare_isolation
   check_source_binding:
     type: tool
     description: 檢查 Module 的 Source 綁定是否存在重複、整檔與逐函式混用、或同一函式多重歸屬等歧義；歧義會使後續 Gate 無法可靠反查模組，因此編譯與
@@ -2211,7 +2342,7 @@ modules:
     context_priority: {}
     non_goals: []
     state: validated
-    fan_in_snapshot: 1
+    fan_in_snapshot: 2
   workflow_test_harness:
     type: test_harness
     description: '#64 隔離測試子程序與外層 GitHub Actions event context，避免臨時 Git repo 誤走 CI
@@ -2447,7 +2578,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: validated
+    state: dirty
     fan_in_snapshot: 0
     known_symbols: []
   environment_contract:
@@ -2724,7 +2855,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: validated
+    state: dirty
     fan_in_snapshot: 2
   task_assumptions_contract:
     type: schema
@@ -3273,14 +3404,15 @@ modules:
         argv:
         - '{project_python}'
         - -c
-        - import adad_cli; assert adad_cli.__version__ == '1.6.3'
+        - import adad_cli; assert adad_cli.__version__ == '1.6.4'
         cwd: project
         expect_exit: 0
         timeout: 30
     decisions:
-    - 版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.3
+    - 版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.4；不得從 dirty
+      tree 產生正式 release artifact
     todo:
-    - '[ ] 發布 1.6.3：Task index、Verification timeout 契約與 Windows pytest runner 強化'
+    - '[ ] 發布 1.6.4：pytest 外層 basetemp owned-root 生命週期與 fail-closed cleanup'
     checkpoint:
     - '[x] CP-1-075-PATCH-RELEASE (validated：2026-07-16 人工要求更新 1.6.1 並安裝本機版本)'
     observability:
@@ -3297,7 +3429,7 @@ modules:
     context_priority: {}
     non_goals: []
     state: validated
-    fan_in_snapshot: 0
+    fan_in_snapshot: 1
     known_symbols: []
   documentation_alignment:
     type: documentation
@@ -3316,8 +3448,20 @@ modules:
     exceptions: []
     invariants: []
     preferred_pattern: documentation_as_contract
-    verification: []
-    decisions: []
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -c
+        - from pathlib import Path; text=Path('README.md').read_text(encoding='utf-8');
+          head='\n'.join(text.splitlines()[:20]); assert '1.6.4' in head; assert '1.6.3'
+          not in head
+        cwd: project
+        expect_exit: 0
+        timeout: 30
+    decisions:
+    - 1.6.4 README 必須同步更新版本徽章與版本重點；不得宣稱尚未完成的 prepare_isolation 或未通過 release preflight
+      的功能已發布
     todo:
     - '[ ] 規格總覽 #1-2：README 對齊'
     checkpoint:
@@ -3335,7 +3479,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: validated
+    state: dirty
     fan_in_snapshot: 0
   continuous_integration:
     type: pipeline
@@ -3391,8 +3535,20 @@ modules:
     exceptions: []
     invariants: []
     preferred_pattern: keep_a_changelog
-    verification: []
-    decisions: []
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -c
+        - from pathlib import Path; text=Path('CHANGELOG.md').read_text(encoding='utf-8');
+          assert '## 1.6.4' in text; section=text.split('## 1.6.4',1)[1].split('\n##
+          ',1)[0]; assert 'basetemp' in section.lower(); assert 'cleanup' in section.lower()
+        cwd: project
+        expect_exit: 0
+        timeout: 30
+    decisions:
+    - '1.6.4 必須建立獨立版本段落並記錄 #82 pytest basetemp owned-root、structured cleanup aggregation
+      與 Windows fail-closed preflight；不得把 assigned 或未通過 CP-2 的工作列為已發布'
     todo:
     - '[ ] 規格總覽 #7：版本化變更紀錄'
     checkpoint:
@@ -3496,6 +3652,232 @@ modules:
     context_priority: {}
     non_goals: []
     state: dirty
+    fan_in_snapshot: 2
+  release_candidate_manifest:
+    type: tool
+    description: 將指定 commit 或 staged index 解析為不可變 candidate tree，並產生可機械驗證的 release
+      manifest，避免 dirty development 工作樹遮蔽漏帶檔案。
+    source: adad_source/agents/skills/adad-workflow/scripts/release_candidate_manifest.py
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - release_sop
+    - sync_adad_assets
+    - package_version
+    input:
+      candidate_mode: commit|staged_index
+      candidate_revision: string|null
+      version: string
+      approved_task_snapshots: array[path]
+      expected_release_files: array[path]
+      required_test_files: array[path]
+      source_replica_groups: array[array[path]]
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/release_candidate_manifest.py,
+        tests/test_release_candidate_manifest.py]'
+    output:
+      manifest_valid: boolean
+      candidate_tree_hash: string
+      release_manifest: object
+      blockers: array
+      manual_action_required: boolean
+    exceptions: []
+    invariants:
+    - 'fail_closed: true'
+    - 'candidate_tree_immutable: true'
+    - 'no_worktree_content_evidence: true'
+    preferred_pattern: fail_closed_manifest
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_release_candidate_manifest.py
+        - -q
+        - -p
+        - no:cacheprovider
+        cwd: project
+        timeout: 60
+    decisions:
+    - candidate manifest 的證據來源固定為 Git tree object，不允許以 working tree 測試通過取代 snapshot
+      完整性
+    todo:
+    - '[ ] #87-A：實作 candidate tree 與 release manifest 完整性檢查'
+    checkpoint:
+    - '[x] CP-1-087-A-RELEASE-MANIFEST (validated：2026-07-26 人工核准拆分)'
+    - '[x] CP-3-087-A-R1-EXPLICIT-INPUTS (validated：2026-07-26 人工要求直接修正契約)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - CLI 固定為 `release_candidate_manifest.py --candidate-mode commit|staged_index
+      [--candidate-revision REV] --version VERSION --task-snapshot PATH... --expected-file
+      PATH... --required-test-file PATH... --replica-group PATH,PATH,...`；後五種 option
+      支援重複傳入
+    - candidate_mode=commit 時 candidate_revision 必填；candidate_mode=staged_index 時
+      candidate_revision 必須省略。其他組合、解析失敗、unmerged index 或 tree identity 不確定時立即失敗
+    - 以 Git object database 解析 candidate tree hash；manifest 的所有檔案內容與 hash 均從 candidate
+      tree 讀取，不讀取 working-tree bytes 作為發布證據
+    - expected_release_files、required_test_files 與 source_replica_groups 均由呼叫端明確提供；工具不得由
+      working tree、檔名慣例或模糊 dependency 自行推導
+    - approved_task_snapshots 是本機外部 authorization evidence，不是 release artifact；strict-read
+      JSON 後驗證 status=approved、approved implementation hash 與 checkpoint metadata，並只在
+      manifest 保存 snapshot digest 與核准證據
+    - 列出 candidate tree 內版本檔、expected files、required tests、canonical source 與同步副本的存在性與
+      blob hash；Task snapshot path 或 bytes 不得加入 candidate tracked-file 清單
+    - 比對每組 canonical source 與 replica blob；required test 不在 candidate tree、expected
+      file 缺失、Task approval 無效或版本契約不一致時 fail-closed
+    - 特別涵蓋「source 已 staged、配套測試只存在 dirty worktree」案例，必須回報 manifest_valid=false
+    - stdout 固定輸出單一 JSON object。manifest_valid=true 時 exit 0；任何契約 blocker 或輸入錯誤時輸出
+      manifest_valid=false 並 exit 1；未預期內部錯誤輸出 fixed-shape diagnostics 並 exit 2
+    - 只輸出 manifest evidence，不建立 worktree、不執行測試、不建立 commit/tag 或 push
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals:
+    - 建立 release worktree
+    - 執行 pytest
+    - 建立 commit
+    - 建立 tag
+    - push
+    - 公開發布
+    - 自動納入 dirty worktree 檔案
+    state: validated
+    fan_in_snapshot: 1
+    known_symbols:
+    - _blob_bytes
+    - _dirty_required_tests
+    - _git
+    - _load_task_evidence
+    - _normalize_path
+    - _parse_allowed_files
+    - _parser
+    - _resolve_tree
+    - _tree_entries
+    - build_manifest
+    - main
+  release_preflight_runner:
+    type: tool
+    description: 消費已驗證的 release manifest，在 OS temp 的乾淨 worktree 執行完整 release Gate，並輸出綁定
+      candidate tree hash 的 structured evidence。
+    source: adad_source/agents/skills/adad-workflow/scripts/release_preflight.py
+    domain: ADAD_Roadmap
+    subsystem: Product_Delivery
+    map_file: docs\domains\adad_roadmap.md
+    dependencies:
+    - release_candidate_manifest
+    - release_sop
+    - adad_core
+    - adad_pre_commit
+    - sync_adad_assets
+    - automated_test_suite
+    input:
+      manifest_path: path
+      project_root: path
+      project_python: path
+      base_revision: string
+      approved_task_snapshots: array[path]
+      pytest_timeout: integer
+      gate_timeout: integer
+      build_timeout: integer
+      outer_timeout: integer
+      allowed_files: '[adad_source/agents/skills/adad-workflow/scripts/release_preflight.py,
+        tests/test_release_preflight.py]'
+    output:
+      release_ready: boolean
+      candidate_tree_hash: string
+      step_results: array
+      artifact_evidence: array
+      cleanup_status: enum(cleaned, preserved_command_failed, preserved_timeout, preserved_termination_uncertain,
+        preserved_preflight_rejected, preserved_cleanup_failed)
+      cleanup_error: object|null
+      preserved_paths: array
+      manual_action_required: boolean
+    exceptions: []
+    invariants:
+    - 'fail_closed: true'
+    - 'no_global_git_config_write: true'
+    - 'no_commit_tag_push_publish: true'
+    preferred_pattern: fail_closed_pipeline
+    verification:
+    - command:
+        argv:
+        - '{project_python}'
+        - -m
+        - pytest
+        - tests/test_release_preflight.py
+        - -q
+        - -p
+        - no:cacheprovider
+        cwd: project
+        timeout: 120
+    decisions:
+    - runner 只消費已驗證 manifest；SOP 保留人類發布決策，重複且安全關鍵的 Gate 改由工具執行
+    todo:
+    - '[ ] #87-B：實作乾淨 worktree release Gate runner'
+    checkpoint:
+    - '[x] CP-1-087-B-RELEASE-RUNNER (validated：2026-07-26 人工核准拆分)'
+    - '[x] CP-3-087-B-R1-EXECUTION-CONTRACT (validated：2026-07-26 人工要求直接補齊 runner
+      契約)'
+    observability:
+      mode: not_required
+      signals: []
+    complexity: medium
+    algorithm:
+    - CLI 固定為 `release_preflight.py --manifest PATH --project-root PATH --project-python
+      PATH --base-revision REV --pytest-timeout N --gate-timeout N --build-timeout
+      N --outer-timeout N --task-snapshot PATH...`；task-snapshot 可重複
+    - strict-read manifest JSON，只接受 manifest_valid=true、blockers=[]、candidate_tree_hash
+      為可由 project_root Git object database 重新解析的 tree；任何 identity drift 立即停止
+    - 每個外部 Task snapshot 必須 strict-read、status=approved，且 SHA-256 與 manifest.task_authorization_evidence
+      的 task_id/snapshot_sha256 精確相符；只複製至 release worktree 的 `.agents/tasks` 作本機 Gate
+      輸入，不加入 index
+    - outer_timeout 必須至少為 pytest_timeout + 2*gate_timeout + build_timeout + 30 秒；不成立時拒絕啟動。每一步
+      subprocess 只使用自己的 timeout，整體另以 monotonic deadline 限制
+    - 在 OS temp 以 exclusive creation 建立 `adad_release_<nonce>` owned root並保存 lstat
+      identity；以 `git worktree add --detach WORKTREE BASE_REVISION` 建立基底，再執行 `git
+      read-tree --reset -u CANDIDATE_TREE`，禁止建立 branch 或 commit
+    - Windows 在 WORKTREE/.venv 建立指向 project_python 所屬 venv root 的 Junction；POSIX 建立
+      symlink。建立後必須驗證 link/reparse identity，且 link 永遠視為 runner-owned link、target 永遠
+      unowned
+    - 固定依序執行：`git diff --cached --check`；`PROJECT_PYTHON -m pytest -q --color=no --basetemp
+      OWNED_ROOT/pytest-basetemp -p no:cacheprovider`；`PROJECT_PYTHON .agents/skills/adad-workflow/scripts/adad_pre_commit.py`；`PROJECT_PYTHON
+      -m adad_cli.sync_assets --check`；以 PROJECT_PYTHON 從 candidate worktree import
+      `adad_cli.__version__` 並精確比對 manifest.version；`PROJECT_PYTHON -m build --outdir
+      OWNED_ROOT/dist`
+    - build 成功後必須確認 OWNED_ROOT/dist 恰有至少一個含 manifest.version 的 wheel 與一個 sdist，並保存檔名、size、SHA-256；artifact
+      只屬暫存驗證證據，不上傳
+    - 保存每一步 name、argv、cwd、exit code、timeout、duration、stdout/stderr 摘要與 candidate tree
+      hash；任何 nonzero、timeout、KeyboardInterrupt 或 outer deadline 到期都停止後續步驟
+    - cleanup 先驗證並移除 runner-owned venv link本身，再執行 `git worktree remove --force WORKTREE`；只有
+      Git worktree 已解除且 owned root identity 通過 adad_core fail-closed preflight 時才可刪除
+      owned root
+    - command/Gate 失敗時保留 owned root；成功時才嘗試 cleanup。cleanup 不確定時 release_ready=false、manual_action_required=true
+      並回報診斷路徑
+    - stdout 固定輸出單一 JSON object；release_ready=true 時 exit 0，任何 Gate/cleanup/輸入 blocker
+      時 exit 1，未預期內部錯誤時以 fixed-shape diagnostics exit 2
+    - 成功時只輸出 release_ready=true evidence；不得建立 commit、tag、push、核准 Actions 或上傳套件
+    idempotency:
+      level: unknown
+      side_effects: []
+    retry_budget: 2
+    required_context: []
+    forbidden_context: []
+    context_priority: {}
+    non_goals:
+    - 建立 commit
+    - 建立 tag
+    - push development
+    - push main
+    - 觸發或核准 Actions
+    - 上傳或公開發布套件
+    state: validated
     fan_in_snapshot: 0
   windows_verification_interrupt_runbook:
     type: documentation
@@ -3533,7 +3915,7 @@ modules:
     forbidden_context: []
     context_priority: {}
     non_goals: []
-    state: validated
+    state: dirty
     fan_in_snapshot: 0
   project_venv_python:
     type: function

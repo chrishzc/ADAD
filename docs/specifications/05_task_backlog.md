@@ -64,7 +64,7 @@
 | #71 | done | tests/test_sub_map_schema.py | 存在 | CP-2 `sub_map_schema@v17@7691db` 已核准；Schema 定義 `sub_maps` 與 `sub_map` ownership。 |
 | #72 | done | 不需要（SOP 文件契約） | 不適用 | `RELEASE_SOP.md` 已含 root/child count、FinanceImport、外部專案 upgrade 與 Actions 後本機更新驗收。 |
 | #81 | done | tests/test_pytest_regression_lifecycle.py::test_temporary_lifecycle_state_has_exact_fixed_fields | 存在 | 已完成 lifecycle 實作、TODO 清理及狀態推進。 |
-| #82 | planned | — | 尚未建立 | pytest runner 應在 OS temp 建立受控 `--basetemp`；成功後安全清除，失敗時保留並回報診斷路徑，且禁止將暫存根放在 repo 或其父目錄。 |
+| #82 | CP-2 approved；1.6.4 preflight | tests/test_verification_basetemp_lifecycle.py | 存在 | CP-2 `adad_core@v18@81193f` 已核准（`CP-2-20260726T092718188069Z-adad_core`；implementation hash `90000ff8…8b509`）。Canonical 與兩份 generated replicas hash 已一致，focused verification 為 32 passed、1 skipped；尚待 1.6.4 release gate、snapshot commit 與 package evidence，完成前不得宣稱 deployed／released。 |
 | #83 | planned | — | 尚未建立 | `.agents/AGENTS.md` 僅保留專案硬性規則與 ADAD skill 入口；完整架構、Checkpoint 與地圖操作流程由 `adad-workflow/SKILL.md` 唯一承載。 |
 | #84 | planned | — | 尚未建立 | `adad_core` 需明確建立 Phase-2 末尾的交付步驟：`validated -> linted/tested -> deployed`，不得讓 approve 自動跳過中間狀態，並補齊對應 checklist / regression 驗證。 |
 | #85 | planned | — | 尚未建立 | 本次案例：純 README／一般文件變更與可證明不重疊的施工，被全域 Task／Source Lock 一律序列化而無法平行處理；需依風險分級豁免或縮小鎖定單位，同時保留 fail-closed 與審計證據。 |
@@ -84,7 +84,7 @@
 |63|~~Release SOP 缺少 linked-worktree `GIT_*` 洩漏、release index 污染檢查、GitHub push 空 `GITHUB_BASE_REF` 與發布後 Actions 驗證；補成可重複執行的故障預防清單。~~ **✅ 已完成**（`RELEASE_SOP.md`；v1.6.2 實際發布驗收。）|文件 / Dogfooding|已完成（原 P0）|
 |64|~~測試 harness 繼承外層 GitHub Actions 的 `CI`／`GITHUB_*` event context，使臨時 repo 誤走 `HEAD~1` 或遠端 base；預設隔離並保留明確 opt-in。~~ **✅ 已完成**（見 `tests/test_adad_pre_commit.py`。）|測試 / Dogfooding|已完成（原 P0）|
 |65|~~Release SOP 必須記錄巢狀測試與外層 CI context 的邊界、重現方式及驗收條件，避免同類 CI 修補反覆浪費發布時間。~~ **✅ 已完成**（`RELEASE_SOP.md` 的最小重現與驗收條件。）|文件 / Dogfooding|已完成（原 P0）|
-|82|pytest 外層暫存根生命週期：由統一 runner 建立受控 `--basetemp`；成功後僅清除本次 owned root，失敗時保留並輸出路徑；拒絕 repo／repo parent、symlink、junction、identity mismatch 與未通過 preflight 的清理。|測試 / Dogfooding|**P1**|
+|82|pytest 外層暫存根生命週期：由統一 runner 建立受控 `--basetemp`；成功後僅清除本次 owned root，失敗時保留並輸出路徑；拒絕 repo／repo parent、symlink、junction、identity mismatch 與未通過 preflight 的清理。 **✅ Canonical CP-2 與 replica sync 已完成**（`adad_core@v18@81193f`；三份 hash 一致；32 passed、1 skipped）。**⏳ 1.6.4 發行待辦**：release gate、完整測試、development snapshot commit 與 package evidence；完成前不得宣稱 deployed／released。|測試 / Dogfooding|CP-2／同步完成；1.6.4 發行待辦（原 P1）|
 |83|**ADAD 指示檔分層與去重**：`.agents/AGENTS.md` 縮為每輪必讀的專案硬性規則與 `adad-workflow` skill 入口；完整 ADAD 架構、Checkpoint 與地圖操作流程僅保留於 `.agents/skills/adad-workflow/SKILL.md`。同步調整產物，避免重複規範佔用固定上下文。|ADAD 文件 / 資產同步|**P1**|
 |66|~~Task 匯出的 pattern／decision summary 在參考文件不存在時夾帶載入錯誤文字，污染子代理上下文；應改為乾淨的缺省摘要或結構化 warning。~~ **✅ 已完成**（結構化 `context_warnings`；見 `tests/test_generate_task.py`。）|Task 核發品質|已完成（原 P1）|
 |67|~~Verification 對「鍵不存在」與 `null` 缺少明確語意及核發前一致性檢查，造成規格與 Algorithm 衝突；應提供 deletion assertion 或 Readiness gate。~~ **✅ 已完成**（`expect_absent_keys`；見 `tests/test_verification_absence_contract.py`。）|Task 核發品質|已完成（原 P1）|
