@@ -111,6 +111,7 @@ def _inject_safe_tmp_env():
     safe_tmp.mkdir(parents=True, exist_ok=True)
     for name in ("TMP", "TEMP", "TMPDIR"):
         os.environ[name] = str(safe_tmp)
+    tempfile.tempdir = str(safe_tmp)
     return safe_tmp
 
 
