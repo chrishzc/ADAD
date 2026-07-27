@@ -264,9 +264,14 @@ def main():
 
     abs_path = file_path if os.path.isabs(file_path) else os.path.join(cwd, file_path)
     try:
-        rel_path = os.path.relpath(abs_path, root).replace("\\", "/")
+        real_root = Path(root).resolve()
+        real_path = Path(abs_path).resolve()
+        rel_path = real_path.relative_to(real_root).as_posix()
     except Exception:
-        sys.exit(0)
+        _block(
+            "L2-PATH", "Level2", str(file_path),
+            "目標檔案解析後位於專案根目錄外，請確認工具輸入路徑",
+        )
 
     # 護欄 0：Task Spec 修改權限範圍檢驗 (#86 決議 2.4(F))
     if rel_path.startswith(".agents/tasks/") and rel_path.endswith(".task.json"):
