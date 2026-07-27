@@ -2694,6 +2694,9 @@ class ADADCore:
             state = "pending_review"
         if state in ("pending_review", "planned", "dirty"):
             self.transit_state(node_name, "validated")
+            structural_keys = {"dependencies", "domain", "type", "algorithm", "invariants", "verification", "sub_maps", "owner"}
+            node["approved_snapshot"] = {k: copy.deepcopy(node[k]) for k in structural_keys if k in node}
+
 
     def _write_checkpoint_audit(self, node_name, task_data, action, reviewer, comment=""):
         """原子寫入 CP-2 審批紀錄；成功後才回傳可供 Task history 引用的資訊。"""
@@ -2946,6 +2949,101 @@ class ADADCore:
         except RuntimeError as exc:
             return {"success": False, "error": str(exc)}
         return {"success": True, "task_id": task_data["task_id"], "status": "assigned", "reason": reason, "checkpoint": audit}
+
+    def task_return_to_planning(self, node_name, mismatch_report, reviewer="ReviewerAgent"):
+        """#86 機械/語意層退回 Task 至 assigned 狀態 (不經人 TTY 鎖)"""
+        task_data = self.load_task(node_name)
+        if not task_data:
+            return {"success": False, "error": f"模組 `{node_name}` 沒有可退回的任務快照。"}
+        validation = self.validate_task_snapshot(task_data, node_name)
+        if not validation["valid"]:
+            return {"success": False, "error": "[INVALID TASK] Task 快照格式不合規。", "task_errors": validation["errors"]}
+        if task_data.get("status") != "submitted":
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 任務狀態為 `{task_data.get('status')}`，只有 `submitted` 才能退回。"
+            }
+
+        # 壓縮與處理 history (最新一輪留完整 200 字內 reason，舊輪次自動壓縮)
+        if isinstance(mismatch_report, dict):
+            reason_str = str(mismatch_report.get("reason", "Reviewer mismatch"))[:200]
+        else:
+            reason_str = str(mismatch_report)[:200]
+
+        history = task_data.setdefault("history", [])
+        for item in history:
+            if isinstance(item, dict) and "reason" in item:
+                item["reason"] = f"[{item.get('issue_category', 'compressed')}] {item.get('spec_section_id', '')}"
+
+        history.append({
+            "action": "return_to_planning",
+            "reviewer": reviewer,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "reason": reason_str,
+            "mismatch": mismatch_report if isinstance(mismatch_report, dict) else {"reason": reason_str},
+        })
+
+        rollback = task_data.setdefault("rollback", self._rollback_metadata(node_name))
+        rollback["rejected_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        try:
+            audit = self._commit_checkpoint_decision(node_name, task_data, "rejected", reviewer, reason_str)
+        except RuntimeError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "task_id": task_data["task_id"], "status": "assigned", "reason": reason_str, "checkpoint": audit}
+
+    def task_auto_certify(self, node_name, receipt):
+        """#86 受控自動蓋章 (將 Task status 推進至 approved，標記 auto-certified)"""
+        task_data = self.load_task(node_name)
+        if not task_data:
+            return {"success": False, "error": f"模組 `{node_name}` 沒有待核准的任務。"}
+        validation = self.validate_task_snapshot(task_data, node_name)
+        if not validation["valid"]:
+            return {"success": False, "error": "[INVALID TASK] Task 快照格式不合規。", "task_errors": validation["errors"]}
+        if task_data.get("status") != "submitted":
+            return {
+                "success": False,
+                "error": f"[BLOCKED] 任務狀態為 `{task_data.get('status')}`，只有 `submitted` 才能自動蓋章。"
+            }
+
+        if not isinstance(receipt, dict):
+            return {"success": False, "error": "[AUTO-CERTIFY REJECTED] Receipt 格式不合法。"}
+
+        v_type = receipt.get("verification_type")
+        if v_type != "automated_test":
+            return {"success": False, "error": f"[AUTO-CERTIFY REJECTED] verification_type '{v_type}' 非 automated_test，強制降級 CP-2 人工審查。"}
+
+        evidence = receipt.get("automated_evidence", {})
+        run_cmd = evidence.get("run_command", {})
+        cmd_argv = run_cmd.get("argv", [])
+        if not cmd_argv:
+            return {"success": False, "error": "[AUTO-CERTIFY REJECTED] run_command 缺失或 argv 為空。"}
+
+        spec_verifications = task_data.get("spec", {}).get("verification", [])
+        allowed_cmds = [v.get("command", {}).get("argv", []) for v in spec_verifications if isinstance(v.get("command"), dict)]
+        if cmd_argv not in allowed_cmds and not any(cmd_argv == v.get("argv") for v in spec_verifications if isinstance(v, dict)):
+            return {"success": False, "error": f"[AUTO-CERTIFY REJECTED] run_command {cmd_argv} 不存在於 spec.verification 白名單中。"}
+
+        try:
+            cwd_path = os.path.join(self.project_root, run_cmd.get("cwd", "."))
+            res = subprocess.run(cmd_argv, cwd=cwd_path, capture_output=True, text=True, timeout=run_cmd.get("timeout", 60))
+            if res.returncode != run_cmd.get("expect_exit", 0):
+                return {"success": False, "error": f"[AUTO-CERTIFY REJECTED] 親自重新執行 {cmd_argv} 失敗 (exit code {res.returncode})。"}
+        except Exception as exc:
+            return {"success": False, "error": f"[AUTO-CERTIFY REJECTED] 重新執行 {cmd_argv} 發生異常: {str(exc)}"}
+
+        reviewer_name = "auto-certified"
+        try:
+            audit = self._commit_checkpoint_decision(node_name, task_data, "approved", reviewer_name)
+        except CheckpointTransactionError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "transaction_recovery": exc.transaction_recovery
+            }
+        except RuntimeError as exc:
+            return {"success": False, "error": str(exc)}
+        return {"success": True, "task_id": task_data["task_id"], "status": "approved", "reviewer": reviewer_name, "checkpoint": audit}
 
     def task_block(self, node_name, reason):
         """

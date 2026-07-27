@@ -55,31 +55,31 @@ def _assign_module_owners(core, modules):
 def main():
     md_path = "system_map.md"
     yaml_path = "system_map.yaml"
-    
+
     if not os.path.exists(md_path):
         print(json.dumps({"success": False, "error": f"找不到架構源檔案 {md_path}"}, ensure_ascii=False))
         sys.exit(1)
-        
+
     try:
         from adad_core import resolve_includes
         md_content = resolve_includes(md_path)
     except Exception as e:
         print(json.dumps({"success": False, "error": f"解析 include 檔案與讀取 {md_path} 失敗: {e}"}, ensure_ascii=False))
         sys.exit(1)
-        
+
     # 1. 解析 Markdown
     try:
         compiled_data = parse_markdown(md_content)
     except Exception as e:
         print(json.dumps({"success": False, "error": f"解析 Markdown 失敗: {e}"}, ensure_ascii=False))
         sys.exit(1)
-        
+
     # 驗證必要欄位
     for mod_name, mod_info in compiled_data.get("modules", {}).items():
         if not mod_info.get("type"):
             print(json.dumps({"success": False, "error": f"編譯失敗：模組 [{mod_name}] 缺少必要欄位 'Type'"}, ensure_ascii=False))
             sys.exit(1)
-            
+
     # 2. 智慧狀態合併
     # 讀取舊的 YAML (若存在)
     try:
@@ -95,7 +95,7 @@ def main():
     except ValueError as e:
         print(json.dumps({"success": False, "error": str(e)}, ensure_ascii=False))
         sys.exit(1)
-    
+
     for mod_name, mod_info in compiled_data.get("modules", {}).items():
         # 如果舊 YAML 存在該模組
         if mod_name in old_modules:
@@ -115,7 +115,7 @@ def main():
         else:
             # 全新模組，狀態為 planned
             mod_info["state"] = "planned"
-            
+
     # 3. 寫入並更新 YAML
     core.data["version"] = compiled_data.get("version", 1)
     core.data["modules"] = compiled_data.get("modules", {})
@@ -147,7 +147,7 @@ def main():
     except Exception as e:
         print(json.dumps({"success": False, "error": f"分區寫入架構 IR 失敗: {e}"}, ensure_ascii=False))
         sys.exit(1)
-    
+
     # 強制確保 system_map.yaml 的修改時間稍微新於 system_map.md (大於 1.5 秒)
     # 這能確保編譯後 read_context 不會被過期阻斷判定誤導
     try:

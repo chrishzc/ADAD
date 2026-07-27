@@ -1,7 +1,10 @@
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import subprocess
+
+import yaml
 
 
 SOURCE = (
@@ -29,6 +32,15 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _git_bytes(repo: Path, *args: str) -> bytes:
+    result = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+    )
+    return result.stdout
+
+
 def _repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -52,20 +64,51 @@ def _repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _approved_task(tmp_path: Path) -> Path:
+def _approved_task(repo: Path, tmp_path: Path) -> Path:
+    source_blob = _git(repo, "rev-parse", "HEAD:src/tool.py")
+    source_hash = hashlib.sha256(
+        _git_bytes(repo, "cat-file", "blob", source_blob)
+    ).hexdigest()
+    checkpoint_path = tmp_path / "checkpoints" / "CP-2-test.yaml"
+    checkpoint_path.parent.mkdir()
+    checkpoint_path.write_text(
+        yaml.safe_dump(
+            {
+                "checkpoint_payload": {
+                    "id": "CP-2-test",
+                    "phase": 2,
+                    "triggered_by": "human",
+                    "status": "approved",
+                    "target": {
+                        "node_name": "tool",
+                        "task_id": "tool@v1@abcdef",
+                        "system_map_version": 1,
+                        "source_hash": "task-source-hash",
+                    },
+                    "decision": {"action": "approved", "reviewer": "tester"},
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
     path = tmp_path / "tool.task.json"
     path.write_text(
         json.dumps(
             {
                 "task_id": "tool@v1@abcdef",
                 "node_name": "tool",
+                "system_map_version": 1,
+                "source_hash": "task-source-hash",
                 "status": "approved",
-                "approved_implementation_hash": "abc123",
+                "approved_implementation_hash": source_hash,
+                "source_lock": {"source_path": "src/tool.py"},
+                "rollback": {"source_path": "src/tool.py"},
                 "history": [
                     {
                         "event": "approved",
                         "checkpoint_id": "CP-2-test",
-                        "checkpoint_path": "checkpoints/CP-2-test.yaml",
+                        "checkpoint_path": str(checkpoint_path),
                     }
                 ],
                 "spec": {
@@ -99,7 +142,7 @@ def _build(repo: Path, task: Path, mode: str, revision: str | None):
 
 def test_commit_candidate_uses_tree_blobs_and_external_task_digest(tmp_path):
     repo = _repo(tmp_path)
-    task = _approved_task(tmp_path)
+    task = _approved_task(repo, tmp_path)
 
     result = _build(repo, task, "commit", "HEAD")
 
@@ -108,15 +151,19 @@ def test_commit_candidate_uses_tree_blobs_and_external_task_digest(tmp_path):
     assert result["candidate_tree_hash"] == _git(repo, "rev-parse", "HEAD^{tree}")
     evidence = result["release_manifest"]["task_authorization_evidence"]
     assert evidence[0]["task_id"] == "tool@v1@abcdef"
+    assert evidence[0]["canonical_source_path"] == "src/tool.py"
+    source_blob = _git(repo, "rev-parse", "HEAD:src/tool.py")
+    assert evidence[0]["candidate_source_sha256"] == hashlib.sha256(
+        _git_bytes(repo, "cat-file", "blob", source_blob)
+    ).hexdigest()
+    assert evidence[0]["checkpoint_id"] == "CP-2-test"
+    assert len(evidence[0]["checkpoint_sha256"]) == 64
     assert ".agents/tasks" not in result["release_manifest"]["files"]
 
 
 def test_staged_source_with_required_test_only_dirty_is_rejected(tmp_path):
     repo = _repo(tmp_path)
-    task = _approved_task(tmp_path)
-    (repo / "src" / "tool.py").write_text("VALUE = 2\n", encoding="utf-8")
-    (repo / "replica" / "tool.py").write_text("VALUE = 2\n", encoding="utf-8")
-    _git(repo, "add", "src/tool.py", "replica/tool.py")
+    task = _approved_task(repo, tmp_path)
     (repo / "tests" / "test_tool.py").write_text(
         "def test_tool():\n    assert 2 == 2\n", encoding="utf-8"
     )
@@ -132,7 +179,7 @@ def test_staged_source_with_required_test_only_dirty_is_rejected(tmp_path):
 
 def test_replica_mismatch_is_rejected_from_candidate_tree(tmp_path):
     repo = _repo(tmp_path)
-    task = _approved_task(tmp_path)
+    task = _approved_task(repo, tmp_path)
     (repo / "replica" / "tool.py").write_text("VALUE = 3\n", encoding="utf-8")
     _git(repo, "add", "replica/tool.py")
 
@@ -147,7 +194,7 @@ def test_replica_mismatch_is_rejected_from_candidate_tree(tmp_path):
 
 def test_unapproved_task_is_rejected(tmp_path):
     repo = _repo(tmp_path)
-    task = _approved_task(tmp_path)
+    task = _approved_task(repo, tmp_path)
     payload = json.loads(task.read_text(encoding="utf-8"))
     payload["status"] = "assigned"
     task.write_text(json.dumps(payload), encoding="utf-8")
@@ -158,3 +205,53 @@ def test_unapproved_task_is_rejected(tmp_path):
         assert "not approved" in str(exc)
     else:
         raise AssertionError("unapproved Task snapshot must fail closed")
+
+
+def test_candidate_source_must_match_approved_implementation_hash(tmp_path):
+    repo = _repo(tmp_path)
+    task = _approved_task(repo, tmp_path)
+    (repo / "src" / "tool.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (repo / "replica" / "tool.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "add", "src/tool.py", "replica/tool.py")
+
+    try:
+        _build(repo, task, "staged_index", None)
+    except MODULE.ManifestError as exc:
+        assert "does not match approved implementation" in str(exc)
+    else:
+        raise AssertionError("unapproved candidate source bytes must fail closed")
+
+
+def test_checkpoint_payload_must_match_task_snapshot(tmp_path):
+    repo = _repo(tmp_path)
+    task = _approved_task(repo, tmp_path)
+    payload = json.loads(task.read_text(encoding="utf-8"))
+    checkpoint_path = Path(payload["history"][-1]["checkpoint_path"])
+    checkpoint = yaml.safe_load(checkpoint_path.read_text(encoding="utf-8"))
+    checkpoint["checkpoint_payload"]["target"]["task_id"] = "tool@v1@forged"
+    checkpoint_path.write_text(
+        yaml.safe_dump(checkpoint, sort_keys=False), encoding="utf-8"
+    )
+
+    try:
+        _build(repo, task, "commit", "HEAD")
+    except MODULE.ManifestError as exc:
+        assert "does not match Task snapshot" in str(exc)
+    else:
+        raise AssertionError("forged approval checkpoint must fail closed")
+
+
+def test_task_source_path_traversal_is_rejected(tmp_path):
+    repo = _repo(tmp_path)
+    task = _approved_task(repo, tmp_path)
+    payload = json.loads(task.read_text(encoding="utf-8"))
+    payload["source_lock"]["source_path"] = "../src/tool.py"
+    payload["rollback"]["source_path"] = "../src/tool.py"
+    task.write_text(json.dumps(payload), encoding="utf-8")
+
+    try:
+        _build(repo, task, "commit", "HEAD")
+    except MODULE.ManifestError as exc:
+        assert "invalid project-relative path" in str(exc)
+    else:
+        raise AssertionError("Task source path traversal must fail closed")

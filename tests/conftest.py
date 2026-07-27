@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import uuid
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,124 @@ CI_EVENT_ENV_VARS = {
     "GITHUB_SHA",
 }
 
+_PYTEST_TMP_PREFIX = "adad-pytest"
+
+
+def _writable_dir_probe(path):
+    candidate = Path(path)
+    probe = None
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        if not os.access(candidate, os.W_OK | os.X_OK):
+            return None
+        probe = candidate / f".adad_pytest_write_probe_{uuid.uuid4().hex}"
+        with open(probe, "wb"):
+            pass
+        return candidate
+    except OSError:
+        return None
+    finally:
+        if probe is not None:
+            try:
+                probe.unlink()
+            except OSError:
+                pass
+
+
+def _safe_python_temp_root():
+    candidates = []
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "Temp")
+    for name in ("TEMP", "TMP", "TMPDIR"):
+        value = os.environ.get(name)
+        if value:
+            candidates.append(Path(value))
+    candidates.append(Path.home() / "AppData" / "Local" / "Temp")
+    candidates.append(Path.home() / ".tmp")
+    candidates.append(Path(tempfile.gettempdir()))
+    candidates.append(Path.home())
+    for candidate in candidates:
+        writable = _writable_dir_probe(candidate)
+        if writable is not None:
+            return writable / _PYTEST_TMP_PREFIX
+    raise RuntimeError("找不到可寫入的 temp 根目錄")
+
+
+def _safe_pytest_basetemp():
+    return str(_safe_python_temp_root() / f"pytest-{os.getpid()}")
+
+
+def _coerce_basetemp_arg(requested_basetemp):
+    try:
+        requested = Path(requested_basetemp)
+    except Exception:
+        return _safe_pytest_basetemp()
+    for _ in range(16):
+        candidate = requested / f"pytest-run-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        if _writable_dir_probe(candidate) is not None:
+            return str(candidate)
+    return str(Path(_safe_python_temp_root()) / f"pytest-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+
+
+def _inject_safe_tmp_env():
+    safe_tmp = _safe_python_temp_root()
+    safe_tmp.mkdir(parents=True, exist_ok=True)
+    for name in ("TMP", "TEMP", "TMPDIR"):
+        os.environ[name] = str(safe_tmp)
+    return safe_tmp
+
+
+def _ensure_basetemp_in_args(args):
+    safe_basetemp = None
+    for index, token in enumerate(args):
+        if token == "--basetemp" and index + 1 < len(args):
+            args[index + 1] = _coerce_basetemp_arg(args[index + 1])
+            return
+        if token.startswith("--basetemp="):
+            key, _, value = token.partition("=")
+            safe_basetemp = _coerce_basetemp_arg(value if value else "")
+            args[index] = f"{key}={safe_basetemp}"
+            return
+    safe_basetemp = _safe_pytest_basetemp()
+    for index, token in enumerate(args):
+        if token == "--basetemp" and index + 1 < len(args):
+            args[index + 1] = safe_basetemp
+            return
+        if token.startswith("--basetemp="):
+            args[index] = f"{token.split('=', 1)[0]}={safe_basetemp}"
+            return
+    args.extend(["--basetemp", safe_basetemp])
+
+
+def pytest_load_initial_conftests(early_config, parser, args):
+    """確保測試資料永遠落在可寫 temp 根目錄。"""
+    _ensure_basetemp_in_args(args)
+
+
+def pytest_sessionstart(session):
+    if getattr(session.config.option, "basetemp", None):
+        session.config.option.basetemp = _coerce_basetemp_arg(
+            session.config.option.basetemp
+        )
+        try:
+            from _pytest.tmpdir import TempPathFactory
+            session.config._tmp_path_factory = TempPathFactory.from_config(
+                session.config, _ispytest=True
+            )
+        except Exception:
+            pass
+        return
+    safe_basetemp = _safe_pytest_basetemp()
+    _inject_safe_tmp_env()
+    session.config.option.basetemp = safe_basetemp
+    try:
+        from _pytest.tmpdir import TempPathFactory
+        session.config._tmp_path_factory = TempPathFactory.from_config(
+            session.config, _ispytest=True
+        )
+    except Exception:
+        pass
 
 def workflow_test_harness(inherited_environment, explicit_env_overrides=None):
     """建立子行程的測試環境，避免 CI env 污染。"""
@@ -76,8 +195,7 @@ def run_script(name, args=None, cwd=None, input_text=None, env=None):
         env_vars["PYTHONPATH"] = f"{repo_root_str}{os.pathsep}{python_path}"
     else:
         env_vars["PYTHONPATH"] = repo_root_str
-    proc = subprocess.run(
-        cmd,
+    run_kwargs = dict(
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -85,6 +203,12 @@ def run_script(name, args=None, cwd=None, input_text=None, env=None):
         input=input_text if input_text is not None else "",
         env=env_vars,
     )
+    if os.name == "nt":
+        run_kwargs["creationflags"] = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        )
+    proc = subprocess.run(cmd, **run_kwargs)
     parsed = None
     try:
         parsed = json.loads(proc.stdout)

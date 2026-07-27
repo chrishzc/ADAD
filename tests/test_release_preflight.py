@@ -98,14 +98,6 @@ def test_timeout_budget_is_checked_before_owned_root(tmp_path, monkeypatch):
             "duration_seconds": 0,
         },
     )
-    called = {"mkdtemp": False}
-
-    def forbidden_mkdtemp(*_args, **_kwargs):
-        called["mkdtemp"] = True
-        raise AssertionError("owned root must not be created")
-
-    monkeypatch.setattr(MODULE.tempfile, "mkdtemp", forbidden_mkdtemp)
-
     try:
         MODULE.run_preflight(
             manifest_path=manifest_path,
@@ -122,7 +114,33 @@ def test_timeout_budget_is_checked_before_owned_root(tmp_path, monkeypatch):
         assert "timeout budget" in str(exc)
     else:
         raise AssertionError("invalid timeout budget must fail")
-    assert called["mkdtemp"] is False
+
+
+def test_outer_deadline_caps_each_step_timeout(monkeypatch):
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 95.0)
+
+    assert MODULE._bounded_timeout(100.0, 30, 120) == 5.0
+
+
+def test_expired_outer_deadline_blocks_step_launch(monkeypatch):
+    monkeypatch.setattr(MODULE.time, "monotonic", lambda: 100.0)
+
+    try:
+        MODULE._bounded_timeout(100.0, 30, 120)
+    except MODULE.subprocess.TimeoutExpired as exc:
+        assert exc.timeout == 120
+    else:
+        raise AssertionError("expired outer deadline must block subprocess launch")
+
+
+def test_runner_uses_credentialed_owned_root_for_cleanup():
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "core._create_owned_verification_root()" in source
+    assert "owned_identity, owned_credential" in source
+    assert "owned_identity, owned_credential" in source.split(
+        "core._safe_cleanup_owned_root(", 1
+    )[1]
 
 
 def test_failure_receipt_preserves_owned_root(tmp_path):

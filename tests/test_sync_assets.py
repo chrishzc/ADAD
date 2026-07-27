@@ -47,3 +47,12 @@ def test_sync_twice_is_idempotent_in_isolated_target(tmp_path):
         / "blocked_report"
         / "report_blocked_mcp.py"
     ).is_file()
+
+
+def test_sync_assets_propagates_delivery_gate_and_release_advance(tmp_path):
+    res = sync_assets(write=True, target_root=tmp_path)
+    assert res["success"] is True
+
+    agents_dir = tmp_path / ".agents" / "skills" / "adad-workflow" / "scripts"
+    assert (agents_dir / "delivery_gate.py").is_file()
+    assert (agents_dir / "adad_release_advance.py").is_file()

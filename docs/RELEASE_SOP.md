@@ -2,6 +2,24 @@
 
 適用於將 `development` 的 ADAD 更新整理為單一套件並發布到 `main`。發布分支不合併 `development`；一律從 `origin/main` 建立乾淨 worktree，再直接帶入本次已驗證的發布檔案。
 
+## 0. 發布證據與不可變邊界
+
+一次發布必須分別取得以下證據，不得用前一階段成功推論後一階段也成功：
+
+1. **Candidate 完整**：指定 development commit 的完整 tracked tree、required tests、版本檔與三份 ADAD workflow source replica 都存在且 hash 一致。
+2. **本機驗證完成**：pre-commit、完整 pytest、invariants、implementation verification、敏感資料掃描與 build 均有正常 exit code。
+3. **遠端接受完成**：push 成功且精確 release commit 的 GitHub Actions 全綠。
+4. **Release 可取得**：tag、GitHub Release 與預期 assets 均可下載；「asset 已上傳」不等於 Actions 或安裝驗收完成。
+5. **安裝驗收完成**：從通過 Actions 的同一 commit 建立或取得 wheel，確認 package metadata、CLI version 與 packaged canonical resource hash。
+
+Task snapshots、source locks、Checkpoint 與本機工作狀態是外部 authorization evidence，
+不得加入 tracked release tree、wheel 或 sdist。含 ignored `.agents/tasks`、
+`.source_locks` 或其他 runtime state 的舊 worktree 不能作為乾淨 candidate 證據；
+必須從已 fetch 的 `origin/main` 建立全新 worktree。
+
+tag 與 GitHub Release assets 一經發布即視為不可變。發布後發現缺陷時，禁止移動既有 tag、
+改寫歷史或覆寫同版本 assets；修復必須形成新的 patch release。
+
 ## 1. 在 development 完成版本與驗證
 
 1. 更新 `adad_cli/__init__.py`、`CHANGELOG.md`、README 徽章的版本號。
@@ -20,6 +38,17 @@
    .venv\Scripts\python.exe -m pytest -q --color=no --basetemp C:\tmp\pytest-release-<VERSION>-<ATTEMPT> -p no:cacheprovider
    ```
 
+   本機模擬 CI 時必須顯式提供與 workflow 相同的事件環境，至少包含
+   `CI=true` 與正確的 `GITHUB_BASE_REF`。`adad_pre_commit.py` 在沒有 staged diff
+   時靜默成功，只能證明「沒有檢查對象」，不能作為 CI 通過證據。
+
+   ```powershell
+   $env:CI = 'true'
+   $env:GITHUB_BASE_REF = 'origin/main'
+   .venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\adad_pre_commit.py
+   if ($LASTEXITCODE -ne 0) { throw "CI-equivalent pre-commit 失敗" }
+   ```
+
    Windows 的受控／內嵌 console 可能在 pytest 已印出成功摘要後，才向父程序送出
    `KeyboardInterrupt`。此時沒有可確認的退出碼，**不得**把畫面上的 `N passed` 視為
    release preflight 通過。改以保留 stdout、stderr 與 exit code 的隱藏
@@ -32,6 +61,11 @@
    ```powershell
    .venv\Scripts\python.exe -m pytest tests\test_sub_maps.py -q
    ```
+
+   Windows pytest 一律使用專案 venv、全新 `C:\tmp\pytest-*`、`-p no:cacheprovider`
+   與明確外層 timeout。沒有正常 exit code即為 **unverified**。若受控 sandbox 因 ACL
+   無法建立或清理 owner-owned 路徑，先保留完整命令與錯誤，再由相同檔案 owner
+   重跑完全相同命令；若 owner 重跑通過，分類為環境權限失敗，不得誤報成產品測試缺陷。
 
 4. 若 gate 只報 `release_changelog` 或 `documentation_alignment` 的 Task 快照過期，重新核發後再跑 gate：
 
@@ -94,6 +128,24 @@ git -C $release status --short
 git -C $release diff --cached --check
 ```
 
+同時確認 candidate tree 內 required tests 存在，並比對 canonical、
+package resource 與 agent replica；不得使用 dirty development worktree 的檔案 hash
+取代 candidate tree 證據：
+
+```powershell
+$replicas = @(
+    'adad_source/agents/skills/adad-workflow/scripts/adad_core.py',
+    'adad_cli/resources/agents/skills/adad-workflow/scripts/adad_core.py',
+    '.agents/skills/adad-workflow/scripts/adad_core.py'
+)
+$hashes = $replicas | ForEach-Object {
+    git -C $release hash-object -- $_
+}
+if (($hashes | Select-Object -Unique).Count -ne 1) {
+    throw "candidate 的 canonical/replica hash 不一致"
+}
+```
+
 若 `--check` 有 whitespace 錯誤，先在 development 修正並重建 release worktree；不要在 release 分支單獨修出與 development 不一致的版本。第 3 節的 `git commit` 只在 `$snapshotNeedsCommit` 為 `$true` 時執行；若為 `$false`，驗證後直接將 `$devCommit` fast-forward 推送至 main，此時 main tree 必須等於 development snapshot。
 
 ## 3. 在 release worktree 驗證與提交
@@ -125,6 +177,18 @@ Push-Location $release
 if ($snapshotNeedsCommit) {
     git commit -m "Release ADAD <VERSION>"
 }
+Pop-Location
+```
+
+打包前先確認 build frontend 可用，再從乾淨 candidate 建立 wheel 與 sdist。缺少
+`build` 或其必要依賴時應停止並補齊環境，不得把打包工具錯誤誤判為原始碼錯誤：
+
+```powershell
+Push-Location $release
+& "$adadRepo\.venv\Scripts\python.exe" -m build --version
+if ($LASTEXITCODE -ne 0) { throw "Python build frontend 不可用" }
+& "$adadRepo\.venv\Scripts\python.exe" -m build
+if ($LASTEXITCODE -ne 0) { throw "套件 build 失敗" }
 Pop-Location
 ```
 
@@ -163,6 +227,10 @@ push workflow 的 `GITHUB_BASE_REF` 可能存在但為空字串；hook 必須以
 ## 5. 發布 main 並驗收 Actions
 
 ```powershell
+git fetch origin main --tags
+$remoteMainBeforePush = (git rev-parse origin/main).Trim()
+if (-not $remoteMainBeforePush) { throw "無法解析 origin/main" }
+
 git -C $release push origin HEAD:main
 git branch -f main origin/main
 
@@ -176,6 +244,11 @@ gh run view $runId --exit-status
 
 `gh run view --exit-status` 成功後才能安裝本機套件及執行外部專案 upgrade；不得用尚未通過 Actions 的 build 覆蓋本機工具。Actions 失敗時保留 release worktree 與日誌，建立修正 Task，不得宣告完成。
 
+建立 tag 或 GitHub Release 前，必須再次 fetch 並確認 `origin/main`、release commit
+與預定 tag 的關係。若同名 tag 或同版本 Release 已存在，立即停止；不得移動 tag
+或覆寫 assets。push、tag、Release 建立、asset upload、Actions 與安裝驗收必須在
+發布紀錄中各自保存結果。
+
 ## 6. 安裝本機版本與外部專案 upgrade 驗收
 
 先安裝已通過 Actions 的 release commit：
@@ -187,6 +260,15 @@ Push-Location $release
 & "$adadRepo\.venv\Scripts\adad.exe" --version
 & "$adadRepo\.venv\Scripts\python.exe" -I -c "import adad_cli.workflow; print(adad_cli.workflow.__file__)"
 Pop-Location
+```
+
+若使用 wheel 安裝，wheel 必須來自 `$releaseCommit` 對應的乾淨 candidate。安裝後除了
+版本字串，還要比對 metadata 與 packaged canonical resource hash：
+
+```powershell
+& "$adadRepo\.venv\Scripts\python.exe" -m pip show adad-cli
+& "$adadRepo\.venv\Scripts\adad.exe" --version
+& "$adadRepo\.venv\Scripts\python.exe" -I -c "from importlib.resources import files; import hashlib; p=files('adad_cli').joinpath('resources/agents/skills/adad-workflow/scripts/adad_core.py'); print(hashlib.sha256(p.read_bytes()).hexdigest())"
 ```
 
 版本字串正確不足以證明封裝完整；wheel／sdist 必須包含
@@ -266,3 +348,30 @@ Pop-Location
 ## 8. 清理
 
 `.venv` Junction 只存在於 `C:\tmp` 的 release worktree，不能對它使用 `Remove-Item -Recurse`。完成後可保留 worktree 供稽核；若要清理，先確認它仍是 Junction，再移除 link 本身，不得遞迴刪除 target 的實體 `.venv`。
+
+---
+
+## 9. 附錄：Preflight 快速檢查表（Preflight Checklist）
+
+此清單用於 `development` 準備更新 `main` 前的「一鍵驗證與檢查」。
+
+### 9.1 快速檢查與快照一致性
+```powershell
+# 1) 基本分支狀態
+git checkout development
+git fetch origin
+git status --porcelain
+
+# 2) 檢查有無追蹤暫存/測試雜物
+git ls-tree -r --name-only development | Select-String -Pattern "(^|/)adad_verify_work_|(^|/)\.pytest-temporary/|(^|/)pytest-|(^|/)checkpoints/|(^|/)\.agents/tasks/"
+
+# 3) 最低驗證
+.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\compile_map.py
+.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\check_source_binding.py
+.venv\Scripts\python.exe .agents\skills\adad-workflow\scripts\adad_pre_commit.py
+.venv\Scripts\python.exe -m pytest -q --color=no --basetemp C:\tmp\pytest-release-preflight-$(Get-Date -Format "yyyyMMddHHmmss") -p no:cacheprovider
+```
+
+### 9.2 清理原則
+- 禁止刪除 `system_map.yaml/.md`、`docs`、核心原始碼、`.agents/tasks`（task snapshot 檔）。
+- 不將 `adad_verify` / `pytest` 類型殘留自動混入 `main` snapshot。

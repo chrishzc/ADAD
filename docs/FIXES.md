@@ -198,6 +198,27 @@ create/write/rename/delete 可寫性。
   建立缺失屬性，而不能假設 Windows API 在所有 runner 存在。Actions 成功前不得重新安裝
   使用者層 CLI。
 
+### 6.3 2026-07-26 Windows 驗證子程序逾時清理與 Console 訊號洩漏修復
+
+#### 1. 問題描述與根因分析
+在 Windows 環境下執行驗證指令與 `pytest` 測試時，頻繁發生以下問題：
+1. **Antigravity IDE 閃退與全域 `KeyboardInterrupt`**：
+   - **根因**：`adad_core.py` 中的 `_task_index_owner_alive` 原先使用 `os.kill(owner, 0)` 檢查行程存活狀態，向共享 Console 廣播 `CTRL_C_EVENT` 引爆同 Console 內所有進程。
+2. **過度設計的 Job Objects 導致訊號與 Handle 洩漏**：
+   - 非必要的 Kernel 級別 Handle 操作脆弱且容易干擾主進程。
+3. **測試過程中黑色 Terminal 視窗頻繁閃爍**：
+   - `_windows_detached_creation_flags()` 使用 `DETACHED_PROCESS` (0x00000008) 旗標導致無視 `CREATE_NO_WINDOW`。
+
+#### 2. 重構與修復措施
+1. **重構 Windows 進程樹清理 (`terminate_command_tree`)**：改用原生 `taskkill /F /T /PID <pid>` 搭配 `creationflags=CREATE_NO_WINDOW`。
+2. **修復 Process Liveness 檢查 (`_task_index_owner_alive`)**：在 Windows 改用原生 Win32 API (`kernel32.OpenProcess(0x1000, False, owner)`)，徹底避免廣播 `CTRL_C_EVENT`。
+3. **消除視窗閃爍跳出**：簡化旗標為 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`。
+
+### 6.4 2026-07-26 驗證工作區誤入專案範圍與 Windows 延遲檔案鎖修復
+
+- **根因**：驗證 runner 曾以 `tempfile.mkdtemp(..., dir=self.project_root)` 建立 owned workspace，導致全權根目錄落在專案內；Windows timeout 測試結束後檔案 handle 仍短暫保留導致 `WinError 32`。
+- **修復**：single command, integration 與 top-level verification 均改用 OS temp 的 owned root。Windows 檔案鎖以 bounded exponential backoff 重試，從不刪除 Task snapshot 或 Source Lock。
+
 ## 驗證方式
 
 以下測試皆已於本次修改後手動執行並通過：

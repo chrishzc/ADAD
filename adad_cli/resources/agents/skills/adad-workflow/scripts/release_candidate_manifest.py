@@ -7,11 +7,13 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
 from typing import Any, Iterable
+
+import yaml
 
 
 VERSION_PATH = "adad_cli/__init__.py"
@@ -33,9 +35,13 @@ def _git(project_root: Path, *args: str, text: bool = True) -> subprocess.Comple
 
 
 def _normalize_path(value: str) -> str:
-    normalized = value.replace("\\", "/").strip("/")
-    if not normalized or normalized.startswith("../") or "/../" in f"/{normalized}/":
+    raw = value.replace("\\", "/").strip()
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:/", raw):
         raise ManifestError(f"invalid project-relative path: {value}")
+    parts = PurePosixPath(raw).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ManifestError(f"invalid project-relative path: {value}")
+    normalized = "/".join(parts)
     return normalized
 
 
@@ -99,7 +105,57 @@ def _parse_allowed_files(raw_value: Any) -> set[str]:
     return {_normalize_path(str(value)) for value in values if str(value).strip()}
 
 
-def _load_task_evidence(task_paths: Iterable[str]) -> tuple[list[dict[str, Any]], set[str]]:
+def _load_checkpoint_evidence(
+    project_root: Path,
+    task: dict[str, Any],
+    approval: dict[str, Any],
+    task_path: Path,
+) -> tuple[str, str]:
+    checkpoint_raw = approval.get("checkpoint_path")
+    if not isinstance(checkpoint_raw, str) or not checkpoint_raw:
+        raise ManifestError(f"Task approval checkpoint metadata is incomplete: {task_path}")
+    checkpoint_path = Path(checkpoint_raw)
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = project_root / checkpoint_path
+    checkpoint_path = checkpoint_path.resolve()
+    try:
+        checkpoint_bytes = checkpoint_path.read_bytes()
+        checkpoint = yaml.safe_load(checkpoint_bytes.decode("utf-8", errors="strict"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ManifestError(
+            f"invalid approval checkpoint {checkpoint_path}: {exc}"
+        ) from exc
+    payload = checkpoint.get("checkpoint_payload") if isinstance(checkpoint, dict) else None
+    if not isinstance(payload, dict):
+        raise ManifestError(f"approval checkpoint payload is invalid: {checkpoint_path}")
+    target = payload.get("target")
+    decision = payload.get("decision")
+    expected_target = {
+        "node_name": task.get("node_name"),
+        "task_id": task.get("task_id"),
+        "system_map_version": task.get("system_map_version"),
+        "source_hash": task.get("source_hash"),
+    }
+    if (
+        payload.get("id") != approval.get("checkpoint_id")
+        or payload.get("triggered_by") != "human"
+        or payload.get("status") != "approved"
+        or not isinstance(decision, dict)
+        or decision.get("action") != "approved"
+        or not isinstance(target, dict)
+        or any(target.get(key) != value for key, value in expected_target.items())
+    ):
+        raise ManifestError(
+            f"approval checkpoint does not match Task snapshot: {checkpoint_path}"
+        )
+    return str(payload["id"]), hashlib.sha256(checkpoint_bytes).hexdigest()
+
+
+def _load_task_evidence(
+    task_paths: Iterable[str],
+    project_root: Path,
+    entries: dict[str, dict[str, str]],
+) -> tuple[list[dict[str, Any]], set[str]]:
     evidence: list[dict[str, Any]] = []
     authorized_files: set[str] = set()
     for raw_path in task_paths:
@@ -112,7 +168,9 @@ def _load_task_evidence(task_paths: Iterable[str]) -> tuple[list[dict[str, Any]]
         if task.get("status") != "approved":
             raise ManifestError(f"Task snapshot is not approved: {path}")
         approved_hash = task.get("approved_implementation_hash")
-        if not isinstance(approved_hash, str) or not approved_hash:
+        if not isinstance(approved_hash, str) or not re.fullmatch(
+            r"[0-9a-fA-F]{64}", approved_hash
+        ):
             raise ManifestError(f"Task snapshot lacks approved implementation hash: {path}")
         approved_events = [
             event
@@ -124,6 +182,29 @@ def _load_task_evidence(task_paths: Iterable[str]) -> tuple[list[dict[str, Any]]
         approval = approved_events[-1]
         if not approval.get("checkpoint_id") or not approval.get("checkpoint_path"):
             raise ManifestError(f"Task approval checkpoint metadata is incomplete: {path}")
+        source_lock = task.get("source_lock")
+        rollback = task.get("rollback")
+        if not isinstance(source_lock, dict) or not isinstance(rollback, dict):
+            raise ManifestError(f"Task snapshot lacks canonical source metadata: {path}")
+        source_path = _normalize_path(str(source_lock.get("source_path", "")))
+        rollback_path = _normalize_path(str(rollback.get("source_path", "")))
+        if source_path != rollback_path:
+            raise ManifestError(f"Task canonical source paths do not match: {path}")
+        source_entry = entries.get(source_path)
+        if not source_entry or source_entry.get("type") != "blob":
+            raise ManifestError(
+                f"Task canonical source is absent from candidate tree: {source_path}"
+            )
+        candidate_source_sha256 = hashlib.sha256(
+            _blob_bytes(project_root, source_entry["blob_hash"])
+        ).hexdigest()
+        if candidate_source_sha256 != approved_hash.lower():
+            raise ManifestError(
+                f"candidate source does not match approved implementation: {source_path}"
+            )
+        checkpoint_id, checkpoint_sha256 = _load_checkpoint_evidence(
+            project_root, task, approval, path
+        )
         target_input = (
             task.get("spec", {}).get("target_node", {}).get("input", {})
             if isinstance(task.get("spec"), dict)
@@ -135,9 +216,11 @@ def _load_task_evidence(task_paths: Iterable[str]) -> tuple[list[dict[str, Any]]
                 "task_id": task.get("task_id"),
                 "node_name": task.get("node_name"),
                 "snapshot_sha256": hashlib.sha256(payload_bytes).hexdigest(),
-                "approved_implementation_hash": approved_hash,
-                "checkpoint_id": approval["checkpoint_id"],
-                "checkpoint_path": approval["checkpoint_path"],
+                "canonical_source_path": source_path,
+                "candidate_source_sha256": candidate_source_sha256,
+                "approved_implementation_hash": approved_hash.lower(),
+                "checkpoint_id": checkpoint_id,
+                "checkpoint_sha256": checkpoint_sha256,
             }
         )
     return evidence, authorized_files
@@ -187,7 +270,9 @@ def build_manifest(
         [_normalize_path(path) for path in group]
         for group in source_replica_groups
     ]
-    task_evidence, authorized_files = _load_task_evidence(approved_task_snapshots)
+    task_evidence, authorized_files = _load_task_evidence(
+        approved_task_snapshots, project_root, entries
+    )
 
     inspected_paths = sorted(set([VERSION_PATH, *expected, *required_tests, *sum(replica_groups, [])]))
     file_evidence: dict[str, dict[str, Any]] = {}

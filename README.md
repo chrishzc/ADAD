@@ -4,7 +4,7 @@
 
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-2DD4BF">
-  <img alt="Version" src="https://img.shields.io/badge/version-1.6.4-38BDF8">
+  <img alt="Version" src="https://img.shields.io/badge/version-1.6.5-38BDF8">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
@@ -16,6 +16,12 @@
 本專案源自為 **Antigravity AI Agent** 開發的 Workspace Customization 擴充套件，旨在實行 **ADAD (架構驅動型智能體開發)** 開發模式；目前已擴展支援 **Claude Code**、**Codex CLI / 桌面 App** 等其他 Agent 平台，可依需求選擇要套用的一個或多個 Agent。
 
 ADAD 的核心理念是：**將「系統設計（架構）」與「程式碼實作（邏輯）」徹底解耦**。由人類把持高價值的架構與驗收 Checkpoint，並指派 Agent 在最小 Context 的約束下進行高精度的原子程式碼生成，以防範 AI 開發中的架構失控與 Context 膨脹問題。
+
+## ✨ 1.6.5 更新重點
+
+- **測試基礎設施修正**：修正 `task_backlog_completed_pytest.py` 四個 legacy 測試節點 ID 與 Windows 多進程 `.pytest_cache` race condition；補齊 `tests/conftest.py` 的 Schema 函式登記。
+- **設計文件狀態同步**：#85 驗收 checklist 全數補齊；#86 設計文件「尚未實作」旗標已移除，並附 signature diff 偏差說明。
+- **偏差標記**：`adad_release_advance.py` 加入 `ponytail:` 說明 `compile()` 作為 lint 近似的上限與升級路徑。
 
 ## ✨ 1.6.4 更新重點
 

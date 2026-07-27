@@ -1,6 +1,6 @@
 ## 5. 代辦事項總表（合併版，執行清單）
 
-以下代辦目前最高已使用編號為 #85，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
+以下代辦目前最高已使用編號為 #86，是根據第 1 節的能力缺口、加上工程稽核（README/測試/CI）盤點出來的具體
 待辦事項。**這節才是「現在要動手做哪一項」的答案**，第 1~4 節是「做完之後系統該
 長什麼樣子」的規格。
 
@@ -65,9 +65,10 @@
 | #72 | done | 不需要（SOP 文件契約） | 不適用 | `RELEASE_SOP.md` 已含 root/child count、FinanceImport、外部專案 upgrade 與 Actions 後本機更新驗收。 |
 | #81 | done | tests/test_pytest_regression_lifecycle.py::test_temporary_lifecycle_state_has_exact_fixed_fields | 存在 | 已完成 lifecycle 實作、TODO 清理及狀態推進。 |
 | #82 | CP-2 approved；1.6.4 preflight | tests/test_verification_basetemp_lifecycle.py | 存在 | CP-2 `adad_core@v18@81193f` 已核准（`CP-2-20260726T092718188069Z-adad_core`；implementation hash `90000ff8…8b509`）。Canonical 與兩份 generated replicas hash 已一致，focused verification 為 32 passed、1 skipped；尚待 1.6.4 release gate、snapshot commit 與 package evidence，完成前不得宣稱 deployed／released。 |
-| #83 | planned | — | 尚未建立 | `.agents/AGENTS.md` 僅保留專案硬性規則與 ADAD skill 入口；完整架構、Checkpoint 與地圖操作流程由 `adad-workflow/SKILL.md` 唯一承載。 |
-| #84 | planned | — | 尚未建立 | `adad_core` 需明確建立 Phase-2 末尾的交付步驟：`validated -> linted/tested -> deployed`，不得讓 approve 自動跳過中間狀態，並補齊對應 checklist / regression 驗證。 |
-| #85 | planned | — | 尚未建立 | 本次案例：純 README／一般文件變更與可證明不重疊的施工，被全域 Task／Source Lock 一律序列化而無法平行處理；需依風險分級豁免或縮小鎖定單位，同時保留 fail-closed 與審計證據。 |
+| #83 | done | 不需要（資產同步 / 規則重構） | 不適用 | `.agents/AGENTS.md` 已縮減為硬性規則與 skill 入口，副本全數同步，多餘重複說明已移至 `adad-workflow/SKILL.md`。**不啟動獨立 CP（已於規格/同步變更中完成）。** |
+| #84 | done | `test_delivery_gate.py`, `test_release_advance.py`, `test_sync_assets.py` | 存在 | 機械化交付推進 CLI (`adad_release_advance.py`) 與門禁純函式 (`delivery_gate.py`) 已完成且真邏輯落地。實作真實 `check_domain_boundary` / `check_invariants` 阻斷門禁、Fail-Safe 結構變更分級、`source_hash` Hash-Guard 快取避重、分段交易與 Audit 證據寫入。詳細設計與 Checklist 見 `docs/task_84_improvement_plan.md`。 |
+| #85 | done | `test_source_lock_exemption.py`, `test_adad_pretooluse_gate.py` | 存在 | 風險分級豁免模型（Deny-First: Level 2 > Level 1 > Level 0）與 gate 主流程補強已完全完成。支援異質 Schema Key（`TargetFile`/`file_path`）與 Tool Name 相容（P0）、YAML 壞檔 `L2-CORRUPT` Fail-Closed 阻斷（P0）、`.py.` 雙副檔名偽裝阻斷（P1）、深度巢狀與 Symlink 逃逸防禦（P1/P2），461 項測試全數通過。 |
+| #86 | done | `test_reviewer_loop.py` | 存在 | Task 生命週期自動化（Reviewer Loop）：實現無狀態調度器 `adad_loop_runner.py`（0 Token 排程）、五階段短路機械層 `verify_against_spec.py`（含 `py_compile` 語法快篩、Diff 去重雜湊快篩、Invariants、Verification Case 與 Signature AST 比對）、解鎖 Agent 可觸發的 `task_return_to_planning`（狀態轉退 `assigned`，History 舊紀錄自動壓縮）、受控自動蓋章 `task_auto_certify`（重跑白名單驗證指令校驗、`code_reasoning_only` 強制降級），與 PreToolUse Gate `L2-SPEC-BOUND` Task Spec 權限防護。設計文件見 `ADAD_reviewer_loop_design.md`。 |
 ### A. 工程衛生（文件與實作落差 / Dogfooding / 測試 CI）
 
 |#|代辦事項|歸屬|優先度|
@@ -85,7 +86,7 @@
 |64|~~測試 harness 繼承外層 GitHub Actions 的 `CI`／`GITHUB_*` event context，使臨時 repo 誤走 `HEAD~1` 或遠端 base；預設隔離並保留明確 opt-in。~~ **✅ 已完成**（見 `tests/test_adad_pre_commit.py`。）|測試 / Dogfooding|已完成（原 P0）|
 |65|~~Release SOP 必須記錄巢狀測試與外層 CI context 的邊界、重現方式及驗收條件，避免同類 CI 修補反覆浪費發布時間。~~ **✅ 已完成**（`RELEASE_SOP.md` 的最小重現與驗收條件。）|文件 / Dogfooding|已完成（原 P0）|
 |82|pytest 外層暫存根生命週期：由統一 runner 建立受控 `--basetemp`；成功後僅清除本次 owned root，失敗時保留並輸出路徑；拒絕 repo／repo parent、symlink、junction、identity mismatch 與未通過 preflight 的清理。 **✅ Canonical CP-2 與 replica sync 已完成**（`adad_core@v18@81193f`；三份 hash 一致；32 passed、1 skipped）。**⏳ 1.6.4 發行待辦**：release gate、完整測試、development snapshot commit 與 package evidence；完成前不得宣稱 deployed／released。|測試 / Dogfooding|CP-2／同步完成；1.6.4 發行待辦（原 P1）|
-|83|**ADAD 指示檔分層與去重**：`.agents/AGENTS.md` 縮為每輪必讀的專案硬性規則與 `adad-workflow` skill 入口；完整 ADAD 架構、Checkpoint 與地圖操作流程僅保留於 `.agents/skills/adad-workflow/SKILL.md`。同步調整產物，避免重複規範佔用固定上下文。|ADAD 文件 / 資產同步|**P1**|
+|83|~~**ADAD 指示檔分層與去重**：`.agents/AGENTS.md` 縮為每輪必讀的專案硬性規則與 `adad-workflow` skill 入口；完整 ADAD 架構、Checkpoint 與地圖操作流程僅保留於 `.agents/skills/adad-workflow/SKILL.md`。同步調整產物，避免重複規範佔用固定上下文。~~ **✅ 已完成**（`.agents/AGENTS.md` 已完成瘦身與指引重定向；副本經由 `sync_assets.py` 同步完畢，測試合格。**不建立獨立 CP（在規格與資產同步中完成）**。）|ADAD 文件 / 資產同步|已完成（原 P1）|
 |66|~~Task 匯出的 pattern／decision summary 在參考文件不存在時夾帶載入錯誤文字，污染子代理上下文；應改為乾淨的缺省摘要或結構化 warning。~~ **✅ 已完成**（結構化 `context_warnings`；見 `tests/test_generate_task.py`。）|Task 核發品質|已完成（原 P1）|
 |67|~~Verification 對「鍵不存在」與 `null` 缺少明確語意及核發前一致性檢查，造成規格與 Algorithm 衝突；應提供 deletion assertion 或 Readiness gate。~~ **✅ 已完成**（`expect_absent_keys`；見 `tests/test_verification_absence_contract.py`。）|Task 核發品質|已完成（原 P1）|
 |68|~~Reviewer 判定 Task 編碼異常前應做 strict UTF-8 byte decode、replacement character 與 JSON read-back；不得只憑終端顯示退回，避免誤算退回次數。~~ **✅ 已完成**（`.agents/AGENTS.md` Reviewer Unicode 證據規則。）|Reviewer 品質|已完成（原 P1）|
@@ -274,3 +275,21 @@ R1 修訂摘要：
 - #59、#60、#58、#54、#85、#37（剩餘 case fixture schema + verifier 接線）、#55、#56、#57、#33、#29；低優先再評估 #28、#47。
 
 `#25/#27/#30/#34/#38/#39` 這幾項工程量大或收益不確定，建議明確標記 P2，避免搶資源。
+
+---
+
+### 附錄：Backlog 回歸測試備註（給其他 Agent）
+
+- **固定回歸命令**：`pytest -m regression_backlog -q`
+- **用途**：每次修改後，先跑此命令確認「固定 backlog 回歸測試」是否受影響。
+- **標記回歸測試檔清單**：
+  - `tests/test_check_source_binding.py`
+  - `tests/test_verification_absence_contract.py`
+  - `tests/test_verify_implementation.py`
+  - `tests/test_generate_task.py`
+  - `tests/test_adad_task.py`
+  - `tests/test_pytest_regression_lifecycle.py`
+  - `tests/task_backlog_completed_pytest.py`
+- **清理與標記規範**：
+  - `regression_backlog` 是永久回歸資產，不得與 `temporary` 共標。
+  - `temporary` 僅限明確目的的 `tests/_temporary/**/*.py`；僅在成功 session 可清理本次已收集檔案。

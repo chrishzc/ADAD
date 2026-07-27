@@ -561,17 +561,17 @@
 - Source: adad_cli/__init__.py
 - Preferred Pattern: single_source_of_truth
 - Complexity: low
-- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.4；不得從 dirty tree 產生正式 release artifact]
+- Decisions: [版本只允許在 adad_cli.__version__ 維護；pyproject.toml 必須持續使用動態版本；本次發布目標為 1.6.5；不得從 dirty tree 產生正式 release artifact]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.4'"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+  - command: {"argv": ["{project_python}", "-c", "import adad_cli; assert adad_cli.__version__ == '1.6.5'"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: []
 - Input:
   - release_version: string
 - Output:
   - package_version: string
 - TODO:
-  - [ ] 發布 1.6.4：pytest 外層 basetemp owned-root 生命週期與 fail-closed cleanup
+  - [ ] 發布 1.6.5：修正 task backlog legacy 測試節點 ID、消除 Windows cache race condition、補齊 conftest.py schema 登記與設計文件狀態同步
 - Checkpoint:
   - [x] CP-1-075-PATCH-RELEASE (validated：2026-07-16 人工要求更新 1.6.1 並安裝本機版本)
 
@@ -581,10 +581,10 @@
 - Description: 對齊 README 的 CLI 工具表與 Phase/Checkpoint 文件，使其反映 Task 快照工作流（#1-2）。
 - Source: README.md
 - Preferred Pattern: documentation_as_contract
-- Decisions: [1.6.4 README 必須同步更新版本徽章與版本重點；不得宣稱尚未完成的 prepare_isolation 或未通過 release preflight 的功能已發布]
+- Decisions: [1.6.5 README 必須同步更新版本徽章與版本重點；不得宣稱尚未完成的 prepare_isolation 或未通過 release preflight 的功能已發布]
 - Invariants: []
 - Verification:
-  - command: {"argv": ["{project_python}", "-c", "from pathlib import Path; text=Path('README.md').read_text(encoding='utf-8'); head='\\n'.join(text.splitlines()[:20]); assert '1.6.4' in head; assert '1.6.3' not in head"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+  - command: {"argv": ["{project_python}", "-c", "from pathlib import Path; text=Path('README.md').read_text(encoding='utf-8'); head='\\n'.join(text.splitlines()[:20]); assert '1.6.5' in head; assert '1.6.4' not in head"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Dependencies: [generate_task, adad_task, check_domain_boundary]
 - Input: {}
 - Output:
@@ -660,11 +660,21 @@
 ##### Module: release_sop
 - Type: documentation
 - Observability: not_required
-- Description: #65 整理 CI/linked-worktree 發布契約；#72 新增 sub_maps root-count、upgrade 與外部專案驗收；#73 改為完整 development snapshot，避免只發布最後 commit 而遺漏累積修正。
+- Description: #65 整理 CI/linked-worktree 發布契約；#72 新增 sub_maps root-count、upgrade 與外部專案驗收；#73 改為完整 development snapshot；#82-R3 納入 v1.6.4 發布事故經驗，明確區分 candidate、CI、GitHub Release 與本機安裝驗收。
 - Source: docs/RELEASE_SOP.md
 - Preferred Pattern: documentation_as_contract
 - Complexity: low
-- Decisions: [release worktree 必須從 origin/main 建立；發布內容必須等於指定 development commit 的完整 tracked snapshot，禁止只取最後 commit 的 diff；sub_maps 發布必須驗證 root/child count 不變、FinanceImport 可查與 upgrade 後不膨脹；禁止 no-verify；Actions 成功後才更新本機]
+- Algorithm:
+  - 從已 fetch 的 origin/main 建立全新 release worktree，並以指定 development commit 的完整 tracked snapshot 建立 candidate；不得以含 ignored Task snapshot、source lock 或其他 runtime state 的既有 worktree 作為乾淨發布證據
+  - 執行 pre-commit/CI 模擬時必須提供 CI=true 與正確 GITHUB_BASE_REF，且以 candidate 的 staged/tracked diff 為檢查對象；沒有 staged diff 的靜默成功不得視為 CI 證據
+  - Task snapshots 與 source locks 僅作為外部 authorization evidence，不得納入 tracked release tree、wheel 或其他發布產物
+  - canonical source 同步副本後，必須在乾淨 candidate worktree 比對 canonical、package resource 與 agent replica 的內容 hash，並驗證 required tests 均存在於 candidate tree
+  - Windows 驗證一律使用專案 venv、全新 OS-temp basetemp、禁用 cacheprovider 與明確外層 timeout；無正常 exit code 一律列為 unverified。sandbox/ACL 失敗須與產品測試失敗分流，必要時由相同檔案 owner 重跑完全相同指令
+  - 打包前檢查 build frontend 與其必要依賴；完整套件測試、invariants、implementation verification、敏感資料掃描與 candidate manifest 任一失敗即停止
+  - push 前重新 fetch 並比對 origin/main、candidate commit 與 tag；禁止 no-verify。上傳完成、GitHub Actions 成功、Release 可取得與安裝驗收必須分開記錄
+  - 已發布 tag 與 Release assets 視為不可變；發布後修復不得移動 tag 或覆寫既有資產，應建立 patch release
+  - 僅在精確 candidate commit 的 GitHub Actions 全綠後，才由同一 commit 重建或取得本機 wheel，並驗證 package metadata、CLI version 與 packaged canonical resource hash
+- Decisions: [release worktree 必須從 origin/main 建立；發布內容必須等於指定 development commit 的完整 tracked snapshot；fresh worktree 才能作為 CI 與 packaging 證據；Task snapshots 與 source locks 是外部授權證據而非發布內容；CI 模擬必須顯式設定事件環境且不可用無 staged diff 的結果充當證據；Windows ACL 或 sandbox 失敗必須與測試失敗分流；禁止 no-verify；tag 與 Release assets 發布後不可移動或覆寫；Actions 成功後才更新本機並驗證版本與 packaged resource hash]
 - Invariants: []
 - Verification: []
 - Dependencies: [adad_pre_commit, adad_core, continuous_integration]
@@ -677,11 +687,13 @@
   - [ ] #65：補齊巢狀臨時 repo 的 CI event context 隔離 SOP
   - [ ] #72：補齊 sub_maps 發布、安裝與外部專案 upgrade 驗收
   - [ ] #73：以完整 development snapshot 發布並驗證漏帶檔案為零
+  - [ ] #82-R3：回填 v1.6.4 fresh-worktree、CI 證據、不可變發布與本機安裝驗收經驗
 - Checkpoint:
   - [x] CP-1-063-SOP (validated：2026-07-15 人工核准納入發布經驗)
   - [x] CP-1-065-SOP (validated：2026-07-15 人工核准納入巢狀 CI 經驗)
   - [x] CP-1-072-SUBMAP-RELEASE (validated：2026-07-15 人工要求更新本機版本)
   - [x] CP-1-073-FULL-SNAPSHOT (validated：2026-07-16 人工要求修正發布 SOP)
+  - [x] CP-3-082-R3-RELEASE-SOP (validated：2026-07-26 人工核准納入 v1.6.4 發布經驗)
 
 ##### Module: release_candidate_manifest
 - Type: tool
@@ -695,9 +707,12 @@
   - candidate_mode=commit 時 candidate_revision 必填；candidate_mode=staged_index 時 candidate_revision 必須省略。其他組合、解析失敗、unmerged index 或 tree identity 不確定時立即失敗
   - 以 Git object database 解析 candidate tree hash；manifest 的所有檔案內容與 hash 均從 candidate tree 讀取，不讀取 working-tree bytes 作為發布證據
   - expected_release_files、required_test_files 與 source_replica_groups 均由呼叫端明確提供；工具不得由 working tree、檔名慣例或模糊 dependency 自行推導
-  - approved_task_snapshots 是本機外部 authorization evidence，不是 release artifact；strict-read JSON 後驗證 status=approved、approved implementation hash 與 checkpoint metadata，並只在 manifest 保存 snapshot digest 與核准證據
+  - approved_task_snapshots 是本機外部 authorization evidence，不是 release artifact；strict-read JSON 後驗證 status=approved、非空 approved implementation hash，以及 source_lock.source_path 與 rollback.source_path 為同一個 repo-relative、無 `..` 的 canonical source path
+  - 對每份 Task 從 candidate Git tree 讀取 canonical source blob bytes並計算 SHA-256，必須精確等於 approved_implementation_hash；禁止以 working-tree bytes、replica 彼此一致或 Task 內自述 hash 取代此綁定
+  - strict-read Task approval event 指向的 Checkpoint YAML，驗證 triggered_by=human、status/action=approved，且 node_name、task_id、system_map_version、source_hash 與 Task 完全一致；缺失、不可讀或不一致一律 fail-closed
   - 列出 candidate tree 內版本檔、expected files、required tests、canonical source 與同步副本的存在性與 blob hash；Task snapshot path 或 bytes 不得加入 candidate tracked-file 清單
-  - 比對每組 canonical source 與 replica blob；required test 不在 candidate tree、expected file 缺失、Task approval 無效或版本契約不一致時 fail-closed
+  - 比對每組 canonical source 與 replica blob；required test 不在 candidate tree、expected file 缺失、Task approval 無效、approved implementation hash 不符、Checkpoint 不可信或版本契約不一致時 fail-closed
+  - task_authorization_evidence 固定包含 task_id、node_name、snapshot_sha256、canonical_source_path、candidate_source_sha256、approved_implementation_hash、checkpoint_id 與 checkpoint_sha256，不得保存 Task 或 Checkpoint 原始 bytes
   - 特別涵蓋「source 已 staged、配套測試只存在 dirty worktree」案例，必須回報 manifest_valid=false
   - stdout 固定輸出單一 JSON object。manifest_valid=true 時 exit 0；任何契約 blocker 或輸入錯誤時輸出 manifest_valid=false 並 exit 1；未預期內部錯誤輸出 fixed-shape diagnostics 並 exit 2
   - 只輸出 manifest evidence，不建立 worktree、不執行測試、不建立 commit/tag 或 push
@@ -731,6 +746,7 @@
 - Checkpoint:
   - [x] CP-1-087-A-RELEASE-MANIFEST (validated：2026-07-26 人工核准拆分)
   - [x] CP-3-087-A-R1-EXPLICIT-INPUTS (validated：2026-07-26 人工要求直接修正契約)
+  - [x] CP-3-087-A-R2-AUTHORIZATION-BINDING (validated：2026-07-27 人工核准 candidate source hash 與實體 Checkpoint 信任綁定)
 
 ##### Module: release_preflight_runner
 - Type: tool
@@ -743,13 +759,14 @@
   - CLI 固定為 `release_preflight.py --manifest PATH --project-root PATH --project-python PATH --base-revision REV --pytest-timeout N --gate-timeout N --build-timeout N --outer-timeout N --task-snapshot PATH...`；task-snapshot 可重複
   - strict-read manifest JSON，只接受 manifest_valid=true、blockers=[]、candidate_tree_hash 為可由 project_root Git object database 重新解析的 tree；任何 identity drift 立即停止
   - 每個外部 Task snapshot 必須 strict-read、status=approved，且 SHA-256 與 manifest.task_authorization_evidence 的 task_id/snapshot_sha256 精確相符；只複製至 release worktree 的 `.agents/tasks` 作本機 Gate 輸入，不加入 index
-  - outer_timeout 必須至少為 pytest_timeout + 2*gate_timeout + build_timeout + 30 秒；不成立時拒絕啟動。每一步 subprocess 只使用自己的 timeout，整體另以 monotonic deadline 限制
-  - 在 OS temp 以 exclusive creation 建立 `adad_release_<nonce>` owned root並保存 lstat identity；以 `git worktree add --detach WORKTREE BASE_REVISION` 建立基底，再執行 `git read-tree --reset -u CANDIDATE_TREE`，禁止建立 branch 或 commit
-  - Windows 在 WORKTREE/.venv 建立指向 project_python 所屬 venv root 的 Junction；POSIX 建立 symlink。建立後必須驗證 link/reparse identity，且 link 永遠視為 runner-owned link、target 永遠 unowned
+  - outer_timeout 必須至少為 pytest_timeout + 2*gate_timeout + build_timeout + 30 秒；不成立時拒絕啟動。每一步啟動前計算 remaining=deadline-monotonic_now，effective_timeout=min(step_timeout, remaining)；remaining<=0 時禁止啟動並回報 preserved_timeout
+  - 在 OS temp 透過 adad_core._create_owned_verification_root 建立 opaque owned root、unpredictable ownership credential 與初始 identity；runner 不得依賴或改寫 owned-root basename，並禁止用無 credential 的一般 tempfile root 進入安全 cleanup
+  - 以 `git worktree add --detach WORKTREE BASE_REVISION` 建立基底，再執行 `git read-tree --reset -u CANDIDATE_TREE`，禁止建立 branch 或 commit
+  - Windows 在 WORKTREE/.venv 建立指向 project_python 所屬 venv root 的 Junction；POSIX 建立 symlink。建立後保存 link/reparse identity，移除前重新比對；link 永遠視為 runner-owned link、target 永遠 unowned
   - 固定依序執行：`git diff --cached --check`；`PROJECT_PYTHON -m pytest -q --color=no --basetemp OWNED_ROOT/pytest-basetemp -p no:cacheprovider`；`PROJECT_PYTHON .agents/skills/adad-workflow/scripts/adad_pre_commit.py`；`PROJECT_PYTHON -m adad_cli.sync_assets --check`；以 PROJECT_PYTHON 從 candidate worktree import `adad_cli.__version__` 並精確比對 manifest.version；`PROJECT_PYTHON -m build --outdir OWNED_ROOT/dist`
   - build 成功後必須確認 OWNED_ROOT/dist 恰有至少一個含 manifest.version 的 wheel 與一個 sdist，並保存檔名、size、SHA-256；artifact 只屬暫存驗證證據，不上傳
   - 保存每一步 name、argv、cwd、exit code、timeout、duration、stdout/stderr 摘要與 candidate tree hash；任何 nonzero、timeout、KeyboardInterrupt 或 outer deadline 到期都停止後續步驟
-  - cleanup 先驗證並移除 runner-owned venv link本身，再執行 `git worktree remove --force WORKTREE`；只有 Git worktree 已解除且 owned root identity 通過 adad_core fail-closed preflight 時才可刪除 owned root
+  - cleanup 先驗證並移除 runner-owned venv link本身，再執行 `git worktree remove --force WORKTREE`；只有 Git worktree 已解除且 owned root 的 credential、identity、quarantine 與 adad_core fail-closed preflight 全部通過時才可刪除 owned root
   - command/Gate 失敗時保留 owned root；成功時才嘗試 cleanup。cleanup 不確定時 release_ready=false、manual_action_required=true 並回報診斷路徑
   - stdout 固定輸出單一 JSON object；release_ready=true 時 exit 0，任何 Gate/cleanup/輸入 blocker 時 exit 1，未預期內部錯誤時以 fixed-shape diagnostics exit 2
   - 成功時只輸出 release_ready=true evidence；不得建立 commit、tag、push、核准 Actions 或上傳套件
@@ -788,6 +805,8 @@
 - Checkpoint:
   - [x] CP-1-087-B-RELEASE-RUNNER (validated：2026-07-26 人工核准拆分)
   - [x] CP-3-087-B-R1-EXECUTION-CONTRACT (validated：2026-07-26 人工要求直接補齊 runner 契約)
+  - [x] CP-3-087-B-R2-DEADLINE-OWNERSHIP (validated：2026-07-27 人工核准 outer deadline 與 owned-root credential 修復)
+  - [x] CP-3-087-B-R3-OPAQUE-ROOT-NAME (validated：2026-07-27 人工核准 owned-root basename 由 adad_core 管理)
 
 ##### Module: windows_verification_interrupt_runbook
 - Type: documentation
@@ -1069,7 +1088,7 @@
   - rendered_instructions: array
 - TODO:
   - [ ] 規格第 2 節：平台 instruction SSOT 與 renderer
-  - [ ] 重整 ADAD 指示檔分層：將 `.agents/AGENTS.md` 縮為硬性規則與 skill 入口；完整 ADAD 架構、Checkpoint 與地圖操作流程僅保留於 `adad-workflow/SKILL.md`，降低每輪固定上下文成本。
+  - [x] 重整 ADAD 指示檔分層：將 `.agents/AGENTS.md` 縮為硬性規則與 skill 入口；完整 ADAD 架構、Checkpoint 與地圖操作流程僅保留於 `adad-workflow/SKILL.md`，降低每輪固定上下文成本。
 - Checkpoint:
   - [ ] CP-1-035 (planned)
 

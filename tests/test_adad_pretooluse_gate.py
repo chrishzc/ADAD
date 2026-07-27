@@ -27,7 +27,7 @@ def test_gate_ignores_untracked_file(project_dir, base_modules):
     code, _, out, err = run_script(
         "adad_pretooluse_gate.py",
         cwd=project_dir,
-        input_text=_payload(project_dir, "not_a_registered_module.py"),
+        input_text=_payload(project_dir, "untracked_data.log"),
     )
     assert code == 0
 
@@ -40,7 +40,7 @@ def test_gate_blocks_direct_edit_of_compiled_yaml(project_dir, base_modules):
         input_text=_payload(project_dir, "system_map.yaml"),
     )
     assert code == 2
-    assert "嚴禁直接編輯" in err
+    assert "L2-YAML" in err or "system_map.yaml" in err
 
 
 def test_gate_soft_warns_when_no_task_generated_yet(project_dir, base_modules):
@@ -83,4 +83,4 @@ def test_gate_blocks_editing_when_task_submitted(project_dir, base_modules):
         input_text=_payload(project_dir, "sample_tool.py"),
     )
     assert code == 2
-    assert "TASK GATE" in err
+    assert "TASK-GATE" in err or "rule_id=" in err

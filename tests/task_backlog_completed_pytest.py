@@ -43,10 +43,10 @@ _BACKLOG_TESTS = {
     "#44": "tests/test_generate_task.py::test_task_schema_v3_rejects_missing_fidelity_field",
     "#46": "tests/test_generate_task.py::test_task_schema_accepts_complete_v3_snapshot",
     "#48": "tests/test_upgrade_project.py::test_upgrade_replaces_root_schemas_and_keeps_backups",
-    "#49": "tests/test_task_complexity.py",
-    "#50": "tests/test_sync_assets.py::test_sync_twice_is_idempotent",
-    "#51": "tests/test_blocked_task_reporting.py",
-    "#52": "tests/test_prepare_isolation.py::test_prepare_isolation",
+    "#49": "tests/test_task_complexity.py::test_evaluate_task_complexity_decision_matrix[low-False-False-False-low-False--issue]",
+    "#50": "tests/test_sync_assets.py::test_sync_twice_is_idempotent_in_isolated_target",
+    "#51": "tests/test_blocked_task_reporting.py::test_mcp_initialization_and_tool_schema_are_structured",
+    "#52": "tests/test_prepare_isolation.py::test_creates_owned_workspace_and_preserves_task_snapshot",
     "#53": "tests/test_adad_task.py::test_reject_rejected_without_human_tty",
     "#54": "tests/test_generate_task.py::test_task_schema_accepts_complete_v3_snapshot",
     "#57": "tests/test_compile_map.py::test_normalize_markdown_source_code_fences",
@@ -63,7 +63,7 @@ def test_backlog_completed_pytest_case_passes(task_id: str, test_node_id: str) -
     assert pathlib.Path(file_path).exists(), f"{task_id}: {file_path} 不存在"
 
     # 2. 執行具體測試案例，並驗證其確實通過
-    cmd = [sys.executable, "-m", "pytest", test_node_id, "-v", "--no-header"]
+    cmd = [sys.executable, "-m", "pytest", test_node_id, "-v", "--no-header", "-p", "no:cacheprovider"]
     env = dict(os.environ)
     env["PYTHONPATH"] = "."
     res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)

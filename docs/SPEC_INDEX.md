@@ -1,5 +1,9 @@
 # ADAD 套件規格書：與 Agent Kernel 的介面契約（修正合併版）
 
+> 這份檔案原名 `#規格總覽.md`，放在 repo 根目錄。因為檔名開頭是 `#` 又混雜中文，
+> 在部分工具鏈（例如解壓縮、markdown 連結）容易出現編碼問題，改名為純 ASCII
+> 的 `docs/SPEC_INDEX.md`，內容未變。
+
 本檔合併了兩份性質不同的文件，**這次修正把先前合併時遺失的第 1 節補回來**：
 
 - **第 1 節**回答「ADAD 需要 Kernel 提供哪些能力、這些能力在自建 Kernel vs
@@ -16,9 +20,10 @@
 
 ## 目錄
 
-- [01 Kernel Interface](docs/specifications/01_kernel_interface.md)
-- [02 Platform Instructions](docs/specifications/02_platform_instructions.md)
-- [03 Toolkit Manifest](docs/specifications/03_toolkit_manifest.md)
-- [04 Compatibility Checklist](docs/specifications/04_compatibility_checklist.md)
-- [05 Task Backlog](docs/specifications/05_task_backlog.md)
-- [06 Multi Module Collaboration](docs/specifications/06_multi_module_collaboration.md)
+- [01 Kernel Interface](specifications/01_kernel_interface.md)
+- [02 Platform Instructions](specifications/02_platform_instructions.md)
+- [03 Toolkit Manifest](specifications/03_toolkit_manifest.md)
+- [04 Compatibility Checklist](specifications/04_compatibility_checklist.md)
+- [05 Task Backlog](specifications/05_task_backlog.md)
+- [06 Multi Module Collaboration](specifications/06_multi_module_collaboration.md)
+- [07 Checkpoint Payload Format](specifications/07_checkpoint_payload_format.md)

@@ -2,7 +2,17 @@
 
 本專案遵循 [Semantic Versioning](https://semver.org/)。
 
-## Unreleased
+## 1.6.5 — 2026-07-27
+
+### Fixed
+
+- `task_backlog_completed_pytest.py`：修正 #49/#50/#51/#52 四個 legacy 測試節點 ID（重新對應至改名後的測試函式、補上精確 `::` node ID），並在子程序呼叫加入 `-p no:cacheprovider`，消除 Windows 多進程並發寫 `.pytest_cache` 的 race condition。
+- `adad_release_advance.py`：加入 `ponytail:` 偏差說明，說明 `compile()` 僅檢查語法錯誤（SyntaxError/IndentationError）而非完整 lint，標記上限與升級路徑（ruff/flake8）。
+
+### Changed
+
+- `docs/ADAD_reviewer_loop_design.md`：移除「設計討論稿，尚未實作」旗標，更新為已完成狀態；附 signature diff（步驟 4）現況偏差說明，留待未來強化（`L1-SIG-MISMATCH`）。
+- `docs/task_85_improvement_plan.md`：補全驗收 checklist，全數標記為 `[x]`（實作已通過但文件未同步）。
 
 ## 1.6.4 — 2026-07-26
 

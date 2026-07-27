@@ -33,6 +33,9 @@ schema = ["jsonschema>=4.0"]
 dev = ["pytest>=7.0", "setuptools>=61", "wheel"]
 
 [tool.pytest.ini_options]
+addopts = [
+    "--color=no",
+]
 testpaths = ["tests"]
 markers = [
     "regression_backlog: tests required for fixed backlog regression checks after changes",

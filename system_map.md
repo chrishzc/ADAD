@@ -830,7 +830,7 @@
 - Type: service
 - Observability: not_required
 - Description: #81 建立 pytest 回歸資產生命週期：`regression_backlog` 是永久保留的最小回歸集；暫時測試只在顯式 temporary 標記、受限路徑與成功 session 後清理。
-- Source: tests/conftest.py::pytest_configure,pytest_collection_modifyitems,pytest_runtest_makereport,pytest_sessionfinish,temporary_artifact_root,_is_own_temporary_root,_is_regression_backlog_marker,_is_temporary_marker,_is_temporary_path_allowed,_item_path,_path_safe_for_temporary,_temporary_lifecycle_state,_temporary_root_identity,_temporary_test_purpose
+- Source: tests/conftest.py::pytest_configure,pytest_collection_modifyitems,pytest_runtest_makereport,pytest_sessionfinish,temporary_artifact_root,_is_own_temporary_root,_is_regression_backlog_marker,_is_temporary_marker,_is_temporary_path_allowed,_item_path,_path_safe_for_temporary,_temporary_lifecycle_state,_temporary_root_identity,_temporary_test_purpose,_writable_dir_probe,_safe_python_temp_root,_safe_pytest_basetemp,_inject_safe_tmp_env,_ensure_basetemp_in_args,_coerce_basetemp_arg,pytest_load_initial_conftests,pytest_sessionstart
 - Preferred Pattern: pytest_plugin
 - Complexity: medium
 - Algorithm:
@@ -904,22 +904,23 @@
 ##### Module: adad_pretooluse_gate
 - Type: tool
 - Observability: not_required
-- Description: 掛在 Claude Code 的 PreToolUse hook 上，在 Edit/Write/MultiEdit 工具呼叫「執行前」攔截：目標檔案對應的 Task 快照狀態不允許編輯時直接 exit 2 擋下，避免 agent 白花 token 寫出會被丟棄的程式碼；無法判斷的情況一律放行，不取代 pre-commit/CI 的完整檢查。
+- Description: 掛在 Claude Code / Antigravity 的 PreToolUse hook 上，在 Edit/Write/MultiEdit 及 replace_file_content 等工具呼叫「執行前」攔截：#85 三級風險分級豁免模型（Level 0 根 README/docs 文件短路放行；Level 1/2 維持 Fail-Closed 與 Task 授權）；支援多元 Schema Key 解析與 system_map.yaml 損毀時的全域 Fail-Closed 阻斷。
 - Source: adad_source/agents/skills/adad-workflow/scripts/adad_pretooluse_gate.py
 - Preferred Pattern: none
-- Decisions: []
+- Decisions: [PreToolUse gate 支援異質 Tool Name 與 TargetFile 多重 Key；system_map.yaml 損毀時採 L2-CORRUPT Fail-Closed 阻斷 (Exit 2)；.py. 偽裝檔名拒絕 Level 0 豁免並觸發 L1-UNTRACKED 阻斷]
 - Invariants: []
-- Verification: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_source_lock_exemption.py", "tests/test_adad_pretooluse_gate.py", "-q", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
 - Observability: not_required
 - Dependencies: [adad_core]
 - Input:
-  - stdin: object（Claude Code hook payload，含 tool_input.file_path）
+  - stdin: object（Hook payload，相容 tool_input.file_path, TargetFile, target_file, path 等 Key）
 - Output:
   - exit_code: string（0=放行；2=阻擋，原因寫在 stderr）
 - TODO:
-  - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
+  - [x] #85：風險分級豁免（Level 0 文件放行，Level 1/2 Fail-Closed），支援異質 Schema 與壞檔 Fail-Closed 防禦
 - Checkpoint:
-  - [ ] CP-1-012 (planned)
+  - [x] CP-1-085 (validated)
 
 ##### Module: adad_task
 - Type: tool
@@ -1095,10 +1096,41 @@
   - 建立暫存工作區並將 fixture 複製到指定相對路徑；所有來源與目的路徑必須限制於專案根目錄或暫存工作區。
   - 逐步以 shell=False 執行 argv，套用 {python}、{source}、{project}、{workspace} placeholder、timeout 與預期 exit code。
   - 任一步驟失敗即停止該 integration_case，截斷回報 stdout/stderr，並在 finally 清理暫存工作區。
-- TODO:
-  - [ ] 補齊架構地圖登記（本次新增，尚未走完 CP-1/CP-2 審查）
-- Checkpoint:
-  - [ ] CP-1-016 (planned)
-  - [x] CP-3-004 (validated：command／integration_case 多型驗證)
+##### Module: verify_against_spec
+- Type: tool
+- Observability: not_required
+- Description: #86 機械層審查腳本，包含五階段短路快篩鏈（語法快篩 py_compile、Diff 去重雜湊快篩、Invariants、Verification Cases 與 Signature 比對），輸出統一結構化雜湊與 mismatch。
+- Source: adad_source/agents/skills/adad-workflow/scripts/verify_against_spec.py
+- Preferred Pattern: none
+- Decisions: []
+- Invariants: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_reviewer_loop.py", "-q", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+- Observability: not_required
+- Dependencies: [adad_core]
+- Input:
+  - node_name: string
+- Output:
+  - pass: boolean
+  - mismatches: array
+  - fingerprint: string
+
+##### Module: adad_loop_runner
+- Type: tool
+- Observability: not_required
+- Description: #86 無狀態微型調度器，輪詢 Task JSON 狀態（assigned -> submitted -> approved）並比照 CI Runner 派工，排程調度零 LLM Token 消耗。
+- Source: adad_source/agents/skills/adad-workflow/scripts/adad_loop_runner.py
+- Preferred Pattern: none
+- Decisions: []
+- Invariants: []
+- Verification:
+  - command: {"argv": ["{project_python}", "-m", "pytest", "tests/test_reviewer_loop.py", "-q", "-p", "no:cacheprovider"], "cwd": "project", "expect_exit": 0, "timeout": 30}
+- Observability: not_required
+- Dependencies: [adad_core]
+- Input:
+  - node_name: string
+- Output:
+  - status: string
+  - action: string
 
 <!-- include docs/domains/adad_roadmap.md -->

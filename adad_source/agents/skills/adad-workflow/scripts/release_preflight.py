@@ -9,9 +9,9 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
-import tempfile
 import time
 from typing import Any
 
@@ -149,7 +149,30 @@ def _git(project_root: Path, timeout: int, *args: str) -> dict[str, Any]:
     )
 
 
-def _create_venv_link(link: Path, target: Path, timeout: int) -> None:
+def _link_identity(link: Path) -> tuple[int, int, int, int]:
+    try:
+        link_stat = os.lstat(link)
+    except OSError as exc:
+        raise PreflightError(f"unable to inspect venv link identity: {exc}") from exc
+    reparse_tag = int(getattr(link_stat, "st_reparse_tag", 0) or 0)
+    is_link = stat.S_ISLNK(link_stat.st_mode)
+    is_reparse = bool(
+        os.name == "nt"
+        and int(getattr(link_stat, "st_file_attributes", 0) or 0) & 0x400
+    )
+    if not is_link and not is_reparse:
+        raise PreflightError("venv link identity could not be verified")
+    return (
+        int(link_stat.st_dev),
+        int(link_stat.st_ino),
+        stat.S_IFMT(link_stat.st_mode),
+        reparse_tag,
+    )
+
+
+def _create_venv_link(
+    link: Path, target: Path, timeout: float
+) -> tuple[int, int, int, int]:
     if os.name == "nt":
         result = _run(
             ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
@@ -160,18 +183,23 @@ def _create_venv_link(link: Path, target: Path, timeout: int) -> None:
             raise PreflightError(f"unable to create venv Junction: {result['stderr']}")
     else:
         os.symlink(target, link, target_is_directory=True)
-    if not link.is_symlink() and not (os.lstat(link).st_file_attributes & 0x400 if os.name == "nt" else False):
-        raise PreflightError("venv link identity could not be verified")
+    return _link_identity(link)
 
 
-def _remove_venv_link(link: Path) -> None:
+def _remove_venv_link(
+    link: Path, expected_identity: tuple[int, int, int, int]
+) -> None:
+    if _link_identity(link) != expected_identity:
+        raise PreflightError("venv link identity changed before removal")
     if os.name == "nt":
         os.rmdir(link)
     else:
         link.unlink()
 
 
-def _step(name: str, argv: list[str], cwd: Path, timeout: int, tree_hash: str) -> dict[str, Any]:
+def _step(
+    name: str, argv: list[str], cwd: Path, timeout: float, tree_hash: str
+) -> dict[str, Any]:
     result = _run(argv, cwd=cwd, timeout=timeout)
     return {
         "name": name,
@@ -181,6 +209,13 @@ def _step(name: str, argv: list[str], cwd: Path, timeout: int, tree_hash: str) -
         "candidate_tree_hash": tree_hash,
         **result,
     }
+
+
+def _bounded_timeout(deadline: float, step_timeout: int, outer_timeout: int) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise subprocess.TimeoutExpired(["release_preflight"], outer_timeout)
+    return min(float(step_timeout), remaining)
 
 
 def _artifact_evidence(dist: Path, version: str) -> list[dict[str, Any]]:
@@ -228,7 +263,19 @@ def run_preflight(
     if base_check["returncode"] != 0:
         raise PreflightError("base_revision cannot be resolved to a commit")
 
-    owned_root = Path(tempfile.mkdtemp(prefix="adad_release_"))
+    script_dir = Path(__file__).resolve().parent
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
+    from adad_core import ADADCore
+
+    core = ADADCore(project_root / "system_map.yaml", check_validity=False)
+    try:
+        owned_root_raw, owned_identity, owned_credential = (
+            core._create_owned_verification_root()
+        )
+    except (OSError, RuntimeError) as exc:
+        raise PreflightError(f"unable to create credentialed owned root: {exc}") from exc
+    owned_root = Path(owned_root_raw)
     worktree = owned_root / "worktree"
     dist = owned_root / "dist"
     basetemp = owned_root / "pytest-basetemp"
@@ -236,24 +283,13 @@ def run_preflight(
     artifact_evidence: list[dict[str, Any]] = []
     deadline = time.monotonic() + outer_timeout
 
-    script_dir = Path(__file__).resolve().parent
-    if str(script_dir) not in sys.path:
-        sys.path.insert(0, str(script_dir))
-    from adad_core import ADADCore
-
-    core = ADADCore(project_root / "system_map.yaml", check_validity=False)
-    owned_identity = core._get_path_identity(str(owned_root))
-    if not owned_identity:
-        raise PreflightError("owned root identity is unavailable")
-
-    def remaining() -> None:
-        if time.monotonic() >= deadline:
-            raise subprocess.TimeoutExpired(["release_preflight"], outer_timeout)
+    def effective_timeout(step_timeout: int) -> float:
+        return _bounded_timeout(deadline, step_timeout, outer_timeout)
 
     try:
         add = _git(
             project_root,
-            gate_timeout,
+            effective_timeout(gate_timeout),
             "worktree",
             "add",
             "--detach",
@@ -264,7 +300,7 @@ def run_preflight(
             raise PreflightError(f"git worktree add failed: {add['stderr']}")
         read_tree = _git(
             worktree,
-            gate_timeout,
+            effective_timeout(gate_timeout),
             "read-tree",
             "--reset",
             "-u",
@@ -280,7 +316,9 @@ def run_preflight(
 
         venv_root = project_python.parent.parent
         venv_link = worktree / ".venv"
-        _create_venv_link(venv_link, venv_root, gate_timeout)
+        venv_link_identity = _create_venv_link(
+            venv_link, venv_root, effective_timeout(gate_timeout)
+        )
 
         commands = [
             ("whitespace", ["git", "-c", f"safe.directory={worktree}", "diff", "--cached", "--check"], gate_timeout),
@@ -331,8 +369,13 @@ def run_preflight(
             ),
         ]
         for name, argv, timeout in commands:
-            remaining()
-            result = _step(name, argv, worktree, timeout, tree_hash)
+            result = _step(
+                name,
+                argv,
+                worktree,
+                effective_timeout(timeout),
+                tree_hash,
+            )
             step_results.append(result)
             if result["timed_out"]:
                 return _failure(
@@ -363,10 +406,10 @@ def run_preflight(
                 )
         artifact_evidence = _artifact_evidence(dist, version)
 
-        _remove_venv_link(venv_link)
+        _remove_venv_link(venv_link, venv_link_identity)
         remove = _git(
             project_root,
-            gate_timeout,
+            effective_timeout(gate_timeout),
             "worktree",
             "remove",
             "--force",
@@ -382,7 +425,7 @@ def run_preflight(
                 {"stage": "git_worktree_remove", "message": remove["stderr"]},
             )
         cleanup_status, cleanup_error, _ = core._safe_cleanup_owned_root(
-            str(owned_root), owned_identity
+            str(owned_root), owned_identity, owned_credential
         )
         if cleanup_status != "cleaned":
             return _failure(

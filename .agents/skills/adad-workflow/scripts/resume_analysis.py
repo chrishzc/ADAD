@@ -13,11 +13,11 @@ def main():
 
     md_path = "system_map.md"
     yaml_path = "system_map.yaml"
-    
+
     if not os.path.exists(md_path):
         print(f"錯誤：找不到架構源檔案 {md_path}")
         sys.exit(1)
-        
+
     # ponytail-fix: 原本直接 open(md_path).read()，完全沒有展開 <!-- include --> 鏈，
     # 導致專案一旦使用分區地圖（split-map）功能，所有寫在子地圖檔案裡的模組會被
     # 這份進度報告完全漏掉（沒有錯誤或警告），跟 compile_map.py 的行為不一致。
@@ -27,25 +27,25 @@ def main():
     except Exception as e:
         print(f"解析 include 檔案與讀取 {md_path} 失敗: {e}")
         sys.exit(1)
-        
+
     compiled_data = parse_markdown(md_content)
     modules = compiled_data.get("modules", {})
-    
+
     # 讀取當前 YAML 以獲得實際的生命週期狀態
     core = ADADCore(yaml_path, check_validity=False)
     actual_modules = core.data.get("modules", {})
-    
+
     completed_modules = []
     dirty_modules = []
     planned_modules = []
     draft_modules = []
-    
+
     todo_list = []
     pending_checkpoints = []
-    
+
     for mod_name, mod_info in modules.items():
         actual_state = actual_modules.get(mod_name, {}).get("state", "planned")
-        
+
         if actual_state == "deployed":
             completed_modules.append(mod_name)
         elif actual_state == "dirty":
@@ -54,16 +54,16 @@ def main():
             draft_modules.append((mod_name, actual_state))
         else:
             planned_modules.append(mod_name)
-            
+
         # 收集 TODO
         for t in mod_info.get("todo", []):
             todo_list.append(f"- [{mod_name}] {t}")
-            
+
         # 收集未完成的 Checkpoint
         for cp in mod_info.get("checkpoint", []):
             if "[ ]" in cp:
                 pending_checkpoints.append(f"- [{mod_name}] {cp.replace('[ ]', '').strip()}")
-                
+
     # 智能下一步分析 (Topological Suggestion)
     next_suggestions = []
     for mod_name, mod_info in modules.items():
@@ -78,7 +78,7 @@ def main():
                     break
             if all_deps_deployed:
                 next_suggestions.append((mod_name, actual_state))
-                
+
     # 計算 fan-in
     fan_in_map = {}
     for mod_name, mod_info in actual_modules.items():
@@ -116,21 +116,21 @@ def main():
         print(f"- **草稿 (Draft/Pending Review)**: {len(draft_modules)}")
         for m, state in draft_modules:
             print(f"  - `{m}` (狀態: `{state}`)")
-        
+
     print(f"\n## 📝 待辦事項 (TODO)")
     if todo_list:
         for t in todo_list:
             print(t)
     else:
         print("沒有未完成的 TODO 項目。")
-        
+
     print(f"\n## 🚧 未完成的 Checkpoints")
     if pending_checkpoints:
         for cp in pending_checkpoints:
             print(cp)
     else:
         print("沒有未完成的 Checkpoints。")
-        
+
     print(f"\n## 💡 下一步開發建議")
     if next_suggestions:
         print("依據依賴關係，以下模組的依賴項皆已部署完成，建議優先進行開發/驗證：")
@@ -159,6 +159,6 @@ def main():
             else:
                 risk = "🟢 低（無依賴者）"
             print(f"| `{name}` | {fi} | `{state}` | {risk} |")
-        
+
 if __name__ == "__main__":
     main()

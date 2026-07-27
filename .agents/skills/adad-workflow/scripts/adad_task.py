@@ -24,6 +24,7 @@ isolate:
   只掛載該階段需要的白名單檔案，防止 Agent 跨邊界修改或讀取未授權的原始碼。
 """
 import sys
+import os
 import json
 from adad_core import ADADCore
 
@@ -156,11 +157,44 @@ def cmd_index(args):
     sys.exit(0 if res.get("success") is True else 1)
 
 
+def cmd_return_to_planning(args):
+    if len(args) < 2:
+        print(json.dumps({"success": False, "error": "用法: python adad_task.py return-to-planning <node_name> <mismatch_reason>"}, ensure_ascii=False))
+        sys.exit(1)
+    node_name, reason = args[0], args[1]
+    core = ADADCore(check_validity=False)
+    res = core.task_return_to_planning(node_name, {"reason": reason})
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    sys.exit(0 if res.get("success") else 1)
+
+
+def cmd_auto_certify(args):
+    if len(args) < 2:
+        print(json.dumps({"success": False, "error": "用法: python adad_task.py auto-certify <node_name> <receipt_json_path|receipt_json_string>"}, ensure_ascii=False))
+        sys.exit(1)
+    node_name, receipt_raw = args[0], args[1]
+    if os.path.exists(receipt_raw):
+        with open(receipt_raw, "r", encoding="utf-8") as f:
+            receipt = json.load(f)
+    else:
+        try:
+            receipt = json.loads(receipt_raw)
+        except Exception as e:
+            print(json.dumps({"success": False, "error": f"Receipt JSON 解析失敗: {str(e)}"}, ensure_ascii=False))
+            sys.exit(1)
+
+    core = ADADCore(check_validity=False)
+    res = core.task_auto_certify(node_name, receipt)
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    sys.exit(0 if res.get("success") else 1)
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] not in ("submit", "approve", "reject", "isolate", "locks", "index"):
+    valid_subs = ("submit", "approve", "reject", "isolate", "locks", "index", "return-to-planning", "auto-certify")
+    if len(sys.argv) < 2 or sys.argv[1] not in valid_subs:
         print(json.dumps({
             "success": False,
-            "error": "用法: python adad_task.py <submit|approve|reject|isolate|locks|index> [...]"
+            "error": "用法: python adad_task.py <submit|approve|reject|isolate|locks|index|return-to-planning|auto-certify> [...]"
         }, ensure_ascii=False))
         sys.exit(1)
 
@@ -177,6 +211,10 @@ def main():
         cmd_locks(rest)
     elif sub == "index":
         cmd_index(rest)
+    elif sub == "return-to-planning":
+        cmd_return_to_planning(rest)
+    elif sub == "auto-certify":
+        cmd_auto_certify(rest)
 
 
 if __name__ == "__main__":
