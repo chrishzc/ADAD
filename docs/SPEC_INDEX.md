@@ -1,5 +1,10 @@
 # ADAD 套件規格書：與 Agent Kernel 的介面契約（修正合併版）
 
+> [!WARNING]
+> 本規格已凍結。ADAD 自 2026-08-02 起停止維護；內容只供 legacy
+> 歷史與 migration 參考，不再形成 active roadmap。詳見
+> [文件封存說明](README.md)。
+
 > 這份檔案原名 `#規格總覽.md`，放在 repo 根目錄。因為檔名開頭是 `#` 又混雜中文，
 > 在部分工具鏈（例如解壓縮、markdown 連結）容易出現編碼問題，改名為純 ASCII
 > 的 `docs/SPEC_INDEX.md`，內容未變。

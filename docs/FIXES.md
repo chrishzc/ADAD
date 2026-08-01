@@ -1,5 +1,9 @@
 # 修改紀錄：分層架構 / include 機制修復
 
+> [!WARNING]
+> 本文件是 frozen legacy 修復紀錄。ADAD 自 2026-08-02 起停止維護；
+> 詳見 [文件封存說明](README.md)。
+
 本次修改針對 `system_map.md` 主地圖透過 `<!-- include -->` 連結子地圖、以及
 `Domain → Subsystem → Module` 三層架構解析的部分，修復以下問題。
 所有修改集中在 `.agents/skills/adad-workflow/scripts/adad_core.py`。

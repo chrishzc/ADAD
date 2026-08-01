@@ -1,6 +1,15 @@
 # Changelog
 
+> [!WARNING]
+> 本 changelog 已凍結。ADAD 自 2026-08-02 起停止維護，不會再發布新版本；
+> 詳見 [ARCHIVED.md](ARCHIVED.md)。
+
 本專案遵循 [Semantic Versioning](https://semver.org/)。
+
+## Archived — 2026-08-02
+
+- ADAD 進入唯讀歷史狀態，不再接受新功能、例行修復或 release。
+- 後繼專案為 ADHD（Architecture-Driven Harnessed Development），採獨立乾淨重寫。
 
 ## 1.6.5 — 2026-07-27
 

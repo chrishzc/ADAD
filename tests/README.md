@@ -1,5 +1,9 @@
 # ADAD 測試套件
 
+> [!WARNING]
+> 本測試說明已凍結。ADAD 自 2026-08-02 起停止維護；測試只驗證最後封存的
+> legacy 行為，不代表未來相容性或持續支援。詳見 [ARCHIVED.md](../ARCHIVED.md)。
+
 對應「規格總覽.md」代辦事項 **#5**：`adad_cli/resources/.../scripts/` 底下的
 CLI 腳本原本完全沒有自動化測試覆蓋，只有 `adad_core.py` 內建一份用 `assert`
 手刻的自我測試（`run_self_test()`）。這裡補上一套 pytest 測試，覆蓋每支獨立

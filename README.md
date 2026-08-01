@@ -1,3 +1,9 @@
+> [!WARNING]
+> **本專案已於 2026-08-02 停止維護。** ADAD 僅保留作歷史實作與 migration
+> 參考，不再提供新功能、例行修復、相容性更新、發布或支援。後繼專案為
+> **ADHD — Architecture-Driven Harnessed Development**；詳見
+> [ARCHIVED.md](ARCHIVED.md)。
+
 <p align="center">
   <img src="docs/assets/robot.png" alt="ADAD — Architecture is the only truth." width="100%">
 </p>
@@ -8,7 +14,7 @@
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-3776AB">
   <img alt="Origin" src="https://img.shields.io/badge/origin-Antigravity-F5A623">
   <img alt="Supports" src="https://img.shields.io/badge/supports-Antigravity%20%7C%20Claude%20Code%20%7C%20Codex-38BDF8">
-  <img alt="PRs" src="https://img.shields.io/badge/PRs-welcome-brightgreen">
+  <img alt="Maintenance" src="https://img.shields.io/badge/maintenance-archived-lightgrey">
 </p>
 
 # 📋 ADAD (Architecture-Driven Agentic Development) 開發規範與工具鏈

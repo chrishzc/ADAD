@@ -3,6 +3,10 @@ name: adad-workflow
 description: 用於執行 ADAD (Architecture-Driven Agentic Development) 的架構與工作流管理工具。當人類或流程要求進行「架構規劃」、「Checkpoint 狀態轉換」、「相依髒點級聯分析」、「讀取節點上下文」或「編譯與分析進度」時觸發。
 ---
 
+> [!WARNING]
+> ADAD 已於 2026-08-02 停止維護。本 Skill 只保留作 legacy 歷史參考；
+> 不得據此自行啟動新功能、修復、Task、release 或 deployment。
+
 # 🛠️ ADAD (Architecture-Driven Agentic Development) Workflow Skills
 
 此 Skill 賦予 Antigravity Agent 操作架構 Markdown Source (`system_map.md`)、編譯架構 IR (`system_map.yaml`) 與流程狀態推演的能力。

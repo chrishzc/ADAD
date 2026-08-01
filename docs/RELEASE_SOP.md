@@ -1,5 +1,9 @@
 # ADAD 發布 SOP
 
+> [!WARNING]
+> 本 SOP 已停用。ADAD 自 2026-08-02 起停止維護與發布，不得把以下流程視為
+> 新 release 的有效授權。詳見 [文件封存說明](README.md)。
+
 適用於將 `development` 的 ADAD 更新整理為單一套件並發布到 `main`。發布分支不合併 `development`；一律從 `origin/main` 建立乾淨 worktree，再直接帶入本次已驗證的發布檔案。
 
 ## 0. 發布證據與不可變邊界

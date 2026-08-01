@@ -1,5 +1,10 @@
 # 📋 Workspace Agent Rules (ADAD 專案開發憲法)
 
+> [!WARNING]
+> **停止維護：** ADAD 已於 2026-08-02 封存。以下規則只描述 legacy
+> repository 的歷史運作方式；Agent 不得自行啟動新功能、修復、Task、release
+> 或 deployment。只有人類明確要求的歷史查閱或封存操作可繼續。
+
 此檔案是專門給 Antigravity Agent 閱讀的行為約束規範。當前專案已啟用 **ADAD (Architecture-Driven Agentic Development)** 開發模式。
 完整 ADAD 架構、Checkpoint 與地圖操作流程請參考 `.agents/skills/adad-workflow/SKILL.md`。
 

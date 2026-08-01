@@ -1,5 +1,9 @@
 # #86 ADAD 生命週期自動化改進設計（Reviewer Loop）
 
+> [!WARNING]
+> 本文件是 frozen legacy 設計與實作紀錄，不是 ADHD 規格。ADAD 自
+> 2026-08-02 起停止維護；詳見 [文件封存說明](README.md)。
+
 > 狀態：**已實作（#86 完成）**。`adad_loop_runner.py`（無狀態調度器）、`verify_against_spec.py`（五階段機械層）、`task_return_to_planning`、`task_auto_certify` 均已落地，測試 `test_reviewer_loop.py` 全數通過。
 > **偏差說明**：`verify_against_spec.py` 目前 signature diff（步驟 4）使用 `core.verify_implementation` 整合呼叫，未獨立實作完整 AST signature 比對；若需真正的 Input/Output 型別 drift 偵測，留作未來強化（L1-SIG-MISMATCH）。
 > **與 #84（模組交付門禁 CLI）為獨立任務，刻意不深度耦合**，兩者的介面邊界見第 7 節。
